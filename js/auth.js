@@ -50,8 +50,13 @@ async function loginAsDriver(code) {
 }
 
 // 渲染登入畫面到 #loginGate；跟 demo 的登入畫面配置相同（主控PIN / 司機代碼 兩種入口）。
-function renderLoginGate() {
+// 每次呼叫都要重新把 #loginGate 顯示出來、把 #appLayout 藏起來——不然像「登出後
+// 想切換身份」這種情境，畫面會卡在上一個已登入的主控/司機畫面上，看不到登入表單。
+function renderLoginGate(message) {
+  const appLayout = document.getElementById('appLayout');
+  if (appLayout) appLayout.style.display = 'none';
   const gate = document.getElementById('loginGate');
+  gate.style.display = 'block';
   gate.innerHTML = `
     <h2 class="section-title">登入</h2>
     <p class="section-sub">選擇身份並輸入代碼</p>
@@ -71,13 +76,14 @@ function renderLoginGate() {
   `;
   const roleSel = document.getElementById('loginRole');
   const codeLabel = document.getElementById('loginCodeLabel');
+  const errEl = document.getElementById('loginError');
+  if (message) { errEl.textContent = message; errEl.style.display = 'block'; }
   roleSel.onchange = () => {
     codeLabel.textContent = roleSel.value === 'admin' ? '主控PIN碼' : '登入代碼（4碼）';
   };
   document.getElementById('loginSubmit').onclick = async () => {
     const role = roleSel.value;
     const code = document.getElementById('loginCode').value.trim();
-    const errEl = document.getElementById('loginError');
     errEl.style.display = 'none';
     if (!code) return;
     try {
