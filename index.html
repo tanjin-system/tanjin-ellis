@@ -114,6 +114,12 @@ function money(n){ return (Number(n)||0).toLocaleString('zh-Hant-TW'); }
 function pad(n){ return String(n).padStart(2,'0'); }
 function ymd(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function addDays(dateStr, days){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return d; }
+// 安全性修補：司機端可自由輸入的文字（目前是 issueNote 異常備註）在塞進 innerHTML 前
+// 一定要先跳脫，否則司機可以在備註裡放 <img onerror=...> 之類的內容，主控端打開該筆
+// 車趟時就會在主控瀏覽器執行，偷走主控的登入token（有全庫存取權）。
+function escapeHtml(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // ---------- 通用查找 ----------
 function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d?d.name:'未指派'; }
@@ -1263,7 +1269,7 @@ function renderAssignmentDetail(id){
         </span>
       </div>
       <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
-      ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${a.issueNote}</div>` : ''}
+      ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。</p>
       ${a.dropPoints.map(dp=>`<div class="drop-point">${dp.address}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}</div>`).join('')}
     </div>
@@ -1633,7 +1639,7 @@ function renderHistory(c){
       <div class="panel">
         <div class="toolbar"><strong>${a.date} · ${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
         <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
-        ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${a.issueNote}</div>` : ''}
+        ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
         ${a.dropPoints.map(dp=>`<div class="drop-point">${dp.address}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`).join('')}
       </div>
     `).join('') || '<div class="empty">尚無已完成的歷史行程</div>'}
@@ -1863,6 +1869,5 @@ async function bootApp(){
   await bootApp();
 })();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </body>
 </html>

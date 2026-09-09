@@ -260,7 +260,11 @@ language sql stable as $$
 $$;
 
 -- ------------------------------------------------------------
--- settings：只有 app_admin 能碰，anon/app_driver 完全不可見
+-- settings：只有 app_admin 能碰，anon/app_driver 完全不可見（admin_pin 是明文PIN，
+-- 絕對不能讓 app_driver 讀到，否則司機能直接查出主控PIN、冒充主控登入）。
+-- 注意：正因為這裡刻意不 grant app_driver，js/data-layer.js 的 loadAllData()
+-- 不可以無條件對所有身份都查 settings，司機端要跳過這個查詢，否則會直接
+-- permission denied 整包失敗、司機完全無法登入（修過的地雷，見該檔案註解）。
 -- ------------------------------------------------------------
 alter table settings enable row level security;
 grant select, update on settings to app_admin;

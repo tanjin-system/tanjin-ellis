@@ -147,8 +147,15 @@ function dataUrlToBytesAndType(dataUrl) {
 
 async function loadAllData() {
   const supabase = getSupabase();
+  // 安全性修補：settings 表（含 admin_pin）依 schema.sql 設計刻意「只有 app_admin 能碰，
+  // app_driver 完全不可見」，故意不 grant app_driver 任何權限，避免司機讀到明文主控PIN。
+  // 但這代表司機身份查 settings 一定會收到 permission denied 錯誤——原本這裡不分身份
+  // 都查，會讓下面的 for...throw 直接把司機的整個 loadAllData() 打斷，司機端因此完全
+  // 無法登入使用。改成只有 admin 才查 settings，司機端用空殼帶過即可（司機端本來就
+  // 沒有任何畫面會用到 adminPin）。
+  const isAdmin = state.role === 'admin';
   const queries = {
-    settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
+    ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
     driversRes: supabase.from('drivers').select('*').order('created_at'),
     channelsRes: supabase.from('channels').select('*').order('created_at'),
     originsRes: supabase.from('origins').select('*').order('created_at'),
@@ -168,7 +175,7 @@ async function loadAllData() {
   }
 
   const data = {
-    settings: { adminPin: byKey.settingsRes.data?.admin_pin || '' },
+    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '' },
     drivers: (byKey.driversRes.data || []).map(mapDriver),
     channels: (byKey.channelsRes.data || []).map(mapChannel),
     origins: (byKey.originsRes.data || []).map(mapOrigin),

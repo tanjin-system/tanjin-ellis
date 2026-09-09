@@ -1,0 +1,6 @@
+node_modules/
+.env
+.vercel/
+migration/node_modules/
+migration/.env
+migration/id_mapping.json
