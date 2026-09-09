@@ -1,0 +1,1867 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>碳金車隊調度系統</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+  :root{
+    --navy:#1B2A41; --navy-dim:#2A3B54; --amber:#E0902E; --teal:#3F6E6C;
+    --paper:#F5F5F2; --panel:#FFFFFF; --border:#D9DCE1; --ink:#1B2129; --ink-soft:#5B6472;
+    --danger:#B5493A; --radius:3px;
+  }
+  *{box-sizing:border-box;}
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans TC',-apple-system,sans-serif; font-size:14px; line-height:1.55; }
+  .mono{ font-family:'IBM Plex Mono',monospace; }
+  header{ background:var(--navy); color:#fff; padding:14px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+  header h1{ font-size:17px; font-weight:600; margin:0; }
+  header h1 span{ color:var(--amber); font-family:'IBM Plex Mono'; }
+  .role-switch{ display:flex; gap:6px; align-items:center; font-size:13px; }
+  .role-switch select{ background:var(--navy-dim); color:#fff; border:1px solid #445067; border-radius:var(--radius); padding:6px 8px; font-family:inherit; font-size:13px; }
+  .layout{ display:flex; min-height:calc(100vh - 54px); }
+  nav.tabs{ width:150px; background:#fff; border-right:1px solid var(--border); padding:14px 0; flex-shrink:0; }
+  nav.tabs button{ display:block; width:100%; text-align:left; padding:9px 16px; background:none; border:none; border-left:3px solid transparent; cursor:pointer; font-family:inherit; font-size:13px; color:var(--ink-soft); }
+  nav.tabs button.active{ border-left-color:var(--amber); color:var(--ink); font-weight:600; background:#FAF7F1; }
+  main{ flex:1; padding:20px; max-width:1000px; }
+  h2.section-title{ font-size:16px; font-weight:600; margin:0 0 4px; }
+  p.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
+  .panel{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ padding:7px 9px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+  th{ color:var(--ink-soft); font-weight:600; font-size:11.5px; }
+  tr:last-child td{ border-bottom:none; }
+  input,select,textarea{ width:100%; padding:7px 9px; border:1px solid var(--border); border-radius:var(--radius); font-family:inherit; font-size:13px; background:#fff; color:var(--ink); }
+  label{ display:block; font-size:12px; color:var(--ink-soft); margin-bottom:3px; }
+  .field{ margin-bottom:10px; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
+  @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} }
+  button.btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; }
+  button.btn.amber{ background:var(--amber); color:#1B2129; }
+  button.btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
+  button.btn.danger{ background:none; border:1px solid var(--danger); color:var(--danger); }
+  button.btn:hover{ opacity:.88; }
+  button.btn[disabled]{ opacity:.4; cursor:not-allowed; }
+  .badge{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
+  .badge.pending{ background:#F2E4D0; color:#8A5A17; }
+  .badge.completed{ background:#DCEBE0; color:#2C6B44; }
+  .badge.signed{ background:#DCEBE0; color:#2C6B44; }
+  .badge.locked{ background:#E7E9EC; color:var(--ink-soft); }
+  .badge.progress{ background:#DCE7F2; color:#2C5F8A; }
+  .amount{ font-family:'IBM Plex Mono'; font-weight:600; }
+  .drop-point{ border:1px dashed var(--border); border-radius:var(--radius); padding:9px; margin-top:7px; font-size:12.5px; }
+  .drop-point img{ max-width:70px; border-radius:2px; margin-top:6px; }
+  .week-nav{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .schedule-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; overflow-x:auto; }
+  .day-card{ background:#FAF9F7; border:1px solid var(--border); border-radius:var(--radius); padding:8px; min-height:110px; }
+  .day-card .day-label{ font-size:11.5px; color:var(--ink-soft); margin-bottom:6px; font-weight:600; }
+  .trip-chip{ background:#fff; border:1px solid var(--border); border-left:3px solid var(--teal); border-radius:2px; padding:5px 7px; margin-bottom:5px; font-size:11px; cursor:pointer; }
+  .trip-chip.locked{ border-left-color:#9AA3AF; opacity:.75; }
+  .empty{ color:var(--ink-soft); font-size:12.5px; padding:20px; text-align:center; border:1px dashed var(--border); border-radius:var(--radius); }
+  a.link{ color:var(--teal); text-decoration:none; font-weight:600; font-size:12.5px; }
+  .toolbar{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+  .note{ font-size:12px; color:var(--ink-soft); background:#FAF7F1; border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; margin-bottom:14px; }
+  .tag-list span{ display:inline-block; background:#EFEEE9; border-radius:2px; padding:2px 6px; margin:2px 3px 0 0; font-size:11.5px; }
+  .version-block{ border:1px solid var(--border); border-radius:var(--radius); padding:10px; margin-bottom:8px; }
+  .version-block.open{ border-color:var(--amber); }
+  .tile-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+  .tile{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:22px 14px; text-align:center; cursor:pointer; font-weight:600; font-size:13.5px; transition:border-color .15s; }
+  .tile:hover{ border-color:var(--amber); }
+  .tile .tile-sub{ display:block; font-weight:400; font-size:11.5px; color:var(--ink-soft); margin-top:5px; }
+  table.route-grid{ table-layout:auto; }
+  table.route-grid th, table.route-grid td{ text-align:center; padding:7px 10px; font-size:13px; border:1px solid #B9BEC6; white-space:nowrap; min-width:52px; }
+  table.route-grid td.grid-cell{ font-weight:700; font-size:13.5px; }
+  table.route-grid th.weekend, table.route-grid td.weekend-head{ color:var(--amber); }
+  table.route-grid td.grid-black{ background:#15181D; }
+  table.route-grid td.grid-cell{ cursor:pointer; background:#fff; }
+  table.route-grid td.grid-cell:hover{ background:#FAF2E3; }
+  table.route-grid td.row-label{ background:#E7E9EC; font-weight:600; text-align:left; padding-left:8px; }
+  .origin-title{ background:#EFEEE9; font-weight:600; padding:8px 10px; margin:14px 0 6px; border-radius:var(--radius); }
+  table.overview-grid th, table.overview-grid td{ text-align:center; padding:10px 12px; font-size:15px; border:1px solid #B9BEC6; white-space:nowrap; }
+  table.overview-grid td.grid-cell{ font-weight:700; font-size:16px; }
+  table.overview-grid th.weekend{ color:var(--amber); }
+  table.overview-grid td.grid-black{ background:#15181D; }
+  table.overview-grid td.row-label{ background:#E7E9EC; font-weight:700; text-align:left; padding-left:10px; font-size:14px; }
+  @media print{ nav.tabs,header,.no-print{ display:none !important; } main{ max-width:100%; padding:0; } body{ background:#fff; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="appTitle">碳金車隊調度系統</h1>
+  <div class="role-switch">
+    <span id="whoAmI" style="font-size:12.5px;"></span>
+    <button class="btn ghost" id="logoutBtn" style="display:none; padding:5px 10px; font-size:12px;">登出／切換身份</button>
+  </div>
+</header>
+<div id="loginGate" class="panel" style="max-width:360px; margin:40px auto;"></div>
+<div class="layout" id="appLayout" style="display:none;">
+  <nav class="tabs" id="tabsNav"></nav>
+  <main id="content"></main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="js/supabase-client.js"></script>
+<script src="js/data-layer.js"></script>
+<script src="js/auth.js"></script>
+<script>
+let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
+
+function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function todayStr(){ return ymd(new Date()); }
+function money(n){ return (Number(n)||0).toLocaleString('zh-Hant-TW'); }
+function pad(n){ return String(n).padStart(2,'0'); }
+function ymd(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function addDays(dateStr, days){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return d; }
+
+// ---------- 通用查找 ----------
+function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d?d.name:'未指派'; }
+function driverVehicle(id){ const d=state.data.drivers.find(x=>x.id===id); return d && d.vehicle ? d.vehicle.plate : '—'; }
+function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
+function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?r.name:'—'; }
+function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(addr); }
+function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURIComponent(text); }
+// pushNotification()（純記憶體 unshift）已由 js/data-layer.js 的 createNotification()
+// 取代——正式版通知要讓其他人（主控／司機）在別的裝置上也看得到，必須真的寫進資料庫，
+// 不能只是塞進當下這個瀏覽器分頁的記憶體陣列。
+function compressImageFile(file, maxDim=1000, quality=0.6){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let width = img.width, height = img.height;
+        if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
+        else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        try{ resolve(canvas.toDataURL('image/jpeg', quality)); }
+        catch(e){ reject(e); }
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function exportPrintable(title, bodyHtml){
+  const html = `<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8"><title>${title}</title>
+    <style>
+      body{ font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; padding:24px; color:#1B2129; }
+      table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+      th,td{ padding:7px 9px; border:1px solid #999; text-align:left; }
+      h1,h3{ margin:0 0 10px; }
+      .amount{ font-family:monospace; font-weight:700; }
+      @media print{ body{ padding:0; } }
+    </style></head><body>
+      <h1>${title}</h1>
+      ${bodyHtml}
+      <p style="margin-top:24px; color:#888; font-size:12px;">開啟這個檔案後，用瀏覽器的「分享」或「列印」功能，選擇「儲存為PDF」。</p>
+      <script>window.onload = function(){ try{ window.print(); }catch(e){} };<\/script>
+    </body></html>`;
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[\\/:*?"<>|]/g,'_') + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=> URL.revokeObjectURL(url), 3000);
+  alert('檔案已下載。請到手機/電腦的「檔案」或「下載項目」裡打開它，再用分享/列印功能另存為PDF。');
+}
+function exportPanelPrint(panelEl, title){
+  if(!panelEl){ alert('找不到可列印的內容'); return; }
+  const clone = panelEl.cloneNode(true);
+  clone.querySelectorAll('.no-print').forEach(el=>el.remove());
+  exportPrintable(title, clone.innerHTML);
+}
+
+function getActiveVersion(route, dateStr){
+  return (route.versions||[]).find(v=> dateStr>=v.start && (!v.end || dateStr<=v.end));
+}
+// saveRouteVersion()/recomputeRouteVersionEnds() 的實作已搬到 js/data-layer.js
+// （原本是純記憶體物件操作，現在要寫回 Supabase，簽名也改成
+// saveRouteVersion(routeId, newStart, dropPointIds) 並回傳 Promise）。
+
+function tripBilling(dropPoints, distanceKm, channelsList){
+  const channels = channelsList || (state.data && state.data.channels) || [];
+  const points = dropPoints||[];
+  const countByChannel = {};
+  points.forEach(p=>{ countByChannel[p.channelId] = (countByChannel[p.channelId]||0) + 1; });
+  const byChannel = {};
+  let totalAmount = 0;
+
+  // 共配拆分：所有「依里程+下貨點數」公式的通路，共用同一套里程/點數費率，
+  // 先算出整趟共同總額，再依各通路下貨點數比例分攤（同一車趟共配多個通路時使用）。
+  const pooledIds = Object.keys(countByChannel).filter(chId=>{
+    const ch = channels.find(c=>c.id===chId);
+    return ch && ch.formulaType !== 'flat_per_trip';
+  });
+  const poolPoints = pooledIds.reduce((s,chId)=> s+countByChannel[chId], 0);
+  if(poolPoints > 0){
+    const rateChannel = channels.find(c=>c.id===pooledIds[0]);
+    const rateKm = rateChannel ? Number(rateChannel.rateKm)||0 : 35;
+    const ratePoint = rateChannel ? Number(rateChannel.ratePoint)||0 : 50;
+    const poolTotal = Math.round((Number(distanceKm)||0)*rateKm + poolPoints*ratePoint);
+    const base = Math.floor(poolTotal/poolPoints);
+    const remainder = poolTotal - base*poolPoints;
+    let seen = 0;
+    pooledIds.forEach(chId=>{
+      const cnt = countByChannel[chId];
+      let amt = base*cnt;
+      for(let i=0;i<cnt;i++){ if(seen<remainder) amt+=1; seen++; }
+      byChannel[chId] = amt;
+      totalAmount += amt;
+    });
+  }
+
+  // 整趟固定金額的通路（例如牧穀）不參與共配分攤，各自獨立計算
+  Object.keys(countByChannel).forEach(chId=>{
+    const ch = channels.find(c=>c.id===chId);
+    if(ch && ch.formulaType==='flat_per_trip'){
+      const amt = Math.round(Number(ch.flatAmount)||0);
+      byChannel[chId] = amt;
+      totalAmount += amt;
+    }
+  });
+
+  return {totalAmount, totalPoints: points.length, byChannel};
+}
+function defaultPeriod(channel, monthStr){
+  const [y,m] = monthStr.split('-').map(Number);
+  if(channel.periodType==='calendar_month'){
+    return { start:`${y}-${pad(m)}-01`, end: ymd(new Date(y,m,0)) };
+  } else if(channel.periodType==='custom'){
+    let py=y, pm=m-1; if(pm===0){pm=12; py=y-1;}
+    return { start:`${py}-${pad(pm)}-${pad(channel.startDay)}`, end:`${y}-${pad(m)}-${pad(channel.endDay)}` };
+  }
+  return { start:`${y}-${pad(m)}-01`, end: ymd(new Date(y,m,0)) };
+}
+function channelBillingTotal(channelId, start, end){
+  let total=0; const contributing=[];
+  state.data.assignments.forEach(a=>{
+    if(a.status==='completed' && a.date>=start && a.date<=end){
+      const b = a.billingSnapshot || tripBilling(a.dropPoints, a.distanceKm);
+      if(b.byChannel[channelId]){ total+=b.byChannel[channelId]; contributing.push({a, amount:b.byChannel[channelId]}); }
+    }
+  });
+  return {total, contributing};
+}
+function driverMonthly(driverId, monthStr){
+  const trips = state.data.assignments.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
+  const tripTotal = trips.reduce((s,a)=> s+(Number(a.payrollFareSnapshot ?? a.fare)||0), 0);
+  const adjustments = state.data.adjustments.filter(a=> a.driverId===driverId && a.month===monthStr);
+  const adjTotal = adjustments.reduce((s,a)=> s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  return { trips, tripTotal, adjustments, adjTotal, net: tripTotal+adjTotal };
+}
+function computeProfitSnapshot(){
+  const monthStr = todayStr().slice(0,7);
+  const today = todayStr();
+  const perChannel = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>{
+    const period = defaultPeriod(ch, monthStr);
+    const end = period.end > today ? today : period.end;
+    const { total } = channelBillingTotal(ch.id, period.start, end);
+    return { channel: ch, total, period: { start: period.start, end } };
+  });
+  const revenueTotal = perChannel.reduce((s,x)=>s+x.total, 0);
+  let expenseTotal = 0;
+  state.data.drivers.forEach(d=>{
+    const r = driverMonthly(d.id, monthStr);
+    expenseTotal += r.net;
+  });
+  return { perChannel, revenueTotal, expenseTotal, profit: revenueTotal-expenseTotal, monthStr };
+}
+function getWeekDates(offset){
+  const now=new Date(); const day=now.getDay(); const mondayDelta = day===0?-6:1-day;
+  const monday=new Date(now); monday.setDate(now.getDate()+mondayDelta+offset*7);
+  const dates=[]; for(let i=0;i<7;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); dates.push(ymd(d)); }
+  return dates;
+}
+
+// ---------- Tabs ----------
+const ADMIN_TABS = [
+  {id:'home', label:'首頁'},
+  {id:'notifications', label:'即時通知'},
+  {id:'overview', label:'班表總覽'},
+  {id:'schedule', label:'週班表'},
+  {id:'drivers', label:'司機資料'},
+  {id:'channels', label:'通路管理'},
+  {id:'dropPoints', label:'下貨點資料庫'},
+  {id:'origins', label:'出發點資料庫'},
+  {id:'routes', label:'路線管理'},
+  {id:'payroll', label:'薪資結算'},
+  {id:'billing', label:'請款結算'},
+  {id:'export', label:'資料匯出'},
+  {id:'settings', label:'系統設定'}
+];
+const DRIVER_TABS = [
+  {id:'home', label:'首頁'},
+  {id:'today', label:'今日行程'},
+  {id:'history', label:'歷史班表'},
+  {id:'my-earnings', label:'我的報酬'},
+  {id:'my-statement', label:'對帳單'},
+  {id:'profile', label:'我的資料'}
+];
+function renderNav(){
+  const inDriverView = state.adminViewDriver || state.role==='driver';
+  const tabs = inDriverView ? DRIVER_TABS : ADMIN_TABS;
+  if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
+  const unread = (state.data.notifications||[]).filter(n=>!n.read).length;
+  const nav = document.getElementById('tabsNav');
+  nav.innerHTML = tabs.map(t=>`<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}">${t.label}${(t.id==='notifications' && unread)?` <span class="badge pending" style="margin-left:4px;">${unread}</span>`:''}</button>`).join('');
+  nav.querySelectorAll('button').forEach(b=>{ b.onclick=()=>{ state.tab=b.dataset.tab; renderNav(); renderContent(); }; });
+}
+function renderContent(){
+  const c = document.getElementById('content');
+  const inDriverView = state.adminViewDriver || state.role==='driver';
+  if(!inDriverView){
+    ({home:renderHomeAdmin, notifications:renderNotifications, overview:renderOverview, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
+  } else {
+    if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
+    ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
+  }
+}
+function goTab(id){ state.tab = id; renderNav(); renderContent(); }
+// ---------- 即時通知 ----------
+const NOTIF_LABEL = { depart:'🚚 出發', photo:'📷 拍照回報', complete:'✅ 完成', profile:'✏️ 資料修改', statement:'🖊️ 回簽' };
+function renderNotifications(c){
+  const list = state.data.notifications || [];
+  c.innerHTML = `
+    <h2 class="section-title">即時通知</h2>
+    <p class="section-sub">各車出發、拍照回報、完成行程等動態都會顯示在這裡；打開系統重新整理即可看到最新狀況。</p>
+    <div class="toolbar no-print">
+      <span></span>
+      <button class="btn ghost" id="markAllRead">全部標記已讀</button>
+    </div>
+    <div class="panel">
+      ${list.map(n=>`<div class="drop-point" style="${n.read?'opacity:.6;':''} display:flex; justify-content:space-between; align-items:center;">
+        <span>${NOTIF_LABEL[n.type]||''} ${n.message}<br><span style="font-size:11px; color:var(--ink-soft);">${new Date(n.createdAt).toLocaleString('zh-Hant-TW')}</span></span>
+      </div>`).join('') || '<div class="empty">目前沒有通知</div>'}
+    </div>
+  `;
+  document.getElementById('markAllRead').onclick = async ()=>{
+    try{ await markAllNotificationsRead(); renderContent(); renderNav(); }
+    catch(err){ alert(err.message); }
+  };
+}
+
+function renderHomeAdmin(c){
+  const tiles = [
+    {id:'notifications', label:'即時通知', sub:'各車出發/拍照/完成動態'},
+    {id:'overview', label:'班表總覽', sub:'大字體純檢視'},
+    {id:'schedule', label:'週班表', sub:'指派司機與路線'},
+    {id:'drivers', label:'司機資料', sub:'含車輛與銀行資訊'},
+    {id:'channels', label:'通路管理', sub:'請款週期設定'},
+    {id:'dropPoints', label:'下貨點資料庫', sub:'依通路分類'},
+    {id:'origins', label:'出發點資料庫', sub:'常用出發地'},
+    {id:'routes', label:'路線管理', sub:'版本化下貨點順序'},
+    {id:'payroll', label:'薪資結算', sub:'司機月結報酬'},
+    {id:'billing', label:'請款結算', sub:'通路請款拆分'},
+    {id:'export', label:'資料匯出', sub:'區間匯出並封存'},
+    {id:'settings', label:'系統設定', sub:'管理PIN碼'}
+  ];
+  const p = computeProfitSnapshot();
+  const recent = (state.data.notifications||[]).slice(0,6);
+  c.innerHTML = `
+    <h2 class="section-title">首頁</h2>
+    <p class="section-sub">主控帳號 — 點選功能方塊快速前往。</p>
+    <div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <div class="toolbar"><h3 style="margin:0;">請款－薪資即時利潤（${p.monthStr} 至今）</h3><button class="btn ghost" data-goto="billing">查看請款明細</button></div>
+      <table>
+        <thead><tr><th>通路</th><th>請款金額（估）</th></tr></thead>
+        <tbody>
+          ${p.perChannel.map(x=>`<tr><td>${x.channel.label||x.channel.name}</td><td class="amount">$${money(x.total.toFixed?x.total.toFixed(0):x.total)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <table style="margin-top:10px;">
+        <tr><td>請款總額</td><td class="amount">$${money(p.revenueTotal.toFixed(0))}</td></tr>
+        <tr><td>司機薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
+        <tr><td><strong>利潤總額</strong></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
+      </table>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">依各通路目前的請款週期規則，估算本月至今（未到週期結束日者以今天為止）；支出為司機當月已完成車趟的應付淨額。</p>
+    </div>
+    ${recent.length ? `<div class="panel">
+      <div class="toolbar"><h3 style="margin:0;">最新動態</h3><button class="btn ghost" data-goto="notifications">查看全部</button></div>
+      ${recent.map(n=>`<div style="font-size:12.5px; padding:5px 0; border-bottom:1px solid var(--border);">${NOTIF_LABEL[n.type]||''} ${n.message} <span style="color:var(--ink-soft); font-size:11px;">－ ${new Date(n.createdAt).toLocaleString('zh-Hant-TW')}</span></div>`).join('')}
+    </div>` : ''}
+    <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
+  `;
+  c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
+}
+function renderHomeDriver(c){
+  const dId = state.activeDriverId;
+  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.date===todayStr() && a.status!=='completed');
+  const tiles = [
+    {id:'today', label:'今日行程', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無排班'},
+    {id:'history', label:'歷史班表', sub:'已完成紀錄'},
+    {id:'my-earnings', label:'我的報酬', sub:'本月即時金額'},
+    {id:'my-statement', label:'對帳單', sub:'月結與回簽'},
+    {id:'profile', label:'我的資料', sub:'車輛/銀行資訊'}
+  ];
+  c.innerHTML = `
+    <h2 class="section-title">首頁</h2>
+    <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
+    <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
+  `;
+  c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
+}
+
+// ---------- 司機資料（含車輛、銀行細節） ----------
+function renderDrivers(c){
+  c.innerHTML = `
+    <h2 class="section-title">司機資料</h2>
+    <p class="section-sub">車輛掛靠司機本人，直接併入司機資料建置。</p>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>姓名</label><input id="dName"></div>
+        <div class="field"><label>電話</label><input id="dPhone"></div>
+        <div class="field"><label>LINE User ID</label><input id="dLine"></div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>車牌</label><input id="dPlate"></div>
+        <div class="field"><label>車型</label><input id="dVType"></div>
+        <div class="field"><label>載重(kg)</label><input id="dVLoad" type="number"></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>銀行</label><input id="dBankName"></div>
+        <div class="field"><label>分行</label><input id="dBranch"></div>
+        <div class="field"><label>帳號</label><input id="dAccount"></div>
+        <div class="field"><label>戶名</label><input id="dHolder"></div>
+      </div>
+      <div class="field" style="max-width:160px;"><label>狀態</label>
+        <select id="dStatus"><option value="active">在職</option><option value="inactive">停用</option></select>
+      </div>
+      <button class="btn amber" id="addDriver">新增司機</button>
+    </div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>姓名</th><th>電話</th><th>車牌</th><th>登入代碼</th><th>狀態</th><th></th></tr></thead>
+        <tbody>
+          ${state.data.drivers.map(d=>`
+            <tr>
+              <td>${d.name}</td><td>${d.phone||'—'}</td><td class="mono">${d.vehicle.plate||'—'}</td>
+              <td class="mono">${d.accessCode} <button class="btn ghost" data-regen="${d.id}" style="padding:2px 8px; font-size:11px;">重新產生</button></td>
+              <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
+              <td><button class="btn ghost" data-view="${d.id}">查看司機畫面</button> <button class="btn danger" data-del="${d.id}">刪除</button></td>
+            </tr>`).join('') || `<tr><td colspan="6"><div class="empty">尚無司機資料</div></td></tr>`}
+        </tbody>
+      </table>
+      <p class="note" style="margin-top:10px;">登入代碼請私下告知司機本人（例如用LINE私訊），司機打開系統選「司機帳號」後輸入這組代碼即可看到自己的資料，不會看到其他司機。</p>
+    </div>
+  `;
+  document.getElementById('addDriver').onclick = async ()=>{
+    const name = document.getElementById('dName').value.trim();
+    if(!name){ alert('請輸入姓名'); return; }
+    try{
+      await createDriver({
+        name,
+        phone: document.getElementById('dPhone').value.trim(),
+        lineId: document.getElementById('dLine').value.trim(),
+        plate: document.getElementById('dPlate').value.trim(),
+        vtype: document.getElementById('dVType').value.trim(),
+        vload: document.getElementById('dVLoad').value,
+        bankName: document.getElementById('dBankName').value.trim(),
+        branch: document.getElementById('dBranch').value.trim(),
+        account: document.getElementById('dAccount').value.trim(),
+        holder: document.getElementById('dHolder').value.trim(),
+        status: document.getElementById('dStatus').value
+      });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  c.querySelectorAll('[data-regen]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{ await regenerateDriverAccessCode(btn.dataset.regen); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-view]').forEach(btn=>{
+    btn.onclick = ()=> viewAsDriver(btn.dataset.view);
+  });
+  c.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        const result = await deleteOrDeactivateDriver(btn.dataset.del);
+        if(result==='deactivated') alert('這位司機已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+function isDriverReferenced(id){ return state.data.assignments.some(a=>a.driverId===id); }
+
+// ---------- 通路管理 ----------
+let editingChannelId = null;
+function renderChannels(c){
+  c.innerHTML = `
+    <h2 class="section-title">通路管理</h2>
+    <p class="section-sub">每個通路可以設定自己的請款依據：「依里程+下貨點數」的通路若同車趟共配，會先算出共同總額再依點數比例分攤；「整趟固定金額」（例如牧穀）則不參與共配、獨立計算。也可設定請款週期規則。</p>
+    <div class="panel">
+      <div class="grid4">
+        <div class="field"><label>通路名稱</label><input id="chName"></div>
+        <div class="field"><label>週期類型</label>
+          <select id="chType"><option value="calendar_month">自然月(1~月底)</option><option value="custom">自訂區間(跨月)</option></select>
+        </div>
+        <div class="field"><label>起始日</label><input id="chStart" type="number" min="1" max="31" value="1"></div>
+        <div class="field"><label>結束日(自訂用)</label><input id="chEnd" type="number" min="1" max="31"></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>請款依據</label>
+          <select id="chFormula"><option value="per_km_and_point">依里程+下貨點數</option><option value="flat_per_trip">整趟固定金額</option></select>
+        </div>
+        <div class="field"><label>每公里（元）</label><input id="chRateKm" type="number" value="35"></div>
+        <div class="field"><label>每下貨點（元）</label><input id="chRatePoint" type="number" value="50"></div>
+        <div class="field"><label>整趟固定金額（元）</label><input id="chFlat" type="number" placeholder="選「整趟固定金額」時填寫"></div>
+      </div>
+      <button class="btn amber" id="addChannel">新增通路</button>
+    </div>
+    <div id="channelList"></div>
+  `;
+  document.getElementById('addChannel').onclick = async ()=>{
+    const name = document.getElementById('chName').value.trim();
+    if(!name){ alert('請輸入通路名稱'); return; }
+    const type = document.getElementById('chType').value;
+    try{
+      await createChannel({
+        name, periodType:type,
+        startDay: Number(document.getElementById('chStart').value)||1,
+        endDay: type==='custom' ? Number(document.getElementById('chEnd').value)||28 : null,
+        formulaType: document.getElementById('chFormula').value,
+        rateKm: Number(document.getElementById('chRateKm').value)||0,
+        ratePoint: Number(document.getElementById('chRatePoint').value)||0,
+        flatAmount: Number(document.getElementById('chFlat').value)||0
+      });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  renderChannelList();
+}
+function renderChannelList(){
+  const el = document.getElementById('channelList');
+  el.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>通路</th><th>請款依據</th><th>週期規則</th><th>狀態</th><th></th></tr></thead>
+        <tbody>
+          ${state.data.channels.map(ch=>{
+            if(editingChannelId === ch.id){
+              return `<tr><td colspan="5">
+                <div class="grid4">
+                  <div class="field"><label>通路名稱</label><input id="ecName" value="${ch.name}"></div>
+                  <div class="field"><label>週期類型</label>
+                    <select id="ecType"><option value="calendar_month" ${ch.periodType==='calendar_month'?'selected':''}>自然月(1~月底)</option><option value="custom" ${ch.periodType==='custom'?'selected':''}>自訂區間(跨月)</option></select>
+                  </div>
+                  <div class="field"><label>起始日</label><input id="ecStart" type="number" value="${ch.startDay}"></div>
+                  <div class="field"><label>結束日</label><input id="ecEnd" type="number" value="${ch.endDay||''}"></div>
+                </div>
+                <div class="grid4">
+                  <div class="field"><label>請款依據</label>
+                    <select id="ecFormula"><option value="per_km_and_point" ${ch.formulaType==='per_km_and_point'?'selected':''}>依里程+下貨點數</option><option value="flat_per_trip" ${ch.formulaType==='flat_per_trip'?'selected':''}>整趟固定金額</option></select>
+                  </div>
+                  <div class="field"><label>每公里（元）</label><input id="ecRateKm" type="number" value="${ch.rateKm}"></div>
+                  <div class="field"><label>每下貨點（元）</label><input id="ecRatePoint" type="number" value="${ch.ratePoint}"></div>
+                  <div class="field"><label>整趟固定金額（元）</label><input id="ecFlat" type="number" value="${ch.flatAmount}"></div>
+                </div>
+                <button class="btn amber" data-savech="${ch.id}">儲存</button>
+                <button class="btn ghost" data-cancelch="${ch.id}">取消</button>
+              </td></tr>`;
+            }
+            const formulaText = ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`;
+            return `<tr>
+              <td>${ch.name}</td>
+              <td>${formulaText}</td>
+              <td>${ch.periodType==='calendar_month'?'自然月 1~月底':'每月'+ch.startDay+'日 至 次月'+ch.endDay+'日'}</td>
+              <td><span class="badge ${ch.status==='inactive'?'pending':'completed'}">${ch.status==='inactive'?'已停用':'使用中'}</span></td>
+              <td><button class="btn ghost" data-editch="${ch.id}">編輯</button> ${ch.status!=='inactive'?`<button class="btn danger" data-del="${ch.id}">刪除</button>`:''}</td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="5"><div class="empty">尚無通路</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+  el.querySelectorAll('[data-editch]').forEach(btn=>{ btn.onclick = ()=>{ editingChannelId = btn.dataset.editch; renderChannelList(); }; });
+  el.querySelectorAll('[data-cancelch]').forEach(btn=>{ btn.onclick = ()=>{ editingChannelId = null; renderChannelList(); }; });
+  el.querySelectorAll('[data-savech]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = state.data.channels.find(x=>x.id===btn.dataset.savech);
+      const periodType = document.getElementById('ecType').value;
+      try{
+        await updateChannel(ch.id, {
+          name: document.getElementById('ecName').value.trim() || ch.name,
+          periodType,
+          startDay: Number(document.getElementById('ecStart').value)||1,
+          endDay: periodType==='custom' ? (Number(document.getElementById('ecEnd').value)||28) : null,
+          formulaType: document.getElementById('ecFormula').value,
+          rateKm: Number(document.getElementById('ecRateKm').value)||0,
+          ratePoint: Number(document.getElementById('ecRatePoint').value)||0,
+          flatAmount: Number(document.getElementById('ecFlat').value)||0
+        });
+        editingChannelId = null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        const result = await deleteOrDeactivateChannel(btn.dataset.del);
+        if(result==='deactivated') alert('這個通路已有下貨點或歷史車趟關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+function isChannelReferenced(id){
+  return state.data.dropPoints.some(dp=>dp.channelId===id) ||
+    state.data.assignments.some(a=>(a.dropPoints||[]).some(dp=>dp.channelId===id));
+}
+
+// ---------- 下貨點資料庫 ----------
+let editingDpId = null;
+function renderDropPoints(c){
+  const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">下貨點資料庫</h2>
+    <p class="section-sub">先建立好常用下貨點，之後在「路線管理」用選單直接組成路線，不用每次手key地址。</p>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>地址</label><input id="dpAddr"></div>
+        <div class="field"><label>所屬通路</label><select id="dpChannel">${chOpts}</select></div>
+        <div class="field"><label>備註代號（選填）</label><input id="dpCode" placeholder="例：A"></div>
+      </div>
+      <button class="btn amber" id="addDp">新增下貨點</button>
+    </div>
+    <div class="field"><label>搜尋地址或代號</label><input id="dpSearch" placeholder="輸入關鍵字篩選（數量多時建議先搜尋）"></div>
+    <div id="dpListBody"></div>
+  `;
+  document.getElementById('addDp').onclick = async ()=>{
+    const addr = document.getElementById('dpAddr').value.trim();
+    if(!addr){ alert('請輸入地址'); return; }
+    try{
+      await createDropPoint({ address: addr, channelId: document.getElementById('dpChannel').value, code: document.getElementById('dpCode').value.trim() });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  document.getElementById('dpSearch').oninput = renderDpListBody;
+  renderDpListBody();
+}
+function renderDpListBody(){
+  const wrap = document.getElementById('dpListBody');
+  const keyword = (document.getElementById('dpSearch').value||'').trim().toLowerCase();
+  const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  wrap.innerHTML = state.data.channels.map(ch=>{
+    let rows = state.data.dropPoints.filter(dp=>dp.channelId===ch.id);
+    if(keyword){ rows = rows.filter(dp=> dp.address.toLowerCase().includes(keyword) || (dp.code||'').toLowerCase().includes(keyword)); }
+    if(keyword && !rows.length) return '';
+    return `<div class="panel">
+      <h3 style="margin-top:0;">${ch.name}（${rows.length}）</h3>
+      <table>
+        <thead><tr><th>代號</th><th>地址</th><th>狀態</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(dp=>{
+            if(editingDpId === dp.id){
+              return `<tr><td colspan="4">
+                <div class="grid3">
+                  <div class="field"><label>地址</label><input id="edpAddr" value="${dp.address}"></div>
+                  <div class="field"><label>所屬通路</label><select id="edpChannel">${chOpts.replace(`value="${dp.channelId}"`, `value="${dp.channelId}" selected`)}</select></div>
+                  <div class="field"><label>代號</label><input id="edpCode" value="${dp.code||''}"></div>
+                </div>
+                <button class="btn amber" data-savedp="${dp.id}">儲存</button>
+                <button class="btn ghost" data-canceldp="${dp.id}">取消</button>
+              </td></tr>`;
+            }
+            return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}</td><td><span class="badge ${dp.status==='inactive'?'pending':'completed'}">${dp.status==='inactive'?'已停用':'使用中'}</span></td>
+            <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> ${dp.status!=='inactive'?`<button class="btn danger" data-del="${dp.id}">刪除</button>`:''}</td></tr>`;
+          }).join('') || `<tr><td colspan="4"><div class="empty">此通路尚無下貨點</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-editdp]').forEach(btn=>{ btn.onclick = ()=>{ editingDpId = btn.dataset.editdp; renderDpListBody(); }; });
+  wrap.querySelectorAll('[data-canceldp]').forEach(btn=>{ btn.onclick = ()=>{ editingDpId = null; renderDpListBody(); }; });
+  wrap.querySelectorAll('[data-savedp]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.savedp);
+      const newAddr = document.getElementById('edpAddr').value.trim() || dp.address;
+      try{
+        await updateDropPoint(dp.id, { address: newAddr, channelId: document.getElementById('edpChannel').value, code: document.getElementById('edpCode').value.trim() });
+        editingDpId = null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        const result = await deleteOrDeactivateDropPoint(btn.dataset.del);
+        if(result==='deactivated') alert('這個下貨點已被路線版本或歷史車趟使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+function isDropPointReferenced(id){
+  return state.data.routes.some(r=>(r.versions||[]).some(v=>(v.dropPointIds||[]).includes(id))) ||
+    state.data.assignments.some(a=>(a.dropPoints||[]).some(dp=>dp.sourceDpId===id));
+}
+
+// ---------- 出發點資料庫 ----------
+let editingOgId = null;
+function renderOrigins(c){
+  c.innerHTML = `
+    <h2 class="section-title">出發點資料庫</h2>
+    <p class="section-sub">先建立好常用出發點，路線與週班表中即可用選單挑選，不用每次手key。</p>
+    <div class="panel">
+      <div class="grid2">
+        <div class="field"><label>地址</label><input id="ogAddr"></div>
+        <div class="field"><label>備註名稱（選填）</label><input id="ogLabel" placeholder="例：總倉"></div>
+      </div>
+      <button class="btn amber" id="addOg">新增出發點</button>
+    </div>
+    <div id="ogList"></div>
+  `;
+  document.getElementById('addOg').onclick = async ()=>{
+    const addr = document.getElementById('ogAddr').value.trim();
+    if(!addr){ alert('請輸入地址'); return; }
+    try{
+      await createOrigin({ address: addr, label: document.getElementById('ogLabel').value.trim() });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  renderOgList();
+}
+function renderOgList(){
+  const el = document.getElementById('ogList');
+  el.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>名稱</th><th>地址</th><th>狀態</th><th></th></tr></thead>
+        <tbody>
+          ${state.data.origins.map(og=>{
+            if(editingOgId === og.id){
+              return `<tr><td colspan="4">
+                <div class="grid2">
+                  <div class="field"><label>地址</label><input id="eogAddr" value="${og.address}"></div>
+                  <div class="field"><label>備註名稱</label><input id="eogLabel" value="${og.label||''}"></div>
+                </div>
+                <button class="btn amber" data-saveog="${og.id}">儲存</button>
+                <button class="btn ghost" data-cancelog="${og.id}">取消</button>
+              </td></tr>`;
+            }
+            return `<tr><td>${og.label||'—'}</td><td>${og.address}</td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
+            <td><button class="btn ghost" data-editog="${og.id}">編輯</button> ${og.status!=='inactive'?`<button class="btn danger" data-del="${og.id}">刪除</button>`:''}</td></tr>`;
+          }).join('') || `<tr><td colspan="4"><div class="empty">尚無出發點資料</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+  el.querySelectorAll('[data-editog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = btn.dataset.editog; renderOgList(); }; });
+  el.querySelectorAll('[data-cancelog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = null; renderOgList(); }; });
+  el.querySelectorAll('[data-saveog]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const og = state.data.origins.find(x=>x.id===btn.dataset.saveog);
+      try{
+        await updateOrigin(og.id, { address: document.getElementById('eogAddr').value.trim() || og.address, label: document.getElementById('eogLabel').value.trim() });
+        editingOgId = null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        const result = await deleteOrDeactivateOrigin(btn.dataset.del);
+        if(result==='deactivated') alert('這個出發點已被路線或歷史車趟使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+function isOriginReferenced(id){
+  const og = state.data.origins.find(o=>o.id===id);
+  if(!og) return false;
+  return state.data.routes.some(r=>r.originAddr===og.address) || state.data.assignments.some(a=>a.origin===og.address);
+}
+
+// ---------- 路線管理（版本化，不綁司機） ----------
+function renderRoutes(c){
+  const ogOptsTop = state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">路線管理</h2>
+    <p class="section-sub">路線本身不綁司機。修改下貨點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>出發點</label><select id="rOrigin">${ogOptsTop}</select></div>
+        <div class="field"><label>車次</label><input id="rSeq" placeholder="例：第一車"></div>
+        <div class="field"><label>班次</label><select id="rShift"><option value="AM">上午</option><option value="PM">下午</option></select></div>
+      </div>
+      <button class="btn amber" id="addRoute">新增路線</button>
+    </div>
+    <div id="routeList"></div>
+  `;
+  document.getElementById('addRoute').onclick = async ()=>{
+    const originAddr = document.getElementById('rOrigin').value;
+    const seq = document.getElementById('rSeq').value.trim();
+    const shift = document.getElementById('rShift').value;
+    if(!originAddr || !seq){ alert('請選擇出發點並輸入車次'); return; }
+    const og = state.data.origins.find(o=>o.address===originAddr);
+    const name = `${og?(og.label||og.address):originAddr} ${seq} ${shift==='AM'?'上午':'下午'}`;
+    try{
+      await createRoute({ name, originAddr, seq, shift });
+      renderRoutes(c);
+    }catch(err){ alert(err.message); }
+  };
+  renderRouteList();
+}
+let routeDraft = {};
+let expandedRouteId = null;
+let routeListSearch = '';
+function ensureDraft(route){
+  if(!routeDraft[route.id]){
+    const open = (route.versions||[]).find(v=>!v.end);
+    routeDraft[route.id] = { order: open ? [...open.dropPointIds] : [], dpSearch: '' };
+  }
+  return routeDraft[route.id];
+}
+function renderRouteList(){
+  const el = document.getElementById('routeList');
+  el.innerHTML = `
+    <div class="field" style="max-width:320px;"><label>搜尋路線（依名稱／出發點／車次）</label><input id="routeSearch" value="${routeListSearch}" placeholder="輸入關鍵字篩選，路線多時建議先搜尋"></div>
+    <div id="routeTableWrap"></div>
+    <div id="routeDetail"></div>
+  `;
+  renderRouteTable();
+  if(expandedRouteId){ renderRouteDetail(expandedRouteId); }
+  const searchEl = document.getElementById('routeSearch');
+  let composing = false;
+  searchEl.addEventListener('compositionstart', ()=>{ composing = true; });
+  searchEl.addEventListener('compositionend', (e)=>{ composing=false; routeListSearch = e.target.value; renderRouteTable(); });
+  searchEl.addEventListener('input', (e)=>{
+    if(composing) return;
+    routeListSearch = e.target.value;
+    renderRouteTable();
+  });
+}
+function renderRouteTable(){
+  const wrap = document.getElementById('routeTableWrap');
+  const kw = routeListSearch.trim().toLowerCase();
+  const filtered = state.data.routes.filter(r=>{
+    if(!kw) return true;
+    const og = state.data.origins.find(o=>o.address===r.originAddr);
+    const originText = (og?(og.label||og.address):r.originAddr||'').toLowerCase();
+    return r.name.toLowerCase().includes(kw) || originText.includes(kw) || (r.seq||'').toLowerCase().includes(kw);
+  });
+  wrap.innerHTML = `
+    <div class="panel" style="overflow-x:auto;">
+      <table>
+        <thead><tr><th>路線</th><th>出發點</th><th>目前版本</th><th></th></tr></thead>
+        <tbody>
+          ${filtered.map(r=>{
+            const versions = [...(r.versions||[])].sort((a,b)=>a.start.localeCompare(b.start));
+            const openVersion = versions.find(v=>!v.end);
+            const og = state.data.origins.find(o=>o.address===r.originAddr);
+            return `<tr>
+              <td>${r.name}</td>
+              <td>${og?(og.label||og.address):(r.originAddr||'—')}</td>
+              <td>${openVersion ? `${(openVersion.dropPointIds||[]).length} 個下貨點（${openVersion.start}起）` : '尚無版本'}</td>
+              <td><button class="btn ${expandedRouteId===r.id?'amber':'ghost'}" data-toggleroute="${r.id}">${expandedRouteId===r.id?'收合':'管理'}</button></td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="4"><div class="empty">${kw?'找不到符合的路線':'尚未建立任何路線'}</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+  wrap.querySelectorAll('[data-toggleroute]').forEach(btn=>{
+    btn.onclick = ()=>{
+      expandedRouteId = (expandedRouteId===btn.dataset.toggleroute) ? null : btn.dataset.toggleroute;
+      renderRouteTable();
+      renderRouteDetail(expandedRouteId);
+    };
+  });
+}
+function renderRouteDetail(rid){
+  const detailEl = document.getElementById('routeDetail');
+  const r = state.data.routes.find(x=>x.id===rid);
+  if(!r){ detailEl.innerHTML=''; return; }
+  const versions = [...(r.versions||[])].sort((a,b)=>a.start.localeCompare(b.start));
+  const hasHistory = versions.some(v=>v.end);
+  const openVersion = versions.find(v=>!v.end);
+  const closedVersions = versions.filter(v=>v.end);
+  const og = state.data.origins.find(o=>o.address===r.originAddr);
+  const renderVer = v => `
+      <div class="version-block ${!v.end?'open':''}">
+        <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
+        <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'}</div>
+        <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
+      </div>`;
+  const draft = ensureDraft(r);
+  detailEl.innerHTML = `
+    <div class="panel">
+      <div class="toolbar"><strong>${r.name}</strong>
+        ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
+      </div>
+      <p style="font-size:12.5px; color:var(--ink-soft);">出發點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改出發點請新增一條路線）</p>
+      ${openVersion ? `<h4 style="margin:10px 0 4px;">目前生效版本</h4>${renderVer(openVersion)}` : ''}
+      ${closedVersions.length ? `<h4 style="margin:10px 0 4px;">歷史版本（${closedVersions.length}筆，唯讀不可修改或刪除）</h4>${closedVersions.slice(-3).map(renderVer).join('')}${closedVersions.length>3?'<p style="font-size:11.5px;color:var(--ink-soft);">僅顯示最近3筆歷史版本</p>':''}` : ''}
+      ${!versions.length ? '<div class="empty">尚無版本，請於下方建立</div>' : ''}
+      <div class="field" style="margin-top:10px; max-width:220px;"><label>生效日期</label><input type="date" value="${todayStr()}" data-effdate="${r.id}"></div>
+
+      <label>搜尋下貨點加入路線（輸入地址或代號關鍵字）</label>
+      <input id="dpSearchInput" value="${draft.dpSearch||''}" placeholder="例：忠孝東路，或代號A">
+      <div id="dpSearchResults" style="margin-top:6px;"></div>
+
+      <label style="margin-top:10px; display:block;">目前順序（可用↑↓調整，實際跑車順序以此為準）</label>
+      <div data-orderlist="${r.id}">
+        ${draft.order.map((id,i)=>{
+          const dp = state.data.dropPoints.find(x=>x.id===id);
+          return `<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
+            <span>${i+1}. ${dp?dp.address:'（已刪除的下貨點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
+            <span>
+              <button class="btn ghost" data-up="${r.id}|${i}" ${i===0?'disabled':''}>↑</button>
+              <button class="btn ghost" data-down="${r.id}|${i}" ${i===draft.order.length-1?'disabled':''}>↓</button>
+              <button class="btn danger" data-remove="${r.id}|${i}">移除</button>
+            </span>
+          </div>`;
+        }).join('') || '<div class="empty">尚未加入任何下貨點</div>'}
+      </div>
+      <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
+    </div>
+  `;
+  function renderDpSearchResults(){
+    const kw = (draft.dpSearch||'').trim().toLowerCase();
+    const resultsEl = document.getElementById('dpSearchResults');
+    if(!resultsEl) return;
+    const matches = kw
+      ? state.data.dropPoints.filter(dp=> dp.status!=='inactive' && (dp.address.toLowerCase().includes(kw) || (dp.code||'').toLowerCase().includes(kw))).slice(0,30)
+      : [];
+    resultsEl.innerHTML = kw ? (matches.map(dp=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>${dp.code?dp.code+' · ':''}${dp.address}（${channelName(dp.channelId)}）</span>
+        <button class="btn ghost" data-dpaddbtn="${r.id}|${dp.id}">加入</button>
+      </div>`).join('') || '<div class="empty">找不到符合的下貨點</div>') : '<p style="font-size:11.5px; color:var(--ink-soft);">輸入關鍵字開始搜尋（下貨點數量多時，不會一次全部列出）</p>';
+    resultsEl.querySelectorAll('[data-dpaddbtn]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const [routeId, dpId] = btn.dataset.dpaddbtn.split('|');
+        ensureDraft(state.data.routes.find(x=>x.id===routeId)).order.push(dpId);
+        renderRouteDetail(routeId);
+      };
+    });
+  }
+  renderDpSearchResults();
+  const dpInputEl = document.getElementById('dpSearchInput');
+  let composing = false;
+  dpInputEl.addEventListener('compositionstart', ()=>{ composing = true; });
+  dpInputEl.addEventListener('compositionend', (e)=>{ composing = false; draft.dpSearch = e.target.value; renderDpSearchResults(); });
+  dpInputEl.addEventListener('input', (e)=>{
+    if(composing) return;
+    draft.dpSearch = e.target.value;
+    renderDpSearchResults();
+  });
+  detailEl.querySelectorAll('[data-delroute]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        await deleteRoute(btn.dataset.delroute);
+        delete routeDraft[btn.dataset.delroute]; expandedRouteId=null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  detailEl.querySelectorAll('[data-up]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [rid2, idx] = btn.dataset.up.split('|').map((v,i)=> i===1?Number(v):v);
+      const order = routeDraft[rid2].order;
+      [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
+      renderRouteDetail(rid2);
+    };
+  });
+  detailEl.querySelectorAll('[data-down]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [rid2, idx] = btn.dataset.down.split('|').map((v,i)=> i===1?Number(v):v);
+      const order = routeDraft[rid2].order;
+      [order[idx+1], order[idx]] = [order[idx], order[idx+1]];
+      renderRouteDetail(rid2);
+    };
+  });
+  detailEl.querySelectorAll('[data-remove]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [rid2, idx] = btn.dataset.remove.split('|').map((v,i)=> i===1?Number(v):v);
+      routeDraft[rid2].order.splice(idx,1);
+      renderRouteDetail(rid2);
+    };
+  });
+  detailEl.querySelectorAll('[data-savever]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const rid2 = btn.dataset.savever;
+      const effDate = detailEl.querySelector(`[data-effdate="${rid2}"]`).value;
+      const ids = routeDraft[rid2].order;
+      if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個下貨點'); return; }
+      try{
+        await saveRouteVersion(rid2, effDate, ids);
+        delete routeDraft[rid2];
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+
+// ---------- 週班表（直接指派司機＋出發點，這裡才產生實際車趟） ----------
+const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
+function renderScheduleAdmin(c){
+  const week1 = getWeekDates(state.weekOffset);
+  const week2 = getWeekDates(state.weekOffset+1);
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+  const routeOpts = state.data.routes.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+  const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">週班表</h2>
+    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派司機、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。建議每週末確認並編輯下週班表。</p>
+    <div class="panel no-print">
+      <p style="font-size:12.5px; font-weight:600; margin:0 0 8px;">批次建立（例如整週一~五都跑同一路線）</p>
+      <div class="grid4">
+        <div class="field"><label>路線</label><select id="sRoute"><option value="">選擇路線</option>${routeOpts}</select></div>
+        <div class="field"><label>司機（車輛隨司機）</label><select id="sDriver"><option value="">選擇司機</option>${driverOpts}</select></div>
+        <div class="field"><label>起始日期</label><input id="sStart" type="date" value="${todayStr()}"></div>
+        <div class="field"><label>結束日期（單日則同起始日）</label><input id="sEnd" type="date" value="${todayStr()}"></div>
+      </div>
+      <div class="field">
+        <label>套用星期（僅勾選的星期會建立車趟）</label>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          ${WEEKDAY_ZH.map((l,i)=>`<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="wdcheck" value="${i}" checked style="width:auto;">${l}</label>`).join('')}
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>司機車資／每趟（元）</label><input id="sFare" type="number"></div>
+        <div class="field"><label>整趟總里程／每趟（km）</label><input id="sDistance" type="number"></div>
+      </div>
+      <button class="btn amber" id="addAssign">批次建立指派</button>
+    </div>
+    <div class="toolbar no-print">
+      <div class="week-nav">
+        <button class="btn ghost" id="prevWeek">← 往前一週</button>
+        <span class="mono">${week1[0]} ~ ${week2[6]}（本週＋下週）</span>
+        <button class="btn ghost" id="nextWeek">往後一週 →</button>
+      </div>
+      <div class="field" style="max-width:200px; margin:0;"><select id="originFilter">${originFilterOpts}</select></div>
+    </div>
+    <h3>本週（${week1[0]} ~ ${week1[6]}）</h3>
+    <div id="gridWeek1"></div>
+    <h3>下週（${week2[0]} ~ ${week2[6]}）</h3>
+    <div id="gridWeek2"></div>
+    <div id="assignDetail"></div>
+  `;
+  document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; renderContent(); };
+  document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; renderContent(); };
+  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); renderWeekGrid('gridWeek2', week2); };
+  document.getElementById('addAssign').onclick = async ()=>{
+    const routeId = document.getElementById('sRoute').value;
+    const driverId = document.getElementById('sDriver').value;
+    const start = document.getElementById('sStart').value;
+    const end = document.getElementById('sEnd').value || start;
+    const weekdays = Array.from(document.querySelectorAll('.wdcheck:checked')).map(cb=>Number(cb.value));
+    if(!routeId || !driverId || !start){ alert('請選擇路線、司機與日期'); return; }
+    const route = state.data.routes.find(r=>r.id===routeId);
+    const fare = document.getElementById('sFare').value;
+    const distanceKm = document.getElementById('sDistance').value;
+    let created=0, skippedNoVersion=0, skippedExisting=0, skippedConflict=0;
+    let cursor = start;
+    try{
+      while(cursor <= end){
+        const jsWeekday = new Date(cursor+'T00:00:00').getDay();
+        const isoWeekday = jsWeekday===0 ? 6 : jsWeekday-1;
+        if(weekdays.includes(isoWeekday)){
+          const already = state.data.assignments.some(a=>a.date===cursor && a.routeId===routeId);
+          if(already){ skippedExisting++; }
+          else if(hasDriverConflict(driverId, cursor, route.shift)){ skippedConflict++; }
+          else {
+            const version = getActiveVersion(route, cursor);
+            if(!version){ skippedNoVersion++; }
+            else {
+              await createAssignment({ date:cursor, routeId, driverId, fare, distanceKm });
+              created++;
+            }
+          }
+        }
+        cursor = ymd(addDays(cursor,1));
+      }
+    }catch(err){ alert(err.message); }
+    alert(`已建立 ${created} 筆車趟。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過。`:''}${skippedConflict? `\n${skippedConflict} 天因司機當天已有相同班次而略過。`:''}`);
+    renderContent();
+  };
+  renderWeekGrid('gridWeek1', week1);
+  renderWeekGrid('gridWeek2', week2);
+}
+function renderWeekGrid(containerId, dates){
+  const wrap = document.getElementById(containerId);
+  const originFilterVal = document.getElementById('originFilter').value;
+  const origins = originFilterVal ? state.data.origins.filter(og=>og.address===originFilterVal) : state.data.origins;
+
+  function cellHtml(route, date){
+    if(!route) return `<td class="grid-black"></td>`;
+    const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
+    if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
+    const issue = a.hasIssue ? ' ⚠️' : '';
+    const tag = a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '';
+    return `<td class="grid-cell" data-viewassign="${a.id}">${driverName(a.driverId)}${tag}${issue}</td>`;
+  }
+  function headerHtml(){
+    const dateRow = dates.map(d=>{
+      const wd = new Date(d+'T00:00:00').getDay();
+      const isWeekend = wd===0||wd===6;
+      return `<th colspan="2" class="${isWeekend?'weekend':''}">${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）</th>`;
+    }).join('');
+    const shiftRow = dates.map(d=>{
+      const wd = new Date(d+'T00:00:00').getDay();
+      const isWeekend = wd===0||wd===6;
+      return `<th class="${isWeekend?'weekend':''}">上午</th><th class="${isWeekend?'weekend':''}">下午</th>`;
+    }).join('');
+    return `<thead><tr><th></th>${dateRow}</tr><tr><th>車次</th>${shiftRow}</tr></thead>`;
+  }
+  const blocks = origins.map(og=>{
+    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
+    if(!routesHere.length) return '';
+    const seqs = [...new Set(routesHere.map(r=>r.seq))];
+    const rows = seqs.map(seq=>{
+      const amRoute = routesHere.find(r=>r.seq===seq && r.shift==='AM');
+      const pmRoute = routesHere.find(r=>r.seq===seq && r.shift==='PM');
+      const cells = dates.map(d=> cellHtml(amRoute,d) + cellHtml(pmRoute,d)).join('');
+      return `<tr><td class="row-label">${seq}</td>${cells}</tr>`;
+    }).join('');
+    return `<div class="origin-title">${og.label||og.address}</div>
+      <div class="panel" style="overflow-x:auto; padding:8px;">
+        <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody></table>
+      </div>`;
+  }).join('');
+  wrap.innerHTML = blocks || '<div class="empty">此出發點尚無路線，請先到「路線管理」建立</div>';
+  wrap.querySelectorAll('[data-viewassign]').forEach(td=>{ td.onclick = ()=> renderAssignmentDetail(td.dataset.viewassign); });
+  wrap.querySelectorAll('[data-quickcreate]').forEach(td=>{
+    td.onclick = ()=>{
+      const [routeId, date] = td.dataset.quickcreate.split('|');
+      renderQuickCreate(routeId, date);
+    };
+  });
+}
+function renderOverview(c){
+  const w1 = getWeekDates(state._ovOffset||0);
+  const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">班表總覽</h2>
+    <p class="section-sub">純檢視、大字體版本，專門用來一眼確認「哪一天、哪一車次、哪位司機」，不含編輯功能。</p>
+    <div class="toolbar no-print">
+      <div class="week-nav">
+        <button class="btn ghost" id="ovPrev">← 上一週</button>
+        <span class="mono">${w1[0]} ~ ${w1[6]}</span>
+        <button class="btn ghost" id="ovNext">下一週 →</button>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <select id="ovOriginFilter" style="max-width:200px;">${originFilterOpts}</select>
+        <button class="btn ghost" id="ovPrint">另存PDF</button>
+      </div>
+    </div>
+    <div id="ovBody"></div>
+  `;
+  document.getElementById('ovPrev').onclick = ()=>{ state._ovOffset=(state._ovOffset||0)-1; renderContent(); };
+  document.getElementById('ovNext').onclick = ()=>{ state._ovOffset=(state._ovOffset||0)+1; renderContent(); };
+  function refresh(){
+    const originFilterVal = document.getElementById('ovOriginFilter').value;
+    const origins = originFilterVal ? state.data.origins.filter(og=>og.address===originFilterVal) : state.data.origins;
+    const blocks = origins.map(og=>{
+      const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
+      if(!routesHere.length) return '';
+      const seqs = [...new Set(routesHere.map(r=>r.seq))];
+      const dateHeader = w1.map(d=>{
+        const wd = new Date(d+'T00:00:00').getDay(); const isWeekend = wd===0||wd===6;
+        return `<th colspan="2" class="${isWeekend?'weekend':''}">${d.slice(5)}（週${WEEKDAY_ZH[wd===0?6:wd-1]}）</th>`;
+      }).join('');
+      const shiftHeader = w1.map(d=>{
+        const wd = new Date(d+'T00:00:00').getDay(); const isWeekend = wd===0||wd===6;
+        return `<th class="${isWeekend?'weekend':''}">上午</th><th class="${isWeekend?'weekend':''}">下午</th>`;
+      }).join('');
+      const rows = seqs.map(seq=>{
+        const amRoute = routesHere.find(r=>r.seq===seq && r.shift==='AM');
+        const pmRoute = routesHere.find(r=>r.seq===seq && r.shift==='PM');
+        function cell(route,d){
+          if(!route) return `<td class="grid-black"></td>`;
+          const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===d);
+          return `<td class="grid-cell">${a? driverName(a.driverId) : ''}</td>`;
+        }
+        const cells = w1.map(d=> cell(amRoute,d)+cell(pmRoute,d)).join('');
+        return `<tr><td class="row-label">${seq}</td>${cells}</tr>`;
+      }).join('');
+      return `<div class="origin-title" style="font-size:15px;">${og.label||og.address}</div>
+        <div class="panel" style="overflow-x:auto; padding:8px;">
+          <table class="overview-grid"><thead><tr><th></th>${dateHeader}</tr><tr><th>車次</th>${shiftHeader}</tr></thead><tbody>${rows}</tbody></table>
+        </div>`;
+    }).join('');
+    document.getElementById('ovBody').innerHTML = blocks || '<div class="empty">尚無路線資料</div>';
+  }
+  document.getElementById('ovOriginFilter').onchange = refresh;
+  document.getElementById('ovPrint').onclick = ()=> exportPanelPrint(document.getElementById('ovBody'), `班表總覽_${w1[0]}_${w1[6]}`);
+  refresh();
+}
+function renderQuickCreate(routeId, date){
+  const box = document.getElementById('assignDetail');
+  const route = state.data.routes.find(r=>r.id===routeId);
+  const version = getActiveVersion(route, date);
+  if(!version){
+    box.innerHTML = `<div class="panel"><div class="note" style="border-color:var(--danger); color:var(--danger);">此路線在 ${date} 尚無生效的下貨點版本，請先到「路線管理」建立對應版本後再指派，避免車趟下貨點是空的。</div></div>`;
+    return;
+  }
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+  const og = state.data.origins.find(o=>o.address===route.originAddr);
+  box.innerHTML = `
+    <div class="panel">
+      <h3 style="margin-top:0;">指派：${date} · ${route.name}</h3>
+      <p style="font-size:12.5px;">出發點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
+      <div class="grid3">
+        <div class="field"><label>司機</label><select id="qDriver">${driverOpts}</select></div>
+        <div class="field"><label>司機車資（元）</label><input id="qFare" type="number"></div>
+        <div class="field"><label>整趟總里程（km）</label><input id="qDistance" type="number"></div>
+      </div>
+      <button class="btn amber" id="qSave">確認指派</button>
+      <button class="btn ghost" id="qCancel">取消</button>
+    </div>
+  `;
+  document.getElementById('qCancel').onclick = ()=>{ box.innerHTML=''; };
+  document.getElementById('qSave').onclick = async ()=>{
+    const driverId = document.getElementById('qDriver').value;
+    if(!driverId){ alert('請選擇司機'); return; }
+    if(hasDriverConflict(driverId, date, route.shift)){
+      alert('這位司機在同一天已經有相同班次（上午／下午）的指派，請確認是否排錯。'); return;
+    }
+    try{
+      await createAssignment({
+        date, routeId, driverId,
+        fare: document.getElementById('qFare').value,
+        distanceKm: document.getElementById('qDistance').value
+      });
+      box.innerHTML=''; renderContent();
+    }catch(err){ alert(err.message); }
+  };
+}
+function hasDriverConflict(driverId, date, shift, excludeId=null){
+  if(!shift) return false;
+  return state.data.assignments.some(a=>
+    a.id!==excludeId && a.driverId===driverId && a.date===date && a.status!=='cancelled' &&
+    (state.data.routes.find(r=>r.id===a.routeId)||{}).shift === shift
+  );
+}
+function renderAssignmentDetail(id){
+  const box = document.getElementById('assignDetail');
+  const a = state.data.assignments.find(x=>x.id===id);
+  if(!a){ box.innerHTML=''; return; }
+  box.innerHTML = `
+    <div class="panel">
+      <div class="toolbar">
+        <strong>${a.date} · ${routeName(a.routeId)} · ${driverName(a.driverId)}</strong>
+        <span>
+          ${a.status==='completed' ? '<span class="badge locked">已完成・已封存不可編輯</span>' : a.status==='in_progress' ? '<span class="badge progress">司機執行中</span>' : '<span class="badge pending">排定中</span>'}
+          ${a.status==='scheduled'? `<button class="btn danger" data-delassign="${a.id}">刪除</button>` : ''}
+        </span>
+      </div>
+      <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
+      ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${a.issueNote}</div>` : ''}
+      <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。</p>
+      ${a.dropPoints.map(dp=>`<div class="drop-point">${dp.address}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}</div>`).join('')}
+    </div>
+  `;
+  const db = document.getElementById('assignDetail').querySelector('[data-delassign]');
+  if(db) db.onclick = async ()=>{
+    try{ await deleteAssignment(a.id); renderContent(); }
+    catch(err){ alert(err.message); }
+  };
+}
+
+// ---------- 薪資結算 ----------
+function renderPayroll(c){
+  const month = state._payrollMonth || todayStr().slice(0,7);
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+  const inbox = state.data.statements.filter(s=>s.status==='signed' && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
+  c.innerHTML = `
+    <h2 class="section-title">薪資結算</h2>
+    <p class="section-sub">月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。</p>
+    ${inbox.length ? `<div class="panel">
+      <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
+      ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>${driverName(s.driverId)} － ${s.month}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'}</span>
+        <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
+      </div>`).join('')}
+    </div>` : ''}
+    <div class="panel">
+      <div class="grid2">
+        <div class="field"><label>司機</label><select id="pDriver">${driverOpts}</select></div>
+        <div class="field"><label>結算月份</label><input id="pMonth" type="month" value="${month}"></div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加錢</option><option value="deduct">減錢</option></select></div>
+        <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
+        <div class="field"><label>備註</label><input id="aNote"></div>
+      </div>
+      <button class="btn ghost" id="addAdj">新增調整項</button>
+    </div>
+    <div id="payrollResult"></div>
+  `;
+  c.querySelectorAll('[data-ack]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{ await ackStatement(btn.dataset.ack); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-viewsigned]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const s = state.data.statements.find(x=>x.id===btn.dataset.viewsigned);
+      document.getElementById('pDriver').value = s.driverId;
+      document.getElementById('pMonth').value = s.month;
+      refresh();
+    };
+  });
+  function refresh(){
+    const driverId = document.getElementById('pDriver').value;
+    const monthStr = document.getElementById('pMonth').value;
+    state._payrollMonth = monthStr;
+    if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
+    const live = driverMonthly(driverId, monthStr);
+    const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
+    const isFrozen = record && (record.status==='awaiting_signature' || record.status==='signed');
+    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net } : live;
+    const statusBadge = !record ? '' : record.status==='signed' ? '<span class="badge signed">司機已回簽</span>' : '<span class="badge progress">等待司機回簽</span>';
+    document.getElementById('payrollResult').innerHTML = `
+      <div class="panel">
+        <h3 style="margin-top:0;">${driverName(driverId)} — ${monthStr} 勞報單預覽 ${statusBadge}</h3>
+        ${!record ? '<div class="note">尚未月結確認，下方金額為即時預覽，調整項仍可新增；確認無誤後按「月結確認」凍結金額並開放司機回簽。</div>' : ''}
+        <table>
+          <tr><td>已完成車趟數</td><td class="amount">${r.trips.length}</td></tr>
+          <tr><td>車趟報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
+          <tr><td>調整項合計</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
+          <tr><td><strong>應付淨額</strong></td><td class="amount"><strong>$${money(r.net)}</strong></td></tr>
+        </table>
+        <table>
+          <thead><tr><th>類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
+          <tbody>${r.adjustments.map(a=>`<tr><td>${a.type==='advance'?'預支':a.type==='add'?'加錢':'減錢'}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
+        </table>
+        ${record && record.status==='signed' && record.signatureDataUrl ? `<div style="margin-top:10px;"><label>司機簽名</label><br><img src="${record.signatureDataUrl}" style="max-width:240px; border:1px solid var(--border); border-radius:var(--radius);"></div>` : ''}
+        <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
+          ${!record ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
+        </div>
+      </div>`;
+    document.getElementById('printStatement').onclick = ()=> exportPanelPrint(document.getElementById('printStatement').closest('.panel'), `${driverName(driverId)}_${monthStr}_勞報單`);
+    document.querySelectorAll('[data-deladj]').forEach(btn=>{
+      btn.onclick=async()=>{
+        try{ await deleteAdjustment(btn.dataset.deladj); refresh(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    const confirmBtn = document.getElementById('confirmMonth');
+    if(confirmBtn) confirmBtn.onclick = async ()=>{
+      if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放司機回簽？凍結後車趟報酬不會再變動。`)) return;
+      try{ await confirmMonthlyStatement(driverId, monthStr, live); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  }
+  document.getElementById('pDriver').onchange = refresh;
+  document.getElementById('pMonth').onchange = refresh;
+  document.getElementById('addAdj').onclick = async ()=>{
+    const driverId = document.getElementById('pDriver').value;
+    const monthStr = document.getElementById('pMonth').value;
+    const amount = document.getElementById('aAmount').value;
+    if(!driverId||!amount){ alert('請選擇司機並輸入金額'); return; }
+    try{
+      await createAdjustment({ driverId, month: monthStr, type: document.getElementById('aType').value, amount, note: document.getElementById('aNote').value.trim() });
+      refresh();
+    }catch(err){ alert(err.message); }
+  };
+  refresh();
+}
+
+// ---------- 請款結算 ----------
+function renderBilling(c){
+  const month = state._billingMonth || todayStr().slice(0,7);
+  const chOpts = state.data.channels.map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">請款結算</h2>
+    <p class="section-sub">共配車趟：採「依里程+下貨點數」公式的通路，會先算出整趟共同總額（里程×每公里費率＋總點數×每點費率），再依各通路下貨點數比例分攤；採「整趟固定金額」的通路（例如牧穀）則獨立計算，不參與共配分攤。</p>
+    <p class="section-sub">各通路實際費率請至「通路管理」查看/調整。</p>
+    <div class="panel">
+      <div class="grid2">
+        <div class="field"><label>通路</label><select id="bChannel">${chOpts}</select></div>
+        <div class="field"><label>對應月份</label><input id="bMonth" type="month" value="${month}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>區間起（可調整）</label><input id="bStart" type="date"></div>
+        <div class="field"><label>區間迄（可調整）</label><input id="bEnd" type="date"></div>
+      </div>
+    </div>
+    <div id="billingResult"></div>`;
+  function refresh(){
+    const channelId = document.getElementById('bChannel').value;
+    const monthStr = document.getElementById('bMonth').value;
+    state._billingMonth = monthStr;
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    if(!channel){ document.getElementById('billingResult').innerHTML='<div class="empty">請先建立通路</div>'; return; }
+    let period = defaultPeriod(channel, monthStr);
+    const startInput = document.getElementById('bStart'), endInput = document.getElementById('bEnd');
+    if(!startInput.value) startInput.value = period.start;
+    if(!endInput.value) endInput.value = period.end;
+    const start = startInput.value, end = endInput.value;
+    const r = channelBillingTotal(channelId, start, end);
+    document.getElementById('billingResult').innerHTML = `
+      <div class="panel">
+        <h3 style="margin-top:0;">${channel.name} — ${start} ~ ${end} 請款總額：<span class="amount">$${money(r.total.toFixed(0))}</span></h3>
+        <table>
+          <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>該通路分攤金額</th></tr></thead>
+          <tbody>${r.contributing.map(x=>`<tr><td>${x.a.date}</td><td>${routeName(x.a.routeId)}</td><td>${driverName(x.a.driverId)}</td><td class="amount">$${money(x.amount.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
+        </table>
+        <button class="btn amber no-print" id="printBilling" style="margin-top:10px;">產生請款單（列印/另存PDF）</button>
+      </div>`;
+    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('printBilling').closest('.panel'), `${channel.name}_${start}_${end}_請款單`);
+  }
+  document.getElementById('bChannel').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
+  document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
+  document.getElementById('bStart').onchange = refresh;
+  document.getElementById('bEnd').onchange = refresh;
+  refresh();
+}
+
+// ---------- 資料匯出與封存 ----------
+// ---------- 系統設定 ----------
+function renderSettings(c){
+  c.innerHTML = `
+    <h2 class="section-title">系統設定</h2>
+    <p class="section-sub">主控PIN碼用於登入時驗證身份，請妥善保管，不要告訴司機。</p>
+    <div class="panel">
+      <div class="field" style="max-width:200px;"><label>主控PIN碼</label><input id="setPin" value="${state.data.settings.adminPin}"></div>
+      <button class="btn amber" id="savePin">儲存</button>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">資料備份</h3>
+      <p class="section-sub">Supabase 專案本身有資料庫層級備份機制，這裡的匯出只是方便你自己留一份離線快照查閱。</p>
+      <button class="btn ghost" id="exportAllData">下載目前資料快照（JSON）</button>
+      <div style="margin-top:10px;">
+        <label>或直接顯示備份文字，手動全選複製貼到記事本保存</label>
+        <button class="btn ghost" id="showBackupText">顯示備份文字</button>
+        <textarea id="backupTextArea" style="display:none; margin-top:8px; height:150px; font-family:monospace; font-size:11px;" readonly></textarea>
+      </div>
+    </div>
+  `;
+  document.getElementById('savePin').onclick = async ()=>{
+    const pin = document.getElementById('setPin').value.trim();
+    if(!pin){ alert('PIN碼不能空白'); return; }
+    try{ await updateAdminPin(pin); alert('已更新主控PIN碼。'); }
+    catch(err){ alert(err.message); }
+  };
+  document.getElementById('showBackupText').onclick = ()=>{
+    const ta = document.getElementById('backupTextArea');
+    ta.value = JSON.stringify(state.data);
+    ta.style.display = 'block';
+    ta.focus(); ta.select();
+    alert('已顯示備份文字並自動選取，請用手機的「複製」功能（長按選取範圍會出現複製選項）複製後貼到記事本或LINE保存。');
+  };
+  document.getElementById('exportAllData').onclick = ()=>{
+    const json = JSON.stringify(state.data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `碳金車隊系統備份_${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=> URL.revokeObjectURL(url), 3000);
+    alert('備份檔已下載，請妥善保存這個檔案。');
+  };
+}
+
+function renderExport(c){
+  c.innerHTML = `
+    <h2 class="section-title">資料匯出與封存</h2>
+    <p class="section-sub">設定區間，先預覽並可列印/另存PDF，確認備份後再執行刪除，釋放系統資料量。</p>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>資料類型</label>
+          <select id="exType"><option value="assignments">車趟／班表紀錄</option><option value="adjustments">薪資調整項</option></select>
+        </div>
+        <div class="field"><label>起始日期</label><input id="exStart" type="date"></div>
+        <div class="field"><label>結束日期</label><input id="exEnd" type="date"></div>
+      </div>
+      <button class="btn ghost" id="exPreview">預覽區間資料</button>
+    </div>
+    <div id="exResult"></div>
+  `;
+  function getMatched(){
+    const type = document.getElementById('exType').value;
+    const start = document.getElementById('exStart').value;
+    const end = document.getElementById('exEnd').value;
+    if(!start || !end) return {type, start, end, rows:[]};
+    if(type==='assignments'){
+      return {type, start, end, rows: state.data.assignments.filter(a=>a.date>=start && a.date<=end)};
+    } else {
+      return {type, start, end, rows: state.data.adjustments.filter(a=>a.month >= start.slice(0,7) && a.month <= end.slice(0,7))};
+    }
+  }
+  document.getElementById('exPreview').onclick = ()=>{
+    const {type, start, end, rows} = getMatched();
+    if(!start || !end){ alert('請選擇起訖日期'); return; }
+    document.getElementById('exResult').innerHTML = `
+      <div class="panel">
+        <h3 style="margin-top:0;">預覽：${start} ~ ${end}（共 ${rows.length} 筆）</h3>
+        <table>
+          ${type==='assignments' ? `
+            <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>車資</th><th>狀態</th></tr></thead>
+            <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(a.fare)}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+          ` : `
+            <thead><tr><th>月份</th><th>司機</th><th>類型</th><th>金額</th><th>備註</th></tr></thead>
+            <tbody>${rows.map(a=>`<tr><td>${a.month}</td><td>${driverName(a.driverId)}</td><td>${a.type==='advance'?'預支':a.type==='add'?'加錢':'減錢'}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+          `}
+        </table>
+        <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
+          <button class="btn ghost" id="exPrint">列印/另存PDF</button>
+          <button class="btn danger" id="exDelete" ${rows.length?'':'disabled'}>確認已匯出，刪除此區間資料</button>
+        </div>
+      </div>`;
+    document.getElementById('exPrint').onclick = ()=> exportPanelPrint(document.getElementById('exPrint').closest('.panel'), `資料匯出_${start}_${end}`);
+    const delBtn = document.getElementById('exDelete');
+    if(delBtn) delBtn.onclick = async ()=>{
+      if(!confirm('確定已完成PDF匯出／備份？此動作將永久刪除此區間資料，無法復原。')) return;
+      try{
+        const ids = rows.map(r=>r.id);
+        if(type==='assignments') await bulkDeleteAssignments(ids);
+        else await bulkDeleteAdjustments(ids);
+        document.getElementById('exResult').innerHTML = '<div class="note">已刪除該區間資料。</div>';
+      }catch(err){ alert(err.message); }
+    };
+  };
+}
+
+// ---------- 司機端：今日行程（預設畫面） ----------
+function renderToday(c){
+  const dId = state.activeDriverId;
+  const today = todayStr();
+  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.date===today && a.status!=='completed');
+  const weekDates = [...getWeekDates(0), ...getWeekDates(1)];
+  c.innerHTML = `
+    <h2 class="section-title">今日行程</h2>
+    <p class="section-sub">${driverName(dId)}，這是您今天的出車行程。</p>
+    <div class="note">目前為手動分享通知：點擊「分享至LINE」會開啟LINE讓您傳送提醒。系統自動於前一日推播需另外設定LINE官方帳號後台。</div>
+    <div id="todayDetail"></div>
+    <h3 style="margin-top:20px;">本週行程總覽</h3>
+    <div class="schedule-grid">
+      ${weekDates.map(d=>{
+        const items = state.data.assignments.filter(a=>a.driverId===dId && a.date===d);
+        return `<div class="day-card"><div class="day-label">${d.slice(5)}${d===today?'・今天':''}</div>
+          ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}"><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待出發</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+  renderTodayDetail(todays);
+}
+function renderTodayDetail(todays){
+  const box = document.getElementById('todayDetail');
+  if(!todays.length){ box.innerHTML = '<div class="empty">今天沒有排定行程</div>'; return; }
+  box.innerHTML = todays.map(a=>{
+    const allDone = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed');
+    return `<div class="panel">
+      <div class="toolbar">
+        <strong>${routeName(a.routeId)}</strong>
+        <span>
+          ${a.status==='scheduled'?'<span class="badge pending">尚未開始</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':''}
+          <a class="btn ghost" href="${lineShareLink(`【出車提醒】${a.date} ${routeName(a.routeId)}\n出發點：${a.origin||'—'}\n下貨點：${a.dropPoints.map(dp=>dp.address).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
+        </span>
+      </div>
+      <p style="font-size:12.5px;">出發點：${a.origin||'—'} <a class="link" href="${mapLink(a.origin||'')}" target="_blank">${a.origin?'開啟導航':''}</a></p>
+      ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
+        ${a.dropPoints.map(dp=>`
+          <div class="drop-point">
+            ${dp.address}（${channelName(dp.channelId)}）
+            ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
+            <br><a class="link" href="${mapLink(dp.address)}" target="_blank">開啟Google導航</a>
+            ${dp.status!=='completed' ? `<label style="margin-top:6px;">拍照回報並標記完成<input type="file" accept="image/*" data-photo="${a.id}|${dp.id}"></label>` : (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'')}
+          </div>`).join('')}
+        <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
+        ${!allDone?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有下貨點未完成拍照，結束時需填寫備註說明原因</p>':''}
+      `}
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-start]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{ await markAssignmentDeparted(btn.dataset.start); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  box.querySelectorAll('[data-finish]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const a = state.data.assignments.find(x=>x.id===btn.dataset.finish);
+      const allDone = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed');
+      let issueNote;
+      if(!allDone){
+        const note = prompt('尚有下貨點未完成拍照回報，請說明原因（此備註主控端會看到）：');
+        if(note===null) return;
+        if(!note.trim()){ alert('請填寫備註原因'); return; }
+        issueNote = note.trim();
+      }
+      try{ await markAssignmentComplete(a.id, issueNote); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  box.querySelectorAll('[data-photo]').forEach(input=>{
+    input.onchange = (e)=>{
+      const [aid, dpid] = input.dataset.photo.split('|');
+      const file = e.target.files[0]; if(!file) return;
+      compressImageFile(file).then(async (dataUrl)=>{
+        await uploadDropPointPhoto(aid, dpid, dataUrl);
+        renderContent();
+      }).catch(err=>{
+        console.error('照片處理失敗', err);
+        alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
+      });
+    };
+  });
+}
+
+// ---------- 司機端：歷史班表 ----------
+function renderHistory(c){
+  const dId = state.activeDriverId;
+  const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed').sort((a,b)=>b.date.localeCompare(a.date));
+  c.innerHTML = `
+    <h2 class="section-title">歷史班表</h2>
+    <p class="section-sub">已完成並封存的行程紀錄，不可再編輯。</p>
+    ${list.map(a=>`
+      <div class="panel">
+        <div class="toolbar"><strong>${a.date} · ${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
+        <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
+        ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${a.issueNote}</div>` : ''}
+        ${a.dropPoints.map(dp=>`<div class="drop-point">${dp.address}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`).join('')}
+      </div>
+    `).join('') || '<div class="empty">尚無已完成的歷史行程</div>'}
+  `;
+}
+function renderMyEarnings(c){
+  const dId = state.activeDriverId;
+  const monthStr = todayStr().slice(0,7);
+  const r = driverMonthly(dId, monthStr);
+  c.innerHTML = `
+    <h2 class="section-title">我的報酬（本月即時）</h2>
+    <div class="panel">
+      <table>
+        <tr><td>已完成車趟數</td><td class="amount">${r.trips.length}</td></tr>
+        <tr><td>車趟報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
+        <tr><td>本月調整項</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
+        <tr><td><strong>目前預估淨額</strong></td><td class="amount"><strong>$${money(r.net)}</strong></td></tr>
+      </table>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">已完成任務</h3>
+      <table>
+        <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
+        <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(a.fare)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月尚無已完成車趟</div></td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+// ---------- 司機端：我的資料 ----------
+function renderMyProfile(c){
+  const dId = state.activeDriverId;
+  const d = state.data.drivers.find(x=>x.id===dId);
+  c.innerHTML = `
+    <h2 class="section-title">我的資料</h2>
+    <p class="section-sub">修改後主控端會收到通知。姓名與狀態如需變更請聯絡主控。</p>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>電話</label><input id="mpPhone" value="${d.phone||''}"></div>
+        <div class="field"><label>車牌</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
+        <div class="field"><label>車型</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>銀行</label><input id="mpBankName" value="${d.bank.bankName||''}"></div>
+        <div class="field"><label>分行</label><input id="mpBranch" value="${d.bank.branch||''}"></div>
+        <div class="field"><label>帳號</label><input id="mpAccount" value="${d.bank.account||''}"></div>
+        <div class="field"><label>戶名</label><input id="mpHolder" value="${d.bank.holder||''}"></div>
+      </div>
+      <button class="btn amber" id="mpSave">儲存修改</button>
+    </div>
+  `;
+  document.getElementById('mpSave').onclick = async ()=>{
+    const changes = [];
+    const checks = [
+      ['phone', d.phone, document.getElementById('mpPhone').value.trim(), '電話'],
+      ['vehicle.plate', d.vehicle.plate, document.getElementById('mpPlate').value.trim(), '車牌'],
+      ['vehicle.type', d.vehicle.type, document.getElementById('mpVType').value.trim(), '車型'],
+      ['bank.bankName', d.bank.bankName, document.getElementById('mpBankName').value.trim(), '銀行'],
+      ['bank.branch', d.bank.branch, document.getElementById('mpBranch').value.trim(), '分行'],
+      ['bank.account', d.bank.account, document.getElementById('mpAccount').value.trim(), '帳號'],
+      ['bank.holder', d.bank.holder, document.getElementById('mpHolder').value.trim(), '戶名']
+    ];
+    checks.forEach(([field, oldVal, newVal, label])=>{ if((oldVal||'')!==newVal) changes.push(label); });
+    if(!changes.length){ alert('沒有變更任何欄位'); return; }
+    try{
+      await updateDriverProfile(dId, {
+        phone: document.getElementById('mpPhone').value.trim(),
+        plate: document.getElementById('mpPlate').value.trim(),
+        vtype: document.getElementById('mpVType').value.trim(),
+        bankName: document.getElementById('mpBankName').value.trim(),
+        branch: document.getElementById('mpBranch').value.trim(),
+        account: document.getElementById('mpAccount').value.trim(),
+        holder: document.getElementById('mpHolder').value.trim()
+      }, changes.join('、'));
+      alert('已儲存，主控端會收到通知。');
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+}
+
+function renderMyStatement(c){
+  const dId = state.activeDriverId;
+  const now = new Date(); let prevY=now.getFullYear(), prevM=now.getMonth();
+  if(prevM===0){ prevM=12; prevY--; }
+  const defaultMonth = `${prevY}-${pad(prevM)}`;
+  const monthStr = state._myStatementMonth || defaultMonth;
+  c.innerHTML = `
+    <h2 class="section-title">對帳單 / 勞報單</h2>
+    <div class="panel"><div class="field" style="max-width:200px;"><label>月份</label><input id="smMonth" type="month" value="${monthStr}"></div></div>
+    <div id="statementBox"></div>`;
+  function refresh(){
+    const m = document.getElementById('smMonth').value;
+    state._myStatementMonth = m;
+    const record = state.data.statements.find(s=>s.driverId===dId && s.month===m);
+    const box = document.getElementById('statementBox');
+
+    if(!record){
+      box.innerHTML = `<div class="panel"><div class="empty">${m} 尚未由主控端完成月結確認，結算完成後才能在這裡看到並回簽勞報單。</div></div>`;
+      return;
+    }
+    if(record.status==='awaiting_signature'){
+      box.innerHTML = `
+        <div class="panel">
+          <h3 style="margin-top:0;">${driverName(dId)} — ${m} 勞報單 <span class="badge progress">待回簽</span></h3>
+          <table>
+            <tr><td>車趟報酬合計</td><td class="amount">$${money(record.tripTotal)}</td></tr>
+            <tr><td>調整項合計</td><td class="amount">${record.adjTotal>=0?'+':''}$${money(record.adjTotal)}</td></tr>
+            <tr><td><strong>應付淨額</strong></td><td class="amount"><strong>$${money(record.net)}</strong></td></tr>
+          </table>
+          <label>請在下方簽名確認</label>
+          <canvas id="sigPad" width="500" height="180" style="border:1px solid var(--border); border-radius:var(--radius); width:100%; max-width:500px; touch-action:none; background:#fff;"></canvas>
+          <div class="no-print" style="margin-top:8px; display:flex; gap:8px;">
+            <button class="btn ghost" id="sigClear">清除重簽</button>
+            <button class="btn amber" id="sigConfirm">簽名並完成回簽</button>
+          </div>
+        </div>`;
+      const canvas = document.getElementById('sigPad');
+      const ctx = canvas.getContext('2d');
+      ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.strokeStyle = '#1B2129';
+      let drawing = false, hasSignature = false;
+      function pos(e){ const rect = canvas.getBoundingClientRect(); const scaleX = canvas.width/rect.width; const scaleY = canvas.height/rect.height; return { x:(e.clientX-rect.left)*scaleX, y:(e.clientY-rect.top)*scaleY }; }
+      canvas.addEventListener('pointerdown', e=>{ drawing=true; hasSignature=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); });
+      canvas.addEventListener('pointermove', e=>{ if(!drawing) return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); });
+      window.addEventListener('pointerup', ()=>{ drawing=false; });
+      document.getElementById('sigClear').onclick = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); hasSignature=false; };
+      document.getElementById('sigConfirm').onclick = async ()=>{
+        if(!hasSignature){ alert('請先簽名再送出'); return; }
+        try{ await signStatement(record.id, canvas.toDataURL('image/png')); refresh(); }
+        catch(err){ alert(err.message); }
+      };
+    } else if(record.status==='signed'){
+      box.innerHTML = `
+        <div class="panel">
+          <h3 style="margin-top:0;">${driverName(dId)} — ${m} 勞報單 <span class="badge signed">已回簽</span></h3>
+          <div class="note">此為回簽當下凍結的金額，之後不會再變動。</div>
+          <table>
+            <tr><td>車趟報酬合計</td><td class="amount">$${money(record.tripTotal)}</td></tr>
+            <tr><td>調整項合計</td><td class="amount">${record.adjTotal>=0?'+':''}$${money(record.adjTotal)}</td></tr>
+            <tr><td><strong>應付淨額</strong></td><td class="amount"><strong>$${money(record.net)}</strong></td></tr>
+          </table>
+          ${record.signatureDataUrl?`<label>您的簽名</label><br><img src="${record.signatureDataUrl}" style="max-width:280px; border:1px solid var(--border); border-radius:var(--radius);">`:''}
+          <div class="no-print" style="margin-top:10px;">
+            <button class="btn ghost" id="printMy">列印/另存PDF</button>
+          </div>
+        </div>`;
+      document.getElementById('printMy').onclick = ()=> exportPanelPrint(document.getElementById('printMy').closest('.panel'), `${driverName(dId)}_${m}_對帳單`);
+    }
+  }
+  document.getElementById('smMonth').onchange = refresh;
+  refresh();
+}
+
+// ---------- 登入與身份識別 ----------
+// 原本的 loadSession/saveSession/clearSession（只記「我剛剛通過代碼檢查」，
+// 沒有真正的驗證）與 renderLoginGate（直接比對 state.data 裡的明文PIN/代碼）
+// 已經整個由 js/auth.js 取代：改成呼叫 Vercel Serverless Function 驗證、拿到簽過名的
+// JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
+function updateTitle(){
+  const inDriverView = state.adminViewDriver || state.role==='driver';
+  document.getElementById('appTitle').textContent = inDriverView ? '碳金車隊' : '碳金車隊調度系統';
+}
+function updateHeaderBar(){
+  const who = document.getElementById('whoAmI');
+  const btn = document.getElementById('logoutBtn');
+  btn.style.display = 'inline-block';
+  if(state.adminViewDriver){
+    who.textContent = `主控檢視中：${driverName(state.adminViewDriver)}`;
+    btn.textContent = '返回主控';
+  } else if(state.role==='admin'){
+    who.textContent = '主控帳號';
+    btn.textContent = '登出／切換身份';
+  } else {
+    who.textContent = `司機：${driverName(state.activeDriverId)}`;
+    btn.textContent = '登出／切換身份';
+  }
+}
+function viewAsDriver(driverId){
+  state.adminViewDriver = driverId;
+  state.activeDriverId = driverId;
+  state.tab = 'home';
+  updateHeaderBar(); renderNav(); renderContent();
+}
+function showApp(){
+  document.getElementById('loginGate').style.display = 'none';
+  document.getElementById('appLayout').style.display = 'flex';
+  updateHeaderBar();
+  updateTitle(); renderNav(); renderContent();
+}
+// renderLoginGate() 的正式版實作在 js/auth.js（呼叫 /api/auth-driver、/api/auth-admin，
+// 不再直接比對 state.data 裡的明文PIN/代碼；此時 state.data 根本還沒載入）。
+document.getElementById('logoutBtn').onclick = ()=>{
+  if(state.adminViewDriver){
+    state.adminViewDriver = null; state.activeDriverId = null; state.tab = 'home';
+    updateHeaderBar(); updateTitle(); renderNav(); renderContent();
+    return;
+  }
+  clearAuth(); state.role=null; state.activeDriverId=null; state.tab=null;
+  renderLoginGate();
+};
+
+// cleanupOldPhotos()（每次開系統時把超過30天的照片從記憶體裡清掉）已經沒有對應實作。
+// 正式版的照片存在 Supabase Storage，「清除30天前照片」需要一支獨立的排程工作
+// （例如 Supabase pg_cron + Edge Function，定期找出 assignment_drop_points 裡
+// completed_at 超過30天且 photo_cleared=false 的資料列，刪除 Storage 物件後
+// 把 photo_url 設回 null、photo_cleared 設成 true）。這個排程job還沒有建立，
+// 是目前已知、故意先擱置的缺口，上線前請評估是否要先做這個，或先接受
+// 舊照片會持續留在 Storage 裡（多花一點儲存空間，但不影響功能正確性）。
+
+async function bootApp(){
+  const auth = getStoredAuth();
+  if(!auth){ renderLoginGate(); return; }
+  state.role = auth.role;
+  if(auth.role==='driver') state.activeDriverId = auth.driver.id;
+  try{
+    state.data = await loadAllData();
+  }catch(e){
+    alert('讀取資料失敗，請重新登入：' + e.message);
+    clearAuth(); renderLoginGate();
+    return;
+  }
+  if(auth.role==='driver'){
+    const stillActive = state.data.drivers.some(d=>d.id===auth.driver.id && d.status==='active');
+    if(!stillActive){ clearAuth(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
+  }
+  showApp();
+}
+
+(async function init(){
+  await bootApp();
+})();
+</script>
+</body>
+</html>

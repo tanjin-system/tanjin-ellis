@@ -1,0 +1,10 @@
+{
+  "name": "fleet-dispatch-system",
+  "private": true,
+  "version": "1.0.0",
+  "description": "碳金車隊調度系統 — Vercel Serverless Functions (/api) 依賴宣告（前端本身不需要建置步驟）",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
