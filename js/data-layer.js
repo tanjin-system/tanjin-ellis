@@ -80,6 +80,7 @@ function mapAssignment(row) {
       id: p.id,
       sourceDpId: p.source_drop_point_id,
       address: p.address,
+      code: p.code || '',
       channelId: p.channel_id,
       status: p.status,
       photoPath: p.photo_url,
@@ -87,6 +88,13 @@ function mapAssignment(row) {
       photoCleared: p.photo_cleared
     }))
   };
+}
+
+// 下貨點顯示用文字：有代號時代號在前、地址在後（例："萬家福桂林店 臺北市萬華區仁德里桂林路1號"），
+// 沒代號就只顯示地址。司機端行程畫面、即時通知訊息都共用這個格式。
+function dpLabel(dp) {
+  if (!dp) return '';
+  return dp.code ? `${dp.code} ${dp.address}` : dp.address;
 }
 
 function mapAdjustment(row) {
@@ -164,7 +172,10 @@ async function loadAllData() {
     assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*)').order('trip_date'),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
-    notificationsRes: supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200)
+    // 同樣的道理：schema.sql 只 grant app_driver 對 notifications 的 insert 權限
+    // （司機端沒有通知頁，出發/完成時只需要新增一筆，不需要讀取），所以司機身份
+    // 查這個表一定 permission denied，只有 admin 才查。
+    ...(isAdmin ? { notificationsRes: supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200) } : {})
   };
   const keys = Object.keys(queries);
   const results = await Promise.all(Object.values(queries));
@@ -184,7 +195,7 @@ async function loadAllData() {
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
     statements: (byKey.statementsRes.data || []).map(mapStatement),
-    notifications: (byKey.notificationsRes.data || []).map(mapNotification)
+    notifications: (byKey.notificationsRes?.data || []).map(mapNotification)
   };
 
   await resolvePhotoUrls(data.assignments);
@@ -370,6 +381,11 @@ async function deleteOrDeactivateOrigin(originId) {
 async function createDropPoint(input) {
   const dup = state.data.dropPoints.find(dp => dp.status !== 'inactive' && dp.address.trim().toLowerCase() === input.address.trim().toLowerCase());
   if (dup) throw new Error(`地址重複，已存在相同的下貨點：「${dup.address}」（${channelName(dup.channelId)}），已取消新增。`);
+  const code = (input.code || '').trim();
+  if (code) {
+    const dupCode = state.data.dropPoints.find(dp => dp.status !== 'inactive' && dp.channelId === input.channelId && (dp.code || '').trim().toLowerCase() === code.toLowerCase());
+    if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的下貨點：「${dupCode.address}」，已取消新增。`);
+  }
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drop_points').insert({
     address: input.address, channel_id: input.channelId, code: input.code || null, status: 'active'
@@ -383,6 +399,11 @@ async function createDropPoint(input) {
 async function updateDropPoint(dpId, input) {
   const dup = state.data.dropPoints.find(x => x.id !== dpId && x.status !== 'inactive' && x.address.trim().toLowerCase() === input.address.trim().toLowerCase());
   if (dup) throw new Error(`地址重複，已存在相同的下貨點：「${dup.address}」（${channelName(dup.channelId)}），已取消儲存。`);
+  const code = (input.code || '').trim();
+  if (code) {
+    const dupCode = state.data.dropPoints.find(x => x.id !== dpId && x.status !== 'inactive' && x.channelId === input.channelId && (x.code || '').trim().toLowerCase() === code.toLowerCase());
+    if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的下貨點：「${dupCode.address}」，已取消儲存。`);
+  }
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drop_points').update({
     address: input.address, channel_id: input.channelId, code: input.code || null
@@ -490,7 +511,7 @@ async function createAssignment(input) {
   if (dropPointIds.length) {
     const rows = dropPointIds.map((dpId, i) => {
       const dp = state.data.dropPoints.find(x => x.id === dpId);
-      return { assignment_id: assignRow.id, source_drop_point_id: dpId, address: dp?.address || '', channel_id: dp?.channelId || null, sequence_no: i + 1 };
+      return { assignment_id: assignRow.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
     });
     const { error: pointsErr } = await supabase.from('assignment_drop_points').insert(rows);
     if (pointsErr) throw new Error('建立車趟下貨點失敗：' + pointsErr.message);
@@ -551,7 +572,9 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const assignment = state.data.assignments.find(a => a.id === assignmentId);
   const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; }
-  await createNotification('photo', `${driverName(assignment?.driverId)} 於「${dp?.address || ''}」完成拍照回報`);
+  // 通知訊息只顯示代號本身（有代號就不再附完整地址，維持通知列表簡潔），
+  // 沒設代號的下貨點才退回顯示地址；跟司機行程頁「代號+地址都顯示」的 dpLabel() 不一樣。
+  await createNotification('photo', `${driverName(assignment?.driverId)} 於「${dp?.code || dp?.address || ''}」完成拍照回報`);
 }
 
 async function bulkDeleteAssignments(ids) {

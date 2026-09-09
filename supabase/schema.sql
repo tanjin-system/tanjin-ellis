@@ -77,7 +77,10 @@ create table drop_points (
   channel_id uuid not null references channels(id),
   code text,
   status text not null default 'active' check (status in ('active','inactive')),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- 同一通路下代號不可重複（代號是給司機/通知辨識用的簡短標籤，重複會讓人分不清是哪一站）。
+  -- 前端 createDropPoint()/updateDropPoint() 已經有更友善的重複檢查，這裡是資料庫層的最後防線。
+  constraint drop_points_code_channel_unique unique (channel_id, code)
 );
 create index idx_drop_points_channel on drop_points(channel_id);
 
@@ -149,6 +152,7 @@ create table assignment_drop_points (
   assignment_id uuid not null references assignments(id) on delete cascade,
   source_drop_point_id uuid references drop_points(id),
   address text not null,
+  code text,
   channel_id uuid references channels(id),
   sequence_no int not null,
   status text not null default 'pending' check (status in ('pending','completed')),

@@ -218,6 +218,7 @@ async function main() {
     for (const dp of (a.dropPoints || [])) {
       const channelId = mapping.channels[dp.channelId];
       const sourceDpId = mapping.dropPoints[dp.sourceDpId] || null;
+      const sourceDpRaw = raw.dropPoints.find(x => x.id === dp.sourceDpId);
       let photoPath = null;
       if (dp.photo) {
         photoPath = await uploadPhoto(dp.photo, `${assignRow.id}/${dp.id}.jpg`);
@@ -227,6 +228,7 @@ async function main() {
         assignment_id: assignRow.id,
         source_drop_point_id: sourceDpId,
         address: dp.address,
+        code: orNull(sourceDpRaw?.code),
         channel_id: channelId,
         sequence_no: seq++,
         status: dp.status || 'pending',
