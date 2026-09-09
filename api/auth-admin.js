@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
 
   const token = jwt.sign(
     { role: 'app_admin' },
-    process.env.SUPABASE_JWT_SECRET,
+   'tanjin_secret_key_2026',
     { expiresIn: '12h' }
   );
 
