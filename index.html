@@ -258,12 +258,33 @@ function defaultPeriod(channel, monthStr){
   }
   return { start:`${y}-${pad(m)}-01`, end: ymd(new Date(y,m,0)) };
 }
+// 同一個出發點／車次／班次如果因為停靠站不同拆成好幾條路線（例如「第八車
+// （週二到週五）」是給司機跑的實際版本，「第八車(星期一)」是對客戶報價的
+// 版本），這裡把它們視為同一家族：找出家族裡標「星期一／週一」的那條路線。
+function findRouteFamily(route){
+  const baseSeq = stripWeekdayLabel(route.seq);
+  return state.data.routes.filter(r=> r.originAddr===route.originAddr && r.shift===route.shift && stripWeekdayLabel(r.seq)===baseSeq);
+}
+function findMondayQuoteRoute(route){
+  return findRouteFamily(route).find(r=> /星期一|週一/.test(r.seq)) || null;
+}
+// 對客戶的請款金額：如果這趟車的路線有一個「星期一」報價版本，不管實際是哪一天、
+// 用哪個版本跑的，請款一律套用星期一版本「當天生效」的拆賬金額（司機薪資
+// 不受影響，司機費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
 function channelBillingTotal(channelId, start, end){
   let total=0; const contributing=[];
   state.data.assignments.forEach(a=>{
     if(a.status==='completed' && a.date>=start && a.date<=end){
-      const b = a.billingSnapshot || tripBilling(a.dropPoints, a.distanceKm);
-      if(b.byChannel[channelId]){ total+=b.byChannel[channelId]; contributing.push({a, amount:b.byChannel[channelId]}); }
+      let byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
+      const route = state.data.routes.find(r=>r.id===a.routeId);
+      if(route){
+        const mondayRoute = findMondayQuoteRoute(route);
+        if(mondayRoute && mondayRoute.id!==route.id){
+          const mv = getActiveVersion(mondayRoute, a.date) || [...(mondayRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
+          if(mv && mv.billingByChannel && Object.keys(mv.billingByChannel).length) byChannel = mv.billingByChannel;
+        }
+      }
+      if(byChannel[channelId]){ total+=byChannel[channelId]; contributing.push({a, amount:byChannel[channelId]}); }
     }
   });
   return {total, contributing};
