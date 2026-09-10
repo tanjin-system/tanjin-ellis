@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>碳金車隊調度系統</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
   :root{
@@ -156,31 +157,32 @@ function compressImageFile(file, maxDim=1000, quality=0.6){
     reader.readAsDataURL(file);
   });
 }
+// 直接產生真正的PDF檔案下載（不再是HTML檔案要求使用者自己用瀏覽器列印另存），
+// 用 html2pdf.js（內部是 html2canvas 把畫面截成圖＋jsPDF 排版成PDF）。
 function exportPrintable(title, bodyHtml){
-  const html = `<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8"><title>${title}</title>
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+  wrap.innerHTML = `
     <style>
-      body{ font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; padding:24px; color:#1B2129; }
       table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
       th,td{ padding:7px 9px; border:1px solid #999; text-align:left; }
       h1,h3{ margin:0 0 10px; }
       .amount{ font-family:monospace; font-weight:700; }
-      @media print{ body{ padding:0; } }
-    </style></head><body>
-      <h1>${title}</h1>
-      ${bodyHtml}
-      <p style="margin-top:24px; color:#888; font-size:12px;">開啟這個檔案後，用瀏覽器的「分享」或「列印」功能，選擇「儲存為PDF」。</p>
-      <script>window.onload = function(){ try{ window.print(); }catch(e){} };<\/script>
-    </body></html>`;
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = title.replace(/[\\/:*?"<>|]/g,'_') + '.html';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(()=> URL.revokeObjectURL(url), 3000);
-  alert('檔案已下載。請到手機/電腦的「檔案」或「下載項目」裡打開它，再用分享/列印功能另存為PDF。');
+    </style>
+    <h1>${title}</h1>
+    ${bodyHtml}
+  `;
+  document.body.appendChild(wrap);
+  const filename = title.replace(/[\\/:*?"<>|]/g,'_') + '.pdf';
+  html2pdf().set({
+    margin: 10,
+    filename,
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
+  }).from(wrap).save().then(()=>{ document.body.removeChild(wrap); }).catch(err=>{
+    document.body.removeChild(wrap);
+    alert('產生PDF失敗：' + err.message);
+  });
 }
 function exportPanelPrint(panelEl, title){
   if(!panelEl){ alert('找不到可列印的內容'); return; }
@@ -189,6 +191,12 @@ function exportPanelPrint(panelEl, title){
   exportPrintable(title, clone.innerHTML);
 }
 
+// 請款單上不需要標註星期幾（例如同一車次因為停靠站不同分成「星期一」跟
+// 「週二到週五」兩條路線，對客戶來說都叫同一個車次名稱）。這裡只是把
+// 路線名稱最後面的「（...）」拿掉做顯示用，不影響實際金額計算。
+function stripWeekdayLabel(name){
+  return (name||'').replace(/[（(][^）)]*[）)]/g, '').replace(/\s+/g, ' ').trim();
+}
 function getActiveVersion(route, dateStr){
   return (route.versions||[]).find(v=> dateStr>=v.start && (!v.end || dateStr<=v.end));
 }
@@ -295,7 +303,6 @@ function getWeekDates(offset){
 const ADMIN_TABS = [
   {id:'home', label:'首頁'},
   {id:'notifications', label:'即時通知'},
-  {id:'overview', label:'班表總覽'},
   {id:'schedule', label:'週班表'},
   {id:'drivers', label:'司機資料'},
   {id:'channels', label:'通路管理'},
@@ -328,7 +335,7 @@ function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
   if(!inDriverView){
-    ({home:renderHomeAdmin, notifications:renderNotifications, overview:renderOverview, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+    ({home:renderHomeAdmin, notifications:renderNotifications, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
@@ -362,7 +369,6 @@ function renderNotifications(c){
 function renderHomeAdmin(c){
   const tiles = [
     {id:'notifications', label:'即時通知', sub:'各車出發/拍照/完成動態'},
-    {id:'overview', label:'班表總覽', sub:'大字體純檢視'},
     {id:'schedule', label:'週班表', sub:'指派司機與路線'},
     {id:'drivers', label:'司機資料', sub:'含車輛與銀行資訊'},
     {id:'channels', label:'通路管理', sub:'請款週期設定'},
@@ -555,6 +561,9 @@ function renderChannels(c){
         <div class="field"><label>每下貨點（元）</label><input id="chRatePoint" type="number" value="50"></div>
         <div class="field"><label>整趟固定金額（元）</label><input id="chFlat" type="number" placeholder="選「整趟固定金額」時填寫"></div>
       </div>
+      <div class="field" style="max-width:160px;"><label>請款金額</label>
+        <select id="chTax"><option value="1">含稅</option><option value="0">未稅</option></select>
+      </div>
       <button class="btn amber" id="addChannel">新增通路</button>
     </div>
     <div id="channelList"></div>
@@ -571,7 +580,8 @@ function renderChannels(c){
         formulaType: document.getElementById('chFormula').value,
         rateKm: Number(document.getElementById('chRateKm').value)||0,
         ratePoint: Number(document.getElementById('chRatePoint').value)||0,
-        flatAmount: Number(document.getElementById('chFlat').value)||0
+        flatAmount: Number(document.getElementById('chFlat').value)||0,
+        taxInclusive: document.getElementById('chTax').value==='1'
       });
       renderContent();
     }catch(err){ alert(err.message); }
@@ -604,11 +614,14 @@ function renderChannelList(){
                   <div class="field"><label>每下貨點（元）</label><input id="ecRatePoint" type="number" value="${ch.ratePoint}"></div>
                   <div class="field"><label>整趟固定金額（元）</label><input id="ecFlat" type="number" value="${ch.flatAmount}"></div>
                 </div>
+                <div class="field" style="max-width:160px;"><label>請款金額</label>
+                  <select id="ecTax"><option value="1" ${ch.taxInclusive?'selected':''}>含稅</option><option value="0" ${!ch.taxInclusive?'selected':''}>未稅</option></select>
+                </div>
                 <button class="btn amber" data-savech="${ch.id}">儲存</button>
                 <button class="btn ghost" data-cancelch="${ch.id}">取消</button>
               </td></tr>`;
             }
-            const formulaText = ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`;
+            const formulaText = (ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`) + `・${ch.taxInclusive?'含稅':'未稅'}`;
             return `<tr>
               <td>${ch.name}</td>
               <td>${formulaText}</td>
@@ -636,7 +649,8 @@ function renderChannelList(){
           formulaType: document.getElementById('ecFormula').value,
           rateKm: Number(document.getElementById('ecRateKm').value)||0,
           ratePoint: Number(document.getElementById('ecRatePoint').value)||0,
-          flatAmount: Number(document.getElementById('ecFlat').value)||0
+          flatAmount: Number(document.getElementById('ecFlat').value)||0,
+          taxInclusive: document.getElementById('ecTax').value==='1'
         });
         editingChannelId = null;
         renderContent();
@@ -861,7 +875,10 @@ let routeListSearch = '';
 function ensureDraft(route){
   if(!routeDraft[route.id]){
     const open = (route.versions||[]).find(v=>!v.end);
-    routeDraft[route.id] = { order: open ? [...open.dropPointIds] : [], dpSearch: '' };
+    routeDraft[route.id] = {
+      order: open ? [...open.dropPointIds] : [], dpSearch: '',
+      distanceKm: open?.distanceKm ?? '', driverFare: open?.driverFare ?? '', billingTotal: open?.billingTotal ?? ''
+    };
   }
   return routeDraft[route.id];
 }
@@ -899,15 +916,11 @@ function renderRouteTable(){
         <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th></th></tr></thead>
         <tbody>
           ${filtered.map(r=>{
-            // 路線本身不記錄費用（費用是每趟排班時填的），這裡取這條路線「最近一趟車」
-            // 的司機費用／請款金額當代表值，方便管理時快速比對，不代表每趟都完全一樣。
-            const latest = state.data.assignments.filter(a=>a.routeId===r.id).sort((a,b)=>b.date.localeCompare(a.date))[0];
-            let fareText = '尚無排班紀錄', billingText = '尚無排班紀錄';
-            if(latest){
-              fareText = `$${money(latest.fare)}（${latest.date}）`;
-              const billing = latest.billingSnapshot || (latest.dropPoints.length ? tripBilling(latest.dropPoints, latest.distanceKm) : null);
-              billingText = billing ? `$${money(billing.totalAmount)}${latest.status!=='completed'?'（預估）':''}` : '—';
-            }
+            // 司機費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
+            // （見路線管理下方的版本設定），不再是每趟臨時填的。
+            const openVersion = (r.versions||[]).find(v=>!v.end);
+            const fareText = openVersion && openVersion.driverFare != null ? `$${money(openVersion.driverFare)}` : '尚未設定';
+            const billingText = openVersion && openVersion.billingTotal != null ? `$${money(openVersion.billingTotal)}` : '尚未設定';
             return `<tr>
               <td>${r.name}</td>
               <td class="amount">${fareText}</td>
@@ -939,7 +952,8 @@ function renderRouteDetail(rid){
   const renderVer = v => `
       <div class="version-block ${!v.end?'open':''}">
         <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
-        <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'}</div>
+        <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km ・ 司機費用 $${money(v.driverFare||0)} ・ 請款總額 $${money(v.billingTotal||0)}</div>
+        ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
       </div>`;
   const draft = ensureDraft(r);
@@ -972,6 +986,13 @@ function renderRouteDetail(rid){
           </div>`;
         }).join('') || '<div class="empty">尚未加入任何下貨點</div>'}
       </div>
+      <h4 style="margin:14px 0 4px;">費用資料（人工輸入，跟著這個版本走）</h4>
+      <div class="grid3">
+        <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
+        <div class="field"><label>司機費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
+        <div class="field"><label>請款總額（元）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
+      </div>
+      <p class="note" id="rvSplitPreview" style="margin:4px 0 10px;"></p>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
   `;
@@ -1036,6 +1057,24 @@ function renderRouteDetail(rid){
       renderRouteDetail(rid2);
     };
   });
+  function refreshSplitPreview(){
+    const previewEl = document.getElementById('rvSplitPreview');
+    if(!previewEl) return;
+    const billingTotal = document.getElementById('rvBilling').value;
+    if(billingTotal === '' || !draft.order.length){ previewEl.textContent = ''; return; }
+    const split = computeChannelSplitByStoreCount(draft.order, billingTotal);
+    previewEl.textContent = '拆賬預覽：' + Object.entries(split).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、');
+  }
+  ['rvDistance','rvFare','rvBilling'].forEach(id=>{
+    const el = document.getElementById(id);
+    el.oninput = ()=>{
+      draft.distanceKm = document.getElementById('rvDistance').value;
+      draft.driverFare = document.getElementById('rvFare').value;
+      draft.billingTotal = document.getElementById('rvBilling').value;
+      refreshSplitPreview();
+    };
+  });
+  refreshSplitPreview();
   detailEl.querySelectorAll('[data-savever]').forEach(btn=>{
     btn.onclick = async ()=>{
       const rid2 = btn.dataset.savever;
@@ -1043,7 +1082,11 @@ function renderRouteDetail(rid){
       const ids = routeDraft[rid2].order;
       if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個下貨點'); return; }
       try{
-        await saveRouteVersion(rid2, effDate, ids);
+        await saveRouteVersion(rid2, effDate, ids, {
+          distanceKm: document.getElementById('rvDistance').value,
+          driverFare: document.getElementById('rvFare').value,
+          billingTotal: document.getElementById('rvBilling').value
+        });
         delete routeDraft[rid2];
         renderContent();
       }catch(err){ alert(err.message); }
@@ -1053,15 +1096,27 @@ function renderRouteDetail(rid){
 
 // ---------- 週班表（直接指派司機＋出發點，這裡才產生實際車趟） ----------
 const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
+// 車次排序用：從「第X車...」抓出中文數字X換算成阿拉伯數字，抓不到的排到最後面
+// （維持原本相對順序，不會亂跳）。支援到「第十九車」，車隊規模通常用不到更多。
+function seqSortKey(seq){
+  const m = /^第([一二三四五六七八九十]+)車/.exec((seq||'').trim());
+  if(!m) return 9999;
+  const digit = { 一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9 };
+  const s = m[1];
+  if(s === '十') return 10;
+  if(s.length === 1) return digit[s] || 9999;
+  if(s[0] === '十') return 10 + (digit[s[1]] || 0);
+  if(s[1] === '十') return (digit[s[0]] || 0) * 10 + (s[2] ? (digit[s[2]] || 0) : 0);
+  return 9999;
+}
 function renderScheduleAdmin(c){
   const week1 = getWeekDates(state.weekOffset);
-  const week2 = getWeekDates(state.weekOffset+1);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
   const routeOpts = state.data.routes.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
   const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">週班表</h2>
-    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派司機、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。建議每週末確認並編輯下週班表。</p>
+    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派司機、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。司機費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週班表。</p>
     <div class="panel no-print">
       <p style="font-size:12.5px; font-weight:600; margin:0 0 8px;">批次建立（例如整週一~五都跑同一路線）</p>
       <div class="grid4">
@@ -1076,29 +1131,27 @@ function renderScheduleAdmin(c){
           ${WEEKDAY_ZH.map((l,i)=>`<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="wdcheck" value="${i}" checked style="width:auto;">${l}</label>`).join('')}
         </div>
       </div>
-      <div class="grid2">
-        <div class="field"><label>司機車資／每趟（元）</label><input id="sFare" type="number"></div>
-        <div class="field"><label>整趟總里程／每趟（km）</label><input id="sDistance" type="number"></div>
-      </div>
       <button class="btn amber" id="addAssign">批次建立指派</button>
     </div>
     <div class="toolbar no-print">
       <div class="week-nav">
         <button class="btn ghost" id="prevWeek">← 往前一週</button>
-        <span class="mono">${week1[0]} ~ ${week2[6]}（本週＋下週）</span>
+        <span class="mono">${week1[0]} ~ ${week1[6]}</span>
         <button class="btn ghost" id="nextWeek">往後一週 →</button>
       </div>
-      <div class="field" style="max-width:200px; margin:0;"><select id="originFilter">${originFilterOpts}</select></div>
+      <div style="display:flex; gap:8px;">
+        <select id="originFilter" style="max-width:200px;">${originFilterOpts}</select>
+        <button class="btn ghost" id="printWeek">另存PDF（本週）</button>
+      </div>
     </div>
-    <h3>本週（${week1[0]} ~ ${week1[6]}）</h3>
+    <h3>${week1[0]} ~ ${week1[6]}</h3>
     <div id="gridWeek1"></div>
-    <h3>下週（${week2[0]} ~ ${week2[6]}）</h3>
-    <div id="gridWeek2"></div>
     <div id="assignDetail"></div>
   `;
   document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; renderContent(); };
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; renderContent(); };
-  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); renderWeekGrid('gridWeek2', week2); };
+  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); };
+  document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週班表_${week1[0]}_${week1[6]}`);
   document.getElementById('addAssign').onclick = async ()=>{
     const routeId = document.getElementById('sRoute').value;
     const driverId = document.getElementById('sDriver').value;
@@ -1107,8 +1160,6 @@ function renderScheduleAdmin(c){
     const weekdays = Array.from(document.querySelectorAll('.wdcheck:checked')).map(cb=>Number(cb.value));
     if(!routeId || !driverId || !start){ alert('請選擇路線、司機與日期'); return; }
     const route = state.data.routes.find(r=>r.id===routeId);
-    const fare = document.getElementById('sFare').value;
-    const distanceKm = document.getElementById('sDistance').value;
     let created=0, skippedNoVersion=0, skippedExisting=0, skippedConflict=0;
     let cursor = start;
     try{
@@ -1123,7 +1174,7 @@ function renderScheduleAdmin(c){
             const version = getActiveVersion(route, cursor);
             if(!version){ skippedNoVersion++; }
             else {
-              await createAssignment({ date:cursor, routeId, driverId, fare, distanceKm });
+              await createAssignment({ date:cursor, routeId, driverId });
               created++;
             }
           }
@@ -1135,7 +1186,6 @@ function renderScheduleAdmin(c){
     renderContent();
   };
   renderWeekGrid('gridWeek1', week1);
-  renderWeekGrid('gridWeek2', week2);
 }
 function renderWeekGrid(containerId, dates){
   const wrap = document.getElementById(containerId);
@@ -1167,7 +1217,7 @@ function renderWeekGrid(containerId, dates){
   const blocks = origins.map(og=>{
     const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
     if(!routesHere.length) return '';
-    const seqs = [...new Set(routesHere.map(r=>r.seq))];
+    const seqs = [...new Set(routesHere.map(r=>r.seq))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
     const rows = seqs.map(seq=>{
       const amRoute = routesHere.find(r=>r.seq===seq && r.shift==='AM');
       const pmRoute = routesHere.find(r=>r.seq===seq && r.shift==='PM');
@@ -1188,64 +1238,6 @@ function renderWeekGrid(containerId, dates){
     };
   });
 }
-function renderOverview(c){
-  const w1 = getWeekDates(state._ovOffset||0);
-  const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
-  c.innerHTML = `
-    <h2 class="section-title">班表總覽</h2>
-    <p class="section-sub">純檢視、大字體版本，專門用來一眼確認「哪一天、哪一車次、哪位司機」，不含編輯功能。</p>
-    <div class="toolbar no-print">
-      <div class="week-nav">
-        <button class="btn ghost" id="ovPrev">← 上一週</button>
-        <span class="mono">${w1[0]} ~ ${w1[6]}</span>
-        <button class="btn ghost" id="ovNext">下一週 →</button>
-      </div>
-      <div style="display:flex; gap:8px;">
-        <select id="ovOriginFilter" style="max-width:200px;">${originFilterOpts}</select>
-        <button class="btn ghost" id="ovPrint">另存PDF</button>
-      </div>
-    </div>
-    <div id="ovBody"></div>
-  `;
-  document.getElementById('ovPrev').onclick = ()=>{ state._ovOffset=(state._ovOffset||0)-1; renderContent(); };
-  document.getElementById('ovNext').onclick = ()=>{ state._ovOffset=(state._ovOffset||0)+1; renderContent(); };
-  function refresh(){
-    const originFilterVal = document.getElementById('ovOriginFilter').value;
-    const origins = originFilterVal ? state.data.origins.filter(og=>og.address===originFilterVal) : state.data.origins;
-    const blocks = origins.map(og=>{
-      const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
-      if(!routesHere.length) return '';
-      const seqs = [...new Set(routesHere.map(r=>r.seq))];
-      const dateHeader = w1.map(d=>{
-        const wd = new Date(d+'T00:00:00').getDay(); const isWeekend = wd===0||wd===6;
-        return `<th colspan="2" class="${isWeekend?'weekend':''}">${d.slice(5)}（週${WEEKDAY_ZH[wd===0?6:wd-1]}）</th>`;
-      }).join('');
-      const shiftHeader = w1.map(d=>{
-        const wd = new Date(d+'T00:00:00').getDay(); const isWeekend = wd===0||wd===6;
-        return `<th class="${isWeekend?'weekend':''}">上午</th><th class="${isWeekend?'weekend':''}">下午</th>`;
-      }).join('');
-      const rows = seqs.map(seq=>{
-        const amRoute = routesHere.find(r=>r.seq===seq && r.shift==='AM');
-        const pmRoute = routesHere.find(r=>r.seq===seq && r.shift==='PM');
-        function cell(route,d){
-          if(!route) return `<td class="grid-black"></td>`;
-          const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===d);
-          return `<td class="grid-cell">${a? driverName(a.driverId) : ''}</td>`;
-        }
-        const cells = w1.map(d=> cell(amRoute,d)+cell(pmRoute,d)).join('');
-        return `<tr><td class="row-label">${seq}</td>${cells}</tr>`;
-      }).join('');
-      return `<div class="origin-title" style="font-size:15px;">${og.label||og.address}</div>
-        <div class="panel" style="overflow-x:auto; padding:8px;">
-          <table class="overview-grid"><thead><tr><th></th>${dateHeader}</tr><tr><th>車次</th>${shiftHeader}</tr></thead><tbody>${rows}</tbody></table>
-        </div>`;
-    }).join('');
-    document.getElementById('ovBody').innerHTML = blocks || '<div class="empty">尚無路線資料</div>';
-  }
-  document.getElementById('ovOriginFilter').onchange = refresh;
-  document.getElementById('ovPrint').onclick = ()=> exportPanelPrint(document.getElementById('ovBody'), `班表總覽_${w1[0]}_${w1[6]}`);
-  refresh();
-}
 function renderQuickCreate(routeId, date){
   const box = document.getElementById('assignDetail');
   const route = state.data.routes.find(r=>r.id===routeId);
@@ -1260,11 +1252,8 @@ function renderQuickCreate(routeId, date){
     <div class="panel">
       <h3 style="margin-top:0;">指派：${date} · ${route.name}</h3>
       <p style="font-size:12.5px;">出發點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
-      <div class="grid3">
-        <div class="field"><label>司機</label><select id="qDriver">${driverOpts}</select></div>
-        <div class="field"><label>司機車資（元）</label><input id="qFare" type="number"></div>
-        <div class="field"><label>整趟總里程（km）</label><input id="qDistance" type="number"></div>
-      </div>
+      <p style="font-size:12.5px; color:var(--ink-soft);">司機費用 $${money(version.driverFare||0)} ・ 里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
+      <div class="field"><label>司機</label><select id="qDriver">${driverOpts}</select></div>
       <button class="btn amber" id="qSave">確認指派</button>
       <button class="btn ghost" id="qCancel">取消</button>
     </div>
@@ -1277,11 +1266,7 @@ function renderQuickCreate(routeId, date){
       alert('這位司機在同一天已經有相同班次（上午／下午）的指派，請確認是否排錯。'); return;
     }
     try{
-      await createAssignment({
-        date, routeId, driverId,
-        fare: document.getElementById('qFare').value,
-        distanceKm: document.getElementById('qDistance').value
-      });
+      await createAssignment({ date, routeId, driverId });
       box.innerHTML=''; renderContent();
     }catch(err){ alert(err.message); }
   };
@@ -1297,6 +1282,8 @@ function renderAssignmentDetail(id){
   const box = document.getElementById('assignDetail');
   const a = state.data.assignments.find(x=>x.id===id);
   if(!a){ box.innerHTML=''; return; }
+  const canReassign = a.status!=='completed';
+  const otherDrivers = state.data.drivers.filter(d=>d.status==='active' && d.id!==a.driverId);
   box.innerHTML = `
     <div class="panel">
       <div class="toolbar">
@@ -1307,24 +1294,17 @@ function renderAssignmentDetail(id){
         </span>
       </div>
       <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">司機費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${a.billingSnapshot?`$${money(a.billingSnapshot.totalAmount)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
       ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-      <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。司機費用、里程、請款金額都在下方人工輸入，系統不會自動換算。</p>
+      ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>臨時異動（例如司機請假換人）：</span>
+        <select id="afReassignDriver" style="width:auto; max-width:160px;"><option value="">選擇司機</option>${otherDrivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select>
+        <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換司機</button>
+      </div>` : ''}
+      <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。</p>
       ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}</div>`).join('')}
-      <h4 style="margin:14px 0 4px;">費用資料（人工輸入）</h4>
-      <div class="grid2">
-        <div class="field"><label>司機費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
-        <div class="field"><label>里程（km）</label><input id="afDistance" type="number" value="${a.distanceKm||''}"></div>
-      </div>
-      ${(() => {
-        const channelIds = [...new Set(a.dropPoints.map(dp=>dp.channelId).filter(Boolean))];
-        if(!channelIds.length) return '<p class="note">這趟車還沒有下貨點，無法輸入請款金額。</p>';
-        const byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || {};
-        return `<label style="margin-top:4px; display:block;">各通路請款金額（元）</label><div class="grid3">${channelIds.map(cid=>`
-          <div class="field"><label>${channelName(cid)}</label><input class="afBillingInput" data-channel="${cid}" type="number" value="${byChannel[cid] ?? ''}"></div>
-        `).join('')}</div>`;
-      })()}
-      <p class="note" id="afTotalPreview" style="margin-top:6px;"></p>
-      <button class="btn amber" id="afSave">儲存費用資料</button>
+      <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
+      <div id="afOverrideBox"></div>
     </div>
   `;
   const db = document.getElementById('assignDetail').querySelector('[data-delassign]');
@@ -1332,24 +1312,42 @@ function renderAssignmentDetail(id){
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
   };
-  function refreshTotalPreview(){
-    const inputs = document.querySelectorAll('.afBillingInput');
-    let total = 0; inputs.forEach(inp=>{ total += Number(inp.value)||0; });
-    document.getElementById('afTotalPreview').textContent = `請款總額：$${money(total)}`;
-  }
-  document.querySelectorAll('.afBillingInput').forEach(inp=>{ inp.oninput = refreshTotalPreview; });
-  refreshTotalPreview();
-  document.getElementById('afSave').onclick = async ()=>{
-    const fare = document.getElementById('afFare').value;
-    const distanceKm = document.getElementById('afDistance').value;
-    const billingByChannel = {};
-    document.querySelectorAll('.afBillingInput').forEach(inp=>{
-      if(inp.value !== '') billingByChannel[inp.dataset.channel] = Number(inp.value)||0;
-    });
-    try{
-      await updateAssignmentFinance(a.id, { fare, distanceKm: distanceKm===''?null:distanceKm, billingByChannel });
-      renderContent();
-    }catch(err){ alert(err.message); }
+  if(canReassign) document.getElementById('afReassignBtn').onclick = async ()=>{
+    const newDriverId = document.getElementById('afReassignDriver').value;
+    if(!newDriverId){ alert('請選擇司機'); return; }
+    if(hasDriverConflict(newDriverId, a.date, (state.data.routes.find(r=>r.id===a.routeId)||{}).shift, a.id)){
+      alert('這位司機在同一天已經有相同班次的指派，請確認是否排錯。'); return;
+    }
+    try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
+    catch(err){ alert(err.message); }
+  };
+  document.getElementById('afOverrideToggle').onclick = ()=>{
+    const box2 = document.getElementById('afOverrideBox');
+    if(box2.innerHTML){ box2.innerHTML=''; return; }
+    const channelIds = [...new Set(a.dropPoints.map(dp=>dp.channelId).filter(Boolean))];
+    const byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || {};
+    box2.innerHTML = `
+      <div class="grid2" style="margin-top:8px;">
+        <div class="field"><label>司機費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
+        <div class="field"><label>里程（km）</label><input id="afDistance" type="number" value="${a.distanceKm||''}"></div>
+      </div>
+      ${channelIds.length ? `<label style="margin-top:4px; display:block;">各通路請款金額（元）</label><div class="grid3">${channelIds.map(cid=>`
+        <div class="field"><label>${channelName(cid)}</label><input class="afBillingInput" data-channel="${cid}" type="number" value="${byChannel[cid] ?? ''}"></div>
+      `).join('')}</div>` : '<p class="note">這趟車還沒有下貨點，無法輸入請款金額。</p>'}
+      <button class="btn amber" id="afSave">儲存這一趟的費用</button>
+    `;
+    document.getElementById('afSave').onclick = async ()=>{
+      const fare = document.getElementById('afFare').value;
+      const distanceKm = document.getElementById('afDistance').value;
+      const billingByChannel = {};
+      document.querySelectorAll('.afBillingInput').forEach(inp=>{
+        if(inp.value !== '') billingByChannel[inp.dataset.channel] = Number(inp.value)||0;
+      });
+      try{
+        await updateAssignmentFinance(a.id, { fare, distanceKm: distanceKm===''?null:distanceKm, billingByChannel });
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
   };
 }
 
@@ -1461,8 +1459,7 @@ function renderBilling(c){
   const chOpts = state.data.channels.map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">共配車趟：採「依里程+下貨點數」公式的通路，會先算出整趟共同總額（里程×每公里費率＋總點數×每點費率），再依各通路下貨點數比例分攤；採「整趟固定金額」的通路（例如牧穀）則獨立計算，不參與共配分攤。</p>
-    <p class="section-sub">各通路實際費率請至「通路管理」查看/調整。</p>
+    <p class="section-sub">每趟車的請款金額跟著路線管理裡設定的版本走：人工填請款總額，系統依「扣除整趟計費通路後，其餘通路依下貨點數比例分攤」算出各通路金額。路線名稱如果有標註星期（例如「（週二到週五）」），請款單上會自動省略不顯示。</p>
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>通路</label><select id="bChannel">${chOpts}</select></div>
@@ -1491,7 +1488,7 @@ function renderBilling(c){
         <h3 style="margin-top:0;">${channel.name} — ${start} ~ ${end} 請款總額：<span class="amount">$${money(r.total.toFixed(0))}</span></h3>
         <table>
           <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>該通路分攤金額</th></tr></thead>
-          <tbody>${r.contributing.map(x=>`<tr><td>${x.a.date}</td><td>${routeName(x.a.routeId)}</td><td>${driverName(x.a.driverId)}</td><td class="amount">$${money(x.amount.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
+          <tbody>${r.contributing.map(x=>`<tr><td>${x.a.date}</td><td>${stripWeekdayLabel(routeName(x.a.routeId))}</td><td>${driverName(x.a.driverId)}</td><td class="amount">$${money(x.amount.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
         </table>
         <button class="btn amber no-print" id="printBilling" style="margin-top:10px;">產生請款單（列印/另存PDF）</button>
       </div>`;
@@ -1737,6 +1734,13 @@ function renderMyEarnings(c){
         <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
         <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(a.fare)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月尚無已完成車趟</div></td></tr>'}</tbody>
       </table>
+      ${r.adjustments.length ? `
+        <h3>本月調整項明細</h3>
+        <table>
+          <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
+          <tbody>${r.adjustments.map(adj=>`<tr><td>${adj.type==='advance'?'預支':adj.type==='add'?'加項':'扣項'}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+        </table>
+      ` : ''}
     </div>`;
 }
 // ---------- 司機端：我的資料 ----------

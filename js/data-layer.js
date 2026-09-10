@@ -27,7 +27,7 @@ function mapChannel(row) {
     id: row.id, name: row.name, periodType: row.period_type,
     startDay: row.start_day, endDay: row.end_day, status: row.status,
     formulaType: row.formula_type, rateKm: Number(row.rate_km), ratePoint: Number(row.rate_point),
-    flatAmount: Number(row.flat_amount)
+    flatAmount: Number(row.flat_amount), taxInclusive: row.tax_inclusive !== false
   };
 }
 
@@ -48,6 +48,10 @@ function mapRoute(row) {
       start: v.start_date,
       end: v.end_date,
       origin: originAddr,
+      distanceKm: v.distance_km != null ? Number(v.distance_km) : null,
+      driverFare: v.driver_fare != null ? Number(v.driver_fare) : null,
+      billingTotal: v.billing_total != null ? Number(v.billing_total) : null,
+      billingByChannel: v.billing_by_channel || {},
       dropPointIds: (v.route_version_points || [])
         .slice().sort((a, b) => a.sequence_no - b.sequence_no)
         .map(p => p.drop_point_id)
@@ -303,7 +307,8 @@ function channelPayload(input) {
   return {
     name: input.name, period_type: input.periodType, start_day: input.startDay,
     end_day: input.periodType === 'custom' ? input.endDay : null,
-    formula_type: input.formulaType, rate_km: input.rateKm, rate_point: input.ratePoint, flat_amount: input.flatAmount
+    formula_type: input.formulaType, rate_km: input.rateKm, rate_point: input.ratePoint, flat_amount: input.flatAmount,
+    tax_inclusive: input.taxInclusive !== false
   };
 }
 
@@ -453,21 +458,76 @@ async function deleteRoute(routeId) {
   state.data.routes = state.data.routes.filter(r => r.id !== routeId);
 }
 
+// 請款拆賬公式：扣除「整趟固定金額」通路後，剩餘金額依各通路的下貨點數
+// 比例分攤（不是依實際跑一趟的公里數重新套公式，因為請款總額本身已經是
+// 人工填寫好的數字）。用最大餘數法分配捨入誤差，確保拆出來的金額加總
+// 一定等於請款總額，不會有零頭對不起來的問題。
+function computeChannelSplitByStoreCount(dropPointIds, billingTotal) {
+  const countByChannel = {};
+  (dropPointIds || []).forEach(id => {
+    const dp = state.data.dropPoints.find(x => x.id === id);
+    if (!dp) return;
+    countByChannel[dp.channelId] = (countByChannel[dp.channelId] || 0) + 1;
+  });
+  const byChannel = {};
+  let flatTotal = 0;
+  const poolIds = [];
+  Object.keys(countByChannel).forEach(cid => {
+    const ch = state.data.channels.find(c => c.id === cid);
+    if (ch && ch.formulaType === 'flat_per_trip') {
+      const amt = Math.round(Number(ch.flatAmount) || 0);
+      byChannel[cid] = amt;
+      flatTotal += amt;
+    } else {
+      poolIds.push(cid);
+    }
+  });
+  const remaining = (Number(billingTotal) || 0) - flatTotal;
+  const poolCount = poolIds.reduce((s, cid) => s + countByChannel[cid], 0);
+  if (poolCount > 0) {
+    const exact = poolIds.map(cid => remaining * countByChannel[cid] / poolCount);
+    const floors = exact.map(Math.floor);
+    const distributed = floors.reduce((s, v) => s + v, 0);
+    let leftover = Math.round(remaining - distributed);
+    const order = poolIds.map((cid, i) => ({ cid, frac: exact[i] - floors[i] })).sort((a, b) => b.frac - a.frac);
+    const finalAmt = {};
+    poolIds.forEach((cid, i) => { finalAmt[cid] = floors[i]; });
+    for (let i = 0; i < leftover && order.length; i++) { finalAmt[order[i % order.length].cid] += 1; }
+    poolIds.forEach(cid => { byChannel[cid] = finalAmt[cid]; });
+  } else {
+    poolIds.forEach(cid => { byChannel[cid] = 0; });
+  }
+  return byChannel;
+}
+
 // 對應 demo 的 saveRouteVersion() + recomputeRouteVersionEnds()：
 // 新增/覆寫一個版本的下貨點順序後，重新計算這條路線所有版本的生效區間
 // （每個版本的 end = 下一個版本 start 前一天，最後一個版本 end = null）。
-async function saveRouteVersion(routeId, newStart, dropPointIds) {
+// finance = { distanceKm, driverFare, billingTotal } 是這個版本人工填寫的
+// 里程／司機費用／請款總額；請款總額依通路自動拆賬，算好的結果一併存起來，
+// 之後這個版本底下每一趟車建立時都直接複製這份快照，不用每趟重算。
+async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   const route = state.data.routes.find(r => r.id === routeId);
   if (!route) throw new Error('找不到路線');
   const supabase = getSupabase();
+
+  const billingByChannel = computeChannelSplitByStoreCount(dropPointIds, finance?.billingTotal);
+  const financePayload = {
+    distance_km: finance?.distanceKm === '' || finance?.distanceKm == null ? null : Number(finance.distanceKm),
+    driver_fare: finance?.driverFare === '' || finance?.driverFare == null ? null : Number(finance.driverFare),
+    billing_total: finance?.billingTotal === '' || finance?.billingTotal == null ? null : Number(finance.billingTotal),
+    billing_by_channel: billingByChannel
+  };
 
   let version = route.versions.find(v => v.start === newStart);
   if (version) {
     const { error: delErr } = await supabase.from('route_version_points').delete().eq('route_version_id', version.id);
     if (delErr) throw new Error('更新路線版本失敗：' + delErr.message);
+    const { error: updErr } = await supabase.from('route_versions').update(financePayload).eq('id', version.id);
+    if (updErr) throw new Error('更新路線版本費用失敗：' + updErr.message);
   } else {
     const { data: newVer, error: insErr } = await supabase.from('route_versions')
-      .insert({ route_id: routeId, start_date: newStart }).select().single();
+      .insert({ route_id: routeId, start_date: newStart, ...financePayload }).select().single();
     if (insErr) throw new Error('建立路線版本失敗：' + insErr.message);
     version = { id: newVer.id, start: newStart, end: null, origin: route.originAddr, dropPointIds: [] };
     route.versions.push(version);
@@ -479,6 +539,10 @@ async function saveRouteVersion(routeId, newStart, dropPointIds) {
     if (pointsErr) throw new Error('儲存下貨點順序失敗：' + pointsErr.message);
   }
   version.dropPointIds = dropPointIds;
+  version.distanceKm = financePayload.distance_km;
+  version.driverFare = financePayload.driver_fare;
+  version.billingTotal = financePayload.billing_total;
+  version.billingByChannel = billingByChannel;
 
   const sorted = [...route.versions].sort((a, b) => a.start.localeCompare(b.start));
   const updates = [];
@@ -495,6 +559,10 @@ async function saveRouteVersion(routeId, newStart, dropPointIds) {
 
 // ---------------- 車趟指派與生命週期 ----------------
 
+// 司機費用／里程／請款金額不再由排班時人工輸入，改成直接複製路線當時生效
+// 版本裡已經填好的數字（見 saveRouteVersion 的 finance 參數）。找不到生效版本
+// 或版本還沒填費用時，就先以 0/null 建立，之後可以在路線管理補上再重新產生車趟，
+// 或於車趟管理個別調整（見 updateAssignmentFinance，供例外狀況覆寫用）。
 async function createAssignment(input) {
   const route = state.data.routes.find(r => r.id === input.routeId);
   if (!route) throw new Error('找不到路線');
@@ -504,7 +572,12 @@ async function createAssignment(input) {
   const supabase = getSupabase();
   const { data: assignRow, error } = await supabase.from('assignments').insert({
     trip_date: input.date, route_id: input.routeId, driver_id: input.driverId,
-    origin_snapshot: route.originAddr || '', fare: input.fare, distance_km: input.distanceKm, status: 'scheduled'
+    origin_snapshot: route.originAddr || '',
+    fare: version?.driverFare ?? 0,
+    distance_km: version?.distanceKm ?? null,
+    billing_total_snapshot: version?.billingTotal ?? null,
+    billing_by_channel_snapshot: version?.billingByChannel ?? null,
+    status: 'scheduled'
   }).select().single();
   if (error) throw new Error('建立車趟失敗：' + error.message);
 
@@ -527,6 +600,22 @@ async function deleteAssignment(assignmentId) {
   const { error } = await supabase.from('assignments').delete().eq('id', assignmentId);
   if (error) throw new Error('刪除車趟失敗：' + error.message);
   state.data.assignments = state.data.assignments.filter(a => a.id !== assignmentId);
+}
+
+// 臨時異動：已排定或已出發的車趟需要臨時換司機（例如原本排定的司機臨時請假），
+// 不用刪除重建整趟車趟（那樣會遺失已經拍的照片、下貨點順序等資料）。
+// 已完成的車趟不開放異動，維持「完成即封存」的設計。
+async function reassignAssignmentDriver(assignmentId, newDriverId) {
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (a && a.status === 'completed') throw new Error('已完成的車趟不可異動司機。');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).eq('id', assignmentId);
+  if (error) throw new Error('換司機失敗：' + error.message);
+  if (a) {
+    const oldDriverId = a.driverId;
+    a.driverId = newDriverId;
+    await createNotification('profile', `${routeName(a.routeId)}（${a.date}）已由 ${driverName(oldDriverId)} 臨時改派給 ${driverName(newDriverId)}`);
+  }
 }
 
 async function markAssignmentDeparted(assignmentId) {

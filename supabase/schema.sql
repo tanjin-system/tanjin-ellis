@@ -54,6 +54,7 @@ create table channels (
   rate_km numeric not null default 35,
   rate_point numeric not null default 50,
   flat_amount numeric not null default 0,
+  tax_inclusive boolean not null default true,
   created_at timestamptz not null default now()
 );
 
@@ -105,6 +106,15 @@ create table route_versions (
   route_id uuid not null references routes(id) on delete cascade,
   start_date date not null,
   end_date date,
+  -- 司機費用／里程／請款總額改成在這裡（路線版本層級）人工填寫一次，
+  -- 同一版本底下每一趟車預設沿用這些值（建立車趟時複製一份快照到
+  -- assignments，讓歷史車趟不受之後版本異動影響）。billing_by_channel
+  -- 是系統依「扣除整趟計費通路後，其餘通路依下貨點數比例分攤」算出來的，
+  -- 見 js/data-layer.js 的 computeChannelSplitByStoreCount()。
+  distance_km numeric,
+  driver_fare numeric,
+  billing_total numeric,
+  billing_by_channel jsonb,
   created_at timestamptz not null default now(),
   unique (route_id, start_date)
 );
