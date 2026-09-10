@@ -540,8 +540,9 @@ async function markAssignmentDeparted(assignmentId) {
 
 // issueNote 有值代表「尚有下貨點未拍照回報」時司機填寫的原因說明，跟 demo 的
 // 「完成本趟」流程一致：同一次操作把 status/has_issue/issue_note 一起送出。
-// 金額（completedAt/billing快照/payroll快照）一律由資料庫觸發器算好，這裡送出後
-// 重新抓一次該筆車趟，取得觸發器算好的凍結金額，不會相信前端自己算的數字。
+// 完成時間（completed_at）與司機報酬凍結快照（payroll_fare_snapshot）由資料庫
+// 觸發器自動處理；請款金額不再自動計算，改由主控在車趟管理裡人工輸入
+// （見 updateAssignmentFinance()），這裡送出後重新抓一次該筆車趟同步最新狀態。
 async function markAssignmentComplete(assignmentId, issueNote) {
   const payload = { status: 'completed' };
   if (issueNote) { payload.has_issue = true; payload.issue_note = issueNote; }
@@ -554,6 +555,27 @@ async function markAssignmentComplete(assignmentId, issueNote) {
   if (idx >= 0) state.data.assignments[idx] = full;
   await createNotification('complete', `${driverName(full.driverId)} 已完成 ${routeName(full.routeId)}（${full.date}）${full.hasIssue ? ' ⚠️ 有異常備註' : ''}`);
   return full;
+}
+
+// 車趟管理的人工輸入：司機費用、里程、各通路請款金額都由主控直接 key in，
+// 不再依公里數/下貨點數套公式換算。billingByChannel 是 {channelId: amount} 的物件，
+// 只需要包含這趟車實際牽涉到的通路；總額在這裡直接加總，不留給資料庫算。
+async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billingByChannel }) {
+  const total = Object.values(billingByChannel || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update({
+    fare, distance_km: distanceKm,
+    billing_total_snapshot: total,
+    billing_by_channel_snapshot: billingByChannel
+  }).eq('id', assignmentId);
+  if (error) throw new Error('儲存費用失敗：' + error.message);
+
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (a) {
+    a.fare = Number(fare) || 0;
+    a.distanceKm = distanceKm === '' || distanceKm == null ? null : Number(distanceKm);
+    a.billingSnapshot = { totalAmount: total, totalPoints: a.dropPoints.length, byChannel: billingByChannel };
+  }
 }
 
 async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {

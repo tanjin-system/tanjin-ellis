@@ -257,6 +257,16 @@ grant app_admin to authenticator;
 grant app_driver to authenticator;
 grant usage on schema public to app_admin, app_driver;
 
+-- 缺這行的話 Supabase Storage 服務會直接回 permission denied for table objects，
+-- 即使 storage.objects 的 GRANT 和 RLS policy 都設對了也一樣：Storage 服務要求
+-- 「role claim 指定的自訂角色」必須是 anon 的成員才會被接受並切換過去執行。
+-- 這是 Supabase 官方文件 Custom Roles 明確要求、但很容易漏掉的一步。
+grant anon to app_admin, app_driver;
+grant usage on schema storage to app_admin, app_driver;
+grant select on storage.buckets to app_admin, app_driver;
+grant select, insert, update, delete on storage.objects to app_admin;
+grant select, insert on storage.objects to app_driver;
+
 -- 從 JWT claims 讀出目前登入司機的 id（由 Netlify Function 簽發時放入 driver_id claim）
 create or replace function auth_driver_id() returns uuid
 language sql stable as $$

@@ -64,6 +64,9 @@
   .toolbar{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
   .note{ font-size:12px; color:var(--ink-soft); background:#FAF7F1; border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; margin-bottom:14px; }
   .tag-list span{ display:inline-block; background:#EFEEE9; border-radius:2px; padding:2px 6px; margin:2px 3px 0 0; font-size:11.5px; }
+  .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
+  .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
+  .modal-box .toolbar{ margin-bottom:10px; }
   .version-block{ border:1px solid var(--border); border-radius:var(--radius); padding:10px; margin-bottom:8px; }
   .version-block.open{ border-color:var(--amber); }
   .tile-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
@@ -420,8 +423,9 @@ function renderHomeDriver(c){
 // ---------- 司機資料（含車輛、銀行細節） ----------
 function renderDrivers(c){
   c.innerHTML = `
-    <h2 class="section-title">司機資料</h2>
+    <div class="toolbar"><h2 class="section-title" style="margin:0;">司機資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部司機資料</button></div>
     <p class="section-sub">車輛掛靠司機本人，直接併入司機資料建置。</p>
+    <div id="allDriversModal"></div>
     <div class="panel">
       <div class="grid3">
         <div class="field"><label>姓名</label><input id="dName"></div>
@@ -498,8 +502,35 @@ function renderDrivers(c){
       }catch(err){ alert(err.message); }
     };
   });
+  document.getElementById('viewAllDriversBtn').onclick = openAllDriversModal;
 }
 function isDriverReferenced(id){ return state.data.assignments.some(a=>a.driverId===id); }
+function openAllDriversModal(){
+  const host = document.getElementById('allDriversModal');
+  host.innerHTML = `
+    <div class="modal-backdrop" id="allDriversBackdrop">
+      <div class="modal-box">
+        <div class="toolbar"><h3 style="margin:0;">全部司機資料（${state.data.drivers.length}）</h3>
+          <span><button class="btn ghost" id="printAllDrivers">列印</button> <button class="btn ghost" id="closeAllDrivers">關閉</button></span>
+        </div>
+        <table>
+          <thead><tr><th>姓名</th><th>電話</th><th>LINE</th><th>狀態</th><th>車牌</th><th>車型</th><th>載重</th><th>銀行</th><th>分行</th><th>帳號</th><th>戶名</th></tr></thead>
+          <tbody>
+            ${state.data.drivers.map(d=>`<tr>
+              <td>${d.name}</td><td>${d.phone||'—'}</td><td>${d.lineId||'—'}</td>
+              <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
+              <td class="mono">${d.vehicle.plate||'—'}</td><td>${d.vehicle.type||'—'}</td><td>${d.vehicle.load||'—'}</td>
+              <td>${d.bank.bankName||'—'}</td><td>${d.bank.branch||'—'}</td><td class="mono">${d.bank.account||'—'}</td><td>${d.bank.holder||'—'}</td>
+            </tr>`).join('') || `<tr><td colspan="11"><div class="empty">尚無司機資料</div></td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  document.getElementById('closeAllDrivers').onclick = ()=>{ host.innerHTML=''; };
+  document.getElementById('allDriversBackdrop').onclick = (e)=>{ if(e.target.id==='allDriversBackdrop') host.innerHTML=''; };
+  document.getElementById('printAllDrivers').onclick = ()=> exportPanelPrint(document.querySelector('#allDriversModal .modal-box'), '全部司機資料');
+}
 
 // ---------- 通路管理 ----------
 let editingChannelId = null;
@@ -1275,16 +1306,50 @@ function renderAssignmentDetail(id){
           ${a.status==='scheduled'? `<button class="btn danger" data-delassign="${a.id}">刪除</button>` : ''}
         </span>
       </div>
-      <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
+      <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
       ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-      <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。</p>
+      <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。司機費用、里程、請款金額都在下方人工輸入，系統不會自動換算。</p>
       ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}</div>`).join('')}
+      <h4 style="margin:14px 0 4px;">費用資料（人工輸入）</h4>
+      <div class="grid2">
+        <div class="field"><label>司機費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
+        <div class="field"><label>里程（km）</label><input id="afDistance" type="number" value="${a.distanceKm||''}"></div>
+      </div>
+      ${(() => {
+        const channelIds = [...new Set(a.dropPoints.map(dp=>dp.channelId).filter(Boolean))];
+        if(!channelIds.length) return '<p class="note">這趟車還沒有下貨點，無法輸入請款金額。</p>';
+        const byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || {};
+        return `<label style="margin-top:4px; display:block;">各通路請款金額（元）</label><div class="grid3">${channelIds.map(cid=>`
+          <div class="field"><label>${channelName(cid)}</label><input class="afBillingInput" data-channel="${cid}" type="number" value="${byChannel[cid] ?? ''}"></div>
+        `).join('')}</div>`;
+      })()}
+      <p class="note" id="afTotalPreview" style="margin-top:6px;"></p>
+      <button class="btn amber" id="afSave">儲存費用資料</button>
     </div>
   `;
   const db = document.getElementById('assignDetail').querySelector('[data-delassign]');
   if(db) db.onclick = async ()=>{
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
+  };
+  function refreshTotalPreview(){
+    const inputs = document.querySelectorAll('.afBillingInput');
+    let total = 0; inputs.forEach(inp=>{ total += Number(inp.value)||0; });
+    document.getElementById('afTotalPreview').textContent = `請款總額：$${money(total)}`;
+  }
+  document.querySelectorAll('.afBillingInput').forEach(inp=>{ inp.oninput = refreshTotalPreview; });
+  refreshTotalPreview();
+  document.getElementById('afSave').onclick = async ()=>{
+    const fare = document.getElementById('afFare').value;
+    const distanceKm = document.getElementById('afDistance').value;
+    const billingByChannel = {};
+    document.querySelectorAll('.afBillingInput').forEach(inp=>{
+      if(inp.value !== '') billingByChannel[inp.dataset.channel] = Number(inp.value)||0;
+    });
+    try{
+      await updateAssignmentFinance(a.id, { fare, distanceKm: distanceKm===''?null:distanceKm, billingByChannel });
+      renderContent();
+    }catch(err){ alert(err.message); }
   };
 }
 
