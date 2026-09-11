@@ -364,10 +364,13 @@ function originBillingBreakdown(originAddr, start, end, includedChannelIds){
     const amount = scoped.reduce((s,x)=>s+x.amount, 0);
     const tripCount = scoped.length;
     const storeCount = scoped.reduce((s,x)=> s + (x.a.dropPoints||[]).filter(dp=>dp.channelId===cid).length, 0);
+    // 先四捨五入到整數再往下加總，確保每個通路顯示的未稅+稅額+含稅跟總計欄位
+    // 對得起來（不會因為先加總浮點數再四捨五入，導致跟逐通路的顯示值差1元）。
     const taxIncl = ch ? ch.taxInclusive !== false : true;
-    const untaxed = taxIncl ? amount/1.05 : amount;
-    const tax = taxIncl ? amount-untaxed : amount*0.05;
-    const withTax = taxIncl ? amount : amount+tax;
+    let untaxed, withTax;
+    if(taxIncl){ withTax = Math.round(amount); untaxed = Math.round(amount/1.05); }
+    else { untaxed = Math.round(amount); withTax = Math.round(amount*1.05); }
+    const tax = withTax - untaxed;
     return { cid, name: ch?ch.name:'（已刪除通路）', tripCount, storeCount, amount, untaxed, tax, withTax, scoped };
   });
   const rowMap = {};
