@@ -79,6 +79,14 @@
   .sig-icon-btn{ font-size:30px; background:none; border:none; cursor:pointer; padding:8px 16px; border-radius:10px; line-height:1; }
   .sig-icon-btn.confirm{ background:#2C6B44; }
   .sig-icon-btn.cancel{ background:#B5493A; }
+  .form-tabs{ display:flex; gap:14px; margin-bottom:14px; border-bottom:1px solid var(--border); }
+  .form-tab-btn{ background:none; border:none; padding:8px 2px; font-size:13px; font-weight:600; color:var(--ink-soft); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .form-tab-btn.active{ color:var(--ink); border-bottom-color:var(--amber); }
+  .driver-card{ border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:10px; background:var(--panel); }
+  .driver-card-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+  .driver-card-name{ font-weight:600; font-size:14.5px; }
+  .driver-card-sub{ font-size:12px; color:var(--ink-soft); margin-top:4px; line-height:1.7; }
+  .driver-card-actions{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:10px; }
   .sig-clear-link{ color:#fff; font-size:13px; background:rgba(255,255,255,.15); border:none; border-radius:6px; padding:8px 14px; cursor:pointer; }
   .version-block{ border:1px solid var(--border); border-radius:var(--radius); padding:10px; margin-bottom:8px; }
   .version-block.open{ border-color:var(--amber); }
@@ -189,10 +197,14 @@ function exportPrintable(title, bodyHtml){
   wrap.style.cssText = 'width:1050px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
   wrap.innerHTML = `
     <style>
+      @page { size: A4 landscape; margin: 10mm; }
       table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
       th,td{ padding:7px 9px; border:1px solid #999; text-align:left; }
       h1,h3{ margin:0 0 10px; }
       .amount{ font-family:monospace; font-weight:700; }
+      /* 防斷頁：表格列、面板區塊、標題都不允許被硬切成兩半 */
+      table, tr, thead, tbody, .panel, .version-block, .date-group{ break-inside: avoid; page-break-inside: avoid; }
+      h1, h2, h3, h4{ break-after: avoid; page-break-after: avoid; }
     </style>
     <h1>${title}</h1>
     ${bodyHtml}
@@ -325,6 +337,55 @@ function channelBillingTotal(channelId, start, end){
     }
   });
   return {total, contributing};
+}
+// 某供應商（出發點）底下有哪些通路曾經被送過（不限日期區間，讓勾選清單穩定，
+// 不會因為換了日期就整批消失又出現）。
+function channelsForOrigin(originAddr){
+  const routeIds = new Set(state.data.routes.filter(r=>r.originAddr===originAddr).map(r=>r.id));
+  const cids = new Set();
+  state.data.assignments.forEach(a=>{
+    if(routeIds.has(a.routeId)) (a.dropPoints||[]).forEach(dp=>{ if(dp.channelId) cids.add(dp.channelId); });
+  });
+  return state.data.channels.filter(ch=>cids.has(ch.id));
+}
+// 依供應商（出發點）結算請款，可勾選要一併請款的通路：直接沿用channelBillingTotal()
+// 已經驗證過的「星期一報價套用」邏輯（逐通路呼叫），只是額外用route.originAddr
+// 篩出屬於這個供應商的車趟，避免同一通路如果也有別的出發點時互相污染金額。
+// 未稅/含稅：依各通路自己設定的稅別（channel.taxInclusive）反推課稅金額，
+// 未稅通路加5%營業稅、含稅通路則反算出內含的未稅與稅額，最後加總成供應商總表。
+function originBillingBreakdown(originAddr, start, end, includedChannelIds){
+  const channelBreakdown = includedChannelIds.map(cid=>{
+    const ch = state.data.channels.find(c=>c.id===cid);
+    const { contributing } = channelBillingTotal(cid, start, end);
+    const scoped = contributing.filter(x=>{
+      const route = state.data.routes.find(r=>r.id===x.a.routeId);
+      return route && route.originAddr === originAddr;
+    });
+    const amount = scoped.reduce((s,x)=>s+x.amount, 0);
+    const tripCount = scoped.length;
+    const storeCount = scoped.reduce((s,x)=> s + (x.a.dropPoints||[]).filter(dp=>dp.channelId===cid).length, 0);
+    const taxIncl = ch ? ch.taxInclusive !== false : true;
+    const untaxed = taxIncl ? amount/1.05 : amount;
+    const tax = taxIncl ? amount-untaxed : amount*0.05;
+    const withTax = taxIncl ? amount : amount+tax;
+    return { cid, name: ch?ch.name:'（已刪除通路）', tripCount, storeCount, amount, untaxed, tax, withTax, scoped };
+  });
+  const rowMap = {};
+  channelBreakdown.forEach(cb=>{
+    cb.scoped.forEach(x=>{
+      const key = x.a.id;
+      if(!rowMap[key]) rowMap[key] = { date:x.a.date, routeId:x.a.routeId, driverId:x.a.driverId, a:x.a, amount:0 };
+      rowMap[key].amount += x.amount;
+    });
+  });
+  const rows = Object.values(rowMap).map(r=>({
+    date: r.date, routeId: r.routeId, driverId: r.driverId, amount: r.amount,
+    storeCount: (r.a.dropPoints||[]).filter(dp=>includedChannelIds.includes(dp.channelId)).length
+  })).sort((a,b)=> a.date.localeCompare(b.date));
+  const untaxedTotal = channelBreakdown.reduce((s,x)=>s+x.untaxed, 0);
+  const taxTotal = channelBreakdown.reduce((s,x)=>s+x.tax, 0);
+  const grandTotal = channelBreakdown.reduce((s,x)=>s+x.withTax, 0);
+  return { rows, channelBreakdown, untaxedTotal, taxTotal, grandTotal };
 }
 function driverMonthly(driverId, monthStr){
   const trips = state.data.assignments.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
@@ -485,49 +546,169 @@ function renderHomeDriver(c){
 }
 
 // ---------- 司機資料（含車輛、銀行細節） ----------
+let editingDriverId = null;
 function renderDrivers(c){
   c.innerHTML = `
     <div class="toolbar"><h2 class="section-title" style="margin:0;">司機資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部司機資料</button></div>
     <p class="section-sub">車輛掛靠司機本人，直接併入司機資料建置。</p>
     <div id="allDriversModal"></div>
     <div class="panel">
-      <div class="grid3">
-        <div class="field"><label>姓名</label><input id="dName"></div>
-        <div class="field"><label>電話</label><input id="dPhone"></div>
-        <div class="field"><label>LINE User ID</label><input id="dLine"></div>
+      <div class="form-tabs">
+        <button type="button" class="form-tab-btn active" data-formtab="basic">基本與車輛資訊</button>
+        <button type="button" class="form-tab-btn" data-formtab="finance">財務匯款帳戶</button>
       </div>
-      <div class="grid3">
-        <div class="field"><label>車牌</label><input id="dPlate"></div>
-        <div class="field"><label>車型</label><input id="dVType"></div>
-        <div class="field"><label>載重(kg)</label><input id="dVLoad" type="number"></div>
+      <div data-formpage="basic">
+        <div class="grid3">
+          <div class="field"><label>姓名</label><input id="dName"></div>
+          <div class="field"><label>電話</label><input id="dPhone"></div>
+          <div class="field"><label>LINE User ID</label><input id="dLine"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>車牌</label><input id="dPlate"></div>
+          <div class="field"><label>車型</label><input id="dVType"></div>
+          <div class="field"><label>載重(kg)</label><input id="dVLoad" type="number"></div>
+        </div>
+        <div class="field" style="max-width:160px;"><label>狀態</label>
+          <select id="dStatus"><option value="active">在職</option><option value="inactive">停用</option></select>
+        </div>
       </div>
-      <div class="grid4">
-        <div class="field"><label>銀行</label><input id="dBankName"></div>
-        <div class="field"><label>分行</label><input id="dBranch"></div>
-        <div class="field"><label>帳號</label><input id="dAccount"></div>
-        <div class="field"><label>戶名</label><input id="dHolder"></div>
-      </div>
-      <div class="field" style="max-width:160px;"><label>狀態</label>
-        <select id="dStatus"><option value="active">在職</option><option value="inactive">停用</option></select>
+      <div data-formpage="finance" hidden>
+        <div class="grid4">
+          <div class="field"><label>銀行</label><input id="dBankName"></div>
+          <div class="field"><label>分行</label><input id="dBranch"></div>
+          <div class="field"><label>帳號</label><input id="dAccount"></div>
+          <div class="field"><label>戶名</label><input id="dHolder"></div>
+        </div>
       </div>
       <button class="btn amber" id="addDriver">新增司機</button>
     </div>
     <div class="panel">
-      <table>
-        <thead><tr><th>姓名</th><th>電話</th><th>車牌</th><th>登入代碼</th><th>狀態</th><th></th></tr></thead>
-        <tbody>
-          ${state.data.drivers.map(d=>`
-            <tr>
-              <td>${d.name}</td><td>${d.phone||'—'}</td><td class="mono">${d.vehicle.plate||'—'}</td>
-              <td class="mono">${d.accessCode} <button class="btn ghost" data-regen="${d.id}" style="padding:2px 8px; font-size:11px;">重新產生</button></td>
-              <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
-              <td><button class="btn ghost" data-view="${d.id}">查看司機畫面</button> <button class="btn danger" data-del="${d.id}">刪除</button></td>
-            </tr>`).join('') || `<tr><td colspan="6"><div class="empty">尚無司機資料</div></td></tr>`}
-        </tbody>
-      </table>
+      <div id="driverCardList"></div>
       <p class="note" style="margin-top:10px;">登入代碼請私下告知司機本人（例如用LINE私訊），司機打開系統選「司機帳號」後輸入這組代碼即可看到自己的資料，不會看到其他司機。</p>
     </div>
   `;
+  c.querySelectorAll('.form-tab-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      c.querySelectorAll('.form-tab-btn').forEach(b=>b.classList.toggle('active', b===btn));
+      c.querySelectorAll('[data-formpage]').forEach(p=> p.hidden = (p.dataset.formpage !== btn.dataset.formtab));
+    };
+  });
+  function renderEditForm(d){
+    return `
+      <div class="form-tabs">
+        <button type="button" class="form-tab-btn active" data-etabtn="basic">基本與車輛資訊</button>
+        <button type="button" class="form-tab-btn" data-etabtn="finance">財務匯款帳戶</button>
+      </div>
+      <div data-etapage="basic">
+        <div class="grid3">
+          <div class="field"><label>姓名</label><input id="eName" value="${d.name}"></div>
+          <div class="field"><label>電話</label><input id="ePhone" value="${d.phone||''}"></div>
+          <div class="field"><label>LINE User ID</label><input id="eLine" value="${d.lineId||''}"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>車牌</label><input id="ePlate" value="${d.vehicle.plate||''}"></div>
+          <div class="field"><label>車型</label><input id="eVType" value="${d.vehicle.type||''}"></div>
+          <div class="field"><label>載重(kg)</label><input id="eVLoad" type="number" value="${d.vehicle.load||''}"></div>
+        </div>
+        <div class="field" style="max-width:160px;"><label>狀態</label>
+          <select id="eStatus"><option value="active" ${d.status==='active'?'selected':''}>在職</option><option value="inactive" ${d.status!=='active'?'selected':''}>停用</option></select>
+        </div>
+      </div>
+      <div data-etapage="finance" hidden>
+        <div class="grid4">
+          <div class="field"><label>銀行</label><input id="eBankName" value="${d.bank.bankName||''}"></div>
+          <div class="field"><label>分行</label><input id="eBranch" value="${d.bank.branch||''}"></div>
+          <div class="field"><label>帳號</label><input id="eAccount" value="${d.bank.account||''}"></div>
+          <div class="field"><label>戶名</label><input id="eHolder" value="${d.bank.holder||''}"></div>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button class="btn amber" data-savedriver="${d.id}">儲存</button>
+        <button class="btn ghost" data-canceldriver="${d.id}">取消</button>
+      </div>`;
+  }
+  function renderDriverCards(){
+    const listEl = document.getElementById('driverCardList');
+    listEl.innerHTML = state.data.drivers.map(d=>{
+      if(editingDriverId === d.id){
+        return `<div class="driver-card">${renderEditForm(d)}</div>`;
+      }
+      return `
+      <div class="driver-card">
+        <div class="driver-card-head">
+          <div>
+            <div class="driver-card-name">${d.name} <span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></div>
+            <div class="driver-card-sub">
+              電話：${d.phone||'—'}　車牌：${d.vehicle.plate||'—'}<br>
+              登入代碼：<span class="mono">${d.accessCode}</span>
+            </div>
+          </div>
+        </div>
+        <div class="driver-card-actions">
+          <button class="btn ghost" data-view="${d.id}">查看司機畫面</button>
+          <button class="btn ghost" data-editdriver="${d.id}">編輯</button>
+          <button class="btn ghost" data-regen="${d.id}">重新產生代碼</button>
+          <button class="btn danger" data-del="${d.id}">刪除</button>
+        </div>
+      </div>`;
+    }).join('') || `<div class="empty">尚無司機資料</div>`;
+    listEl.querySelectorAll('[data-etabtn]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const card = btn.closest('.driver-card');
+        card.querySelectorAll('[data-etabtn]').forEach(b=>b.classList.toggle('active', b===btn));
+        card.querySelectorAll('[data-etapage]').forEach(p=> p.hidden = (p.dataset.etapage !== btn.dataset.etabtn));
+      };
+    });
+    listEl.querySelectorAll('[data-editdriver]').forEach(btn=>{
+      btn.onclick = ()=>{ editingDriverId = btn.dataset.editdriver; renderDriverCards(); };
+    });
+    listEl.querySelectorAll('[data-canceldriver]').forEach(btn=>{
+      btn.onclick = ()=>{ editingDriverId = null; renderDriverCards(); };
+    });
+    listEl.querySelectorAll('[data-savedriver]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const id = btn.dataset.savedriver;
+        const name = document.getElementById('eName').value.trim();
+        if(!name){ alert('請輸入姓名'); return; }
+        try{
+          await updateDriverProfile(id, {
+            name,
+            status: document.getElementById('eStatus').value,
+            phone: document.getElementById('ePhone').value.trim(),
+            lineId: document.getElementById('eLine').value.trim(),
+            plate: document.getElementById('ePlate').value.trim(),
+            vtype: document.getElementById('eVType').value.trim(),
+            vload: document.getElementById('eVLoad').value,
+            bankName: document.getElementById('eBankName').value.trim(),
+            branch: document.getElementById('eBranch').value.trim(),
+            account: document.getElementById('eAccount').value.trim(),
+            holder: document.getElementById('eHolder').value.trim()
+          }, '基本資料（管理端編輯）');
+          editingDriverId = null;
+          renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-regen]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{ await regenerateDriverAccessCode(btn.dataset.regen); renderContent(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-view]').forEach(btn=>{
+      btn.onclick = ()=> viewAsDriver(btn.dataset.view);
+    });
+    listEl.querySelectorAll('[data-del]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        try{
+          const result = await deleteOrDeactivateDriver(btn.dataset.del);
+          if(result==='deactivated') alert('這位司機已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
+          renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+  }
+  renderDriverCards();
   document.getElementById('addDriver').onclick = async ()=>{
     const name = document.getElementById('dName').value.trim();
     if(!name){ alert('請輸入姓名'); return; }
@@ -548,24 +729,6 @@ function renderDrivers(c){
       renderContent();
     }catch(err){ alert(err.message); }
   };
-  c.querySelectorAll('[data-regen]').forEach(btn=>{
-    btn.onclick = async ()=>{
-      try{ await regenerateDriverAccessCode(btn.dataset.regen); renderContent(); }
-      catch(err){ alert(err.message); }
-    };
-  });
-  c.querySelectorAll('[data-view]').forEach(btn=>{
-    btn.onclick = ()=> viewAsDriver(btn.dataset.view);
-  });
-  c.querySelectorAll('[data-del]').forEach(btn=>{
-    btn.onclick = async ()=>{
-      try{
-        const result = await deleteOrDeactivateDriver(btn.dataset.del);
-        if(result==='deactivated') alert('這位司機已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
-        renderContent();
-      }catch(err){ alert(err.message); }
-    };
-  });
   document.getElementById('viewAllDriversBtn').onclick = openAllDriversModal;
 }
 function isDriverReferenced(id){ return state.data.assignments.some(a=>a.driverId===id); }
@@ -963,7 +1126,9 @@ function ensureDraft(route){
     const open = (route.versions||[]).find(v=>!v.end);
     routeDraft[route.id] = {
       order: open ? [...open.dropPointIds] : [], dpSearch: '',
-      distanceKm: open?.distanceKm ?? '', driverFare: open?.driverFare ?? '', billingTotal: open?.billingTotal ?? ''
+      distanceKm: open?.distanceKm ?? '', driverFare: open?.driverFare ?? '', billingTotal: open?.billingTotal ?? '',
+      billingByChannel: open?.billingByChannel ? {...open.billingByChannel} : null,
+      splitManuallyEdited: false
     };
   }
   return routeDraft[route.id];
@@ -1050,7 +1215,16 @@ function renderRouteDetail(rid){
       </div>
       <p style="font-size:12.5px; color:var(--ink-soft);">出發點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改出發點請新增一條路線）</p>
       ${openVersion ? `<h4 style="margin:10px 0 4px;">目前生效版本</h4>${renderVer(openVersion)}` : ''}
-      ${closedVersions.length ? `<h4 style="margin:10px 0 4px;">歷史版本（${closedVersions.length}筆，唯讀不可修改或刪除）</h4>${closedVersions.slice(-3).map(renderVer).join('')}${closedVersions.length>3?'<p style="font-size:11.5px;color:var(--ink-soft);">僅顯示最近3筆歷史版本</p>':''}` : ''}
+      ${closedVersions.length ? `
+        <div class="toolbar" style="margin-top:10px;">
+          <label style="font-size:12.5px; font-weight:600;">查看歷史版本（共${closedVersions.length}筆，唯讀不可修改或刪除）</label>
+          <select id="verHistorySelect" style="max-width:260px;">
+            <option value="">－請選擇－</option>
+            ${closedVersions.slice().reverse().map(v=>`<option value="${v.id}">${v.start} ~ ${v.end}</option>`).join('')}
+          </select>
+        </div>
+        <div id="verHistoryDetail"></div>
+      ` : ''}
       ${!versions.length ? '<div class="empty">尚無版本，請於下方建立</div>' : ''}
       <div class="field" style="margin-top:10px; max-width:220px;"><label>生效日期</label><input type="date" value="${todayStr()}" data-effdate="${r.id}"></div>
 
@@ -1078,10 +1252,18 @@ function renderRouteDetail(rid){
         <div class="field"><label>司機費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
         <div class="field"><label>請款總額（元）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
-      <p class="note" id="rvSplitPreview" style="margin:4px 0 10px;"></p>
+      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋）</label>
+      <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
   `;
+  const verHistorySelect = document.getElementById('verHistorySelect');
+  if(verHistorySelect){
+    verHistorySelect.onchange = ()=>{
+      const v = closedVersions.find(x=>x.id===verHistorySelect.value);
+      document.getElementById('verHistoryDetail').innerHTML = v ? renderVer(v) : '';
+    };
+  }
   function renderDpSearchResults(){
     const kw = (draft.dpSearch||'').trim().toLowerCase();
     const resultsEl = document.getElementById('dpSearchResults');
@@ -1143,13 +1325,43 @@ function renderRouteDetail(rid){
       renderRouteDetail(rid2);
     };
   });
-  function refreshSplitPreview(){
-    const previewEl = document.getElementById('rvSplitPreview');
-    if(!previewEl) return;
-    const billingTotal = document.getElementById('rvBilling').value;
-    if(billingTotal === '' || !draft.order.length){ previewEl.textContent = ''; return; }
-    const split = computeChannelSplitByStoreCount(draft.order, billingTotal);
-    previewEl.textContent = '拆賬預覽：' + Object.entries(split).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、');
+  // 拆賬金額改成人工輸入：只要admin還沒手動改過任何一格，這裡就依「里程/請款總額」
+  // 變動自動重新建議一組預設值（沿用原本依店數比例分攤的公式）方便快速上手；
+  // admin只要改過其中一格，就不再自動覆蓋，全部以人工輸入的數字為準存檔。
+  function channelsInDraft(){
+    const ids = new Set();
+    draft.order.forEach(dpId=>{
+      const dp = state.data.dropPoints.find(x=>x.id===dpId);
+      if(dp) ids.add(dp.channelId);
+    });
+    if(draft.billingByChannel) Object.keys(draft.billingByChannel).forEach(cid=>ids.add(cid));
+    return Array.from(ids);
+  }
+  function renderSplitInputs(){
+    const el = document.getElementById('rvSplitInputs');
+    if(!el) return;
+    if(!draft.splitManuallyEdited){
+      const suggested = computeChannelSplitByStoreCount(draft.order, draft.billingTotal);
+      draft.billingByChannel = suggested;
+    }
+    const cids = channelsInDraft();
+    if(!cids.length){ el.innerHTML = '<span style="font-size:12px;color:var(--ink-soft);">尚未加入下貨點</span>'; return; }
+    el.innerHTML = cids.map(cid=>`
+      <div class="field" style="display:inline-block; max-width:160px; margin-right:10px;">
+        <label>${channelName(cid)}</label>
+        <input type="number" data-splitch="${cid}" value="${draft.billingByChannel?.[cid] ?? 0}">
+      </div>`).join('');
+    const sum = cids.reduce((s,cid)=> s + (Number(draft.billingByChannel?.[cid])||0), 0);
+    const billingTotal = Number(draft.billingTotal)||0;
+    el.innerHTML += `<div style="font-size:11.5px; color:${sum!==billingTotal?'#B5493A':'var(--ink-soft)'}; margin-top:4px;">拆賬合計 $${money(sum)}　${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}</div>`;
+    el.querySelectorAll('[data-splitch]').forEach(input=>{
+      input.oninput = ()=>{
+        draft.splitManuallyEdited = true;
+        if(!draft.billingByChannel) draft.billingByChannel = {};
+        draft.billingByChannel[input.dataset.splitch] = Number(input.value)||0;
+        renderSplitInputs();
+      };
+    });
   }
   ['rvDistance','rvFare','rvBilling'].forEach(id=>{
     const el = document.getElementById(id);
@@ -1157,10 +1369,10 @@ function renderRouteDetail(rid){
       draft.distanceKm = document.getElementById('rvDistance').value;
       draft.driverFare = document.getElementById('rvFare').value;
       draft.billingTotal = document.getElementById('rvBilling').value;
-      refreshSplitPreview();
+      renderSplitInputs();
     };
   });
-  refreshSplitPreview();
+  renderSplitInputs();
   detailEl.querySelectorAll('[data-savever]').forEach(btn=>{
     btn.onclick = async ()=>{
       const rid2 = btn.dataset.savever;
@@ -1171,7 +1383,8 @@ function renderRouteDetail(rid){
         await saveRouteVersion(rid2, effDate, ids, {
           distanceKm: document.getElementById('rvDistance').value,
           driverFare: document.getElementById('rvFare').value,
-          billingTotal: document.getElementById('rvBilling').value
+          billingTotal: document.getElementById('rvBilling').value,
+          billingByChannel: routeDraft[rid2].billingByChannel || {}
         });
         delete routeDraft[rid2];
         renderContent();
@@ -1541,49 +1754,61 @@ function renderPayroll(c){
 
 // ---------- 請款結算 ----------
 function renderBilling(c){
-  const month = state._billingMonth || todayStr().slice(0,7);
-  const chOpts = state.data.channels.map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  const originOpts = state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  const defaultStart = `${todayStr().slice(0,7)}-01`;
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">每趟車的請款金額跟著路線管理裡設定的版本走：人工填請款總額，系統依「扣除整趟計費通路後，其餘通路依下貨點數比例分攤」算出各通路金額。路線名稱如果有標註星期（例如「（週二到週五）」），請款單上會自動省略不顯示。</p>
+    <p class="section-sub">依供應商（出發點）結算，勾選要一併請款的通路即可，取消勾選會自動排除該通路並重新計算未稅/含稅總額。每趟車的金額跟著路線管理裡設定的版本走；有星期一報價版本的路線，一律套用星期一版本的拆賬金額。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
     <div class="panel">
-      <div class="grid2">
-        <div class="field"><label>通路</label><select id="bChannel">${chOpts}</select></div>
-        <div class="field"><label>對應月份</label><input id="bMonth" type="month" value="${month}"></div>
+      <div class="grid3">
+        <div class="field"><label>供應商（出發點）</label><select id="bOrigin">${originOpts}</select></div>
+        <div class="field"><label>區間起</label><input id="bStart" type="date" value="${defaultStart}"></div>
+        <div class="field"><label>區間迄</label><input id="bEnd" type="date" value="${todayStr()}"></div>
       </div>
-      <div class="grid2">
-        <div class="field"><label>區間起（可調整）</label><input id="bStart" type="date"></div>
-        <div class="field"><label>區間迄（可調整）</label><input id="bEnd" type="date"></div>
+      <div class="field">
+        <label>包含通路（取消勾選會排除該通路並重新計算金額）</label>
+        <div id="bChannelChecks" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;"></div>
       </div>
     </div>
     <div id="billingResult"></div>`;
+  function refreshChecks(){
+    const originAddr = document.getElementById('bOrigin').value;
+    const chs = channelsForOrigin(originAddr);
+    const checksEl = document.getElementById('bChannelChecks');
+    checksEl.innerHTML = chs.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" checked style="width:auto;">${ch.name}</label>`).join('') || '<span style="font-size:12px; color:var(--ink-soft);">此供應商尚無相關通路的車趟紀錄</span>';
+    checksEl.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = refresh);
+  }
   function refresh(){
-    const channelId = document.getElementById('bChannel').value;
-    const monthStr = document.getElementById('bMonth').value;
-    state._billingMonth = monthStr;
-    const channel = state.data.channels.find(ch=>ch.id===channelId);
-    if(!channel){ document.getElementById('billingResult').innerHTML='<div class="empty">請先建立通路</div>'; return; }
-    let period = defaultPeriod(channel, monthStr);
-    const startInput = document.getElementById('bStart'), endInput = document.getElementById('bEnd');
-    if(!startInput.value) startInput.value = period.start;
-    if(!endInput.value) endInput.value = period.end;
-    const start = startInput.value, end = endInput.value;
-    const r = channelBillingTotal(channelId, start, end);
+    const originAddr = document.getElementById('bOrigin').value;
+    const og = state.data.origins.find(o=>o.address===originAddr);
+    const start = document.getElementById('bStart').value, end = document.getElementById('bEnd').value;
+    const included = Array.from(document.querySelectorAll('.bChCheck:checked')).map(cb=>cb.value);
+    if(!start || !end || !included.length){
+      document.getElementById('billingResult').innerHTML = `<div class="panel"><div class="empty">請選擇區間並至少勾選一個通路</div></div>`;
+      return;
+    }
+    const r = originBillingBreakdown(originAddr, start, end, included);
     document.getElementById('billingResult').innerHTML = `
       <div class="panel">
-        <h3 style="margin-top:0;">${channel.name} — ${start} ~ ${end} 請款總額：<span class="amount">$${money(r.total.toFixed(0))}</span></h3>
+        <h3 style="margin-top:0;">${og?(og.label||og.address):''} — ${start} ~ ${end}</h3>
         <table>
-          <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>該通路分攤金額</th></tr></thead>
-          <tbody>${r.contributing.map(x=>`<tr><td>${x.a.date}</td><td>${stripWeekdayLabel(routeName(x.a.routeId))}</td><td>${driverName(x.a.driverId)}</td><td class="amount">$${money(x.amount.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
+          <thead><tr><th>通路</th><th>車趟數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
+          <tbody>${r.channelBreakdown.map(x=>`<tr><td>${x.name}</td><td>${x.tripCount}</td><td>${x.storeCount}</td><td class="amount">$${money(x.untaxed.toFixed(0))}</td><td class="amount">$${money(x.tax.toFixed(0))}</td><td class="amount">$${money(x.withTax.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
+          <tfoot><tr><td><strong>合計</strong></td><td></td><td></td><td class="amount"><strong>$${money(r.untaxedTotal.toFixed(0))}</strong></td><td class="amount"><strong>$${money(r.taxTotal.toFixed(0))}</strong></td><td class="amount"><strong>$${money(r.grandTotal.toFixed(0))}</strong></td></tr></tfoot>
+        </table>
+        <h4 style="margin:14px 0 6px;">逐日明細（車趟、配送店次與每日單價）</h4>
+        <table>
+          <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>配送店次</th><th>當日金額</th></tr></thead>
+          <tbody>${r.rows.map(x=>`<tr><td>${x.date}</td><td>${stripWeekdayLabel(routeName(x.routeId))}</td><td>${driverName(x.driverId)}</td><td>${x.storeCount}</td><td class="amount">$${money(x.amount.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
         </table>
         <button class="btn amber no-print" id="printBilling" style="margin-top:10px;">產生請款單（列印/另存PDF）</button>
       </div>`;
-    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('printBilling').closest('.panel'), `${channel.name}_${start}_${end}_請款單`);
+    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('printBilling').closest('.panel'), `${og?(og.label||og.address):'請款單'}_${start}_${end}_請款單`);
   }
-  document.getElementById('bChannel').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
-  document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
+  document.getElementById('bOrigin').onchange = ()=>{ refreshChecks(); refresh(); };
   document.getElementById('bStart').onchange = refresh;
   document.getElementById('bEnd').onchange = refresh;
+  refreshChecks();
   refresh();
 }
 

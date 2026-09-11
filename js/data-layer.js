@@ -286,6 +286,8 @@ async function deleteOrDeactivateDriver(driverId) {
 // 沒傳的話通知訊息會用比較籠統的說法。
 async function updateDriverProfile(driverId, fields, changeSummary) {
   const payload = {};
+  if ('name' in fields) payload.name = fields.name || null;
+  if ('status' in fields) payload.status = fields.status || 'active';
   if ('phone' in fields) payload.phone = fields.phone || null;
   if ('lineId' in fields) payload.line_user_id = fields.lineId || null;
   if ('plate' in fields) payload.vehicle_plate = fields.plate || null;
@@ -525,7 +527,11 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   if (!route) throw new Error('找不到路線');
   const supabase = getSupabase();
 
-  const billingByChannel = computeChannelSplitByStoreCount(dropPointIds, finance?.billingTotal);
+  // 拆賬金額改成人工輸入（見 index.html renderRouteDetail 的 rvSplitInputs），
+  // 這裡直接採用呼叫端給的數字；只有在完全沒給的情況下才退回自動依店數比例算一次。
+  const billingByChannel = (finance && finance.billingByChannel && Object.keys(finance.billingByChannel).length)
+    ? finance.billingByChannel
+    : computeChannelSplitByStoreCount(dropPointIds, finance?.billingTotal);
   const financePayload = {
     distance_km: finance?.distanceKm === '' || finance?.distanceKm == null ? null : Number(finance.distanceKm),
     driver_fare: finance?.driverFare === '' || finance?.driverFare == null ? null : Number(finance.driverFare),
