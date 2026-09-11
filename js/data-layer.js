@@ -27,7 +27,8 @@ function mapChannel(row) {
     id: row.id, name: row.name, periodType: row.period_type,
     startDay: row.start_day, endDay: row.end_day, status: row.status,
     formulaType: row.formula_type, rateKm: Number(row.rate_km), ratePoint: Number(row.rate_point),
-    flatAmount: Number(row.flat_amount), taxInclusive: row.tax_inclusive !== false
+    flatAmount: Number(row.flat_amount), taxInclusive: row.tax_inclusive !== false,
+    accessToken: row.access_token || ''
   };
 }
 
@@ -344,6 +345,18 @@ async function deleteOrDeactivateChannel(channelId) {
   if (error) throw new Error('刪除通路失敗：' + error.message);
   state.data.channels = state.data.channels.filter(c => c.id !== channelId);
   return 'deleted';
+}
+
+// 客戶專屬瀏覽網頁用的權杖：一長串隨機亂碼，知道網址（含這組權杖）就能看，
+// 不需要帳號密碼。可以重新產生（會讓舊連結失效，例如合作終止或連結外流時用）。
+async function regenerateChannelAccessToken(channelId) {
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b => b.toString(16).padStart(2, '0')).join('');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('channels').update({ access_token: token }).eq('id', channelId);
+  if (error) throw new Error('產生客戶連結失敗：' + error.message);
+  const ch = state.data.channels.find(c => c.id === channelId);
+  if (ch) ch.accessToken = token;
+  return token;
 }
 
 // ---------------- 出發點 ----------------

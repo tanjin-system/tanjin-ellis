@@ -614,11 +614,11 @@ function renderChannelList(){
   el.innerHTML = `
     <div class="panel">
       <table>
-        <thead><tr><th>通路</th><th>請款依據</th><th>週期規則</th><th>狀態</th><th></th></tr></thead>
+        <thead><tr><th>通路</th><th>請款依據</th><th>週期規則</th><th>狀態</th><th>客戶專屬連結</th><th></th></tr></thead>
         <tbody>
           ${state.data.channels.map(ch=>{
             if(editingChannelId === ch.id){
-              return `<tr><td colspan="5">
+              return `<tr><td colspan="6">
                 <div class="grid4">
                   <div class="field"><label>通路名稱</label><input id="ecName" value="${ch.name}"></div>
                   <div class="field"><label>週期類型</label>
@@ -643,20 +643,35 @@ function renderChannelList(){
               </td></tr>`;
             }
             const formulaText = (ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`) + `・${ch.taxInclusive?'含稅':'未稅'}`;
+            const clientUrl = ch.accessToken ? `${location.origin}/client.html?token=${ch.accessToken}` : '';
             return `<tr>
               <td>${ch.name}</td>
               <td>${formulaText}</td>
               <td>${ch.periodType==='calendar_month'?'自然月 1~月底':'每月'+ch.startDay+'日 至 次月'+ch.endDay+'日'}</td>
               <td><span class="badge ${ch.status==='inactive'?'pending':'completed'}">${ch.status==='inactive'?'已停用':'使用中'}</span></td>
+              <td>${clientUrl ? `<input class="mono" readonly value="${clientUrl}" style="font-size:11px; padding:4px 6px;" onclick="this.select()"> <button class="btn ghost" data-regentoken="${ch.id}" style="padding:2px 8px; font-size:11px; margin-top:4px;">重新產生</button>` : `<button class="btn ghost" data-gentoken="${ch.id}" style="padding:4px 8px; font-size:12px;">產生連結</button>`}</td>
               <td><button class="btn ghost" data-editch="${ch.id}">編輯</button> ${ch.status!=='inactive'?`<button class="btn danger" data-del="${ch.id}">刪除</button>`:''}</td>
             </tr>`;
-          }).join('') || `<tr><td colspan="5"><div class="empty">尚無通路</div></td></tr>`}
+          }).join('') || `<tr><td colspan="6"><div class="empty">尚無通路</div></td></tr>`}
         </tbody>
       </table>
     </div>
   `;
   el.querySelectorAll('[data-editch]').forEach(btn=>{ btn.onclick = ()=>{ editingChannelId = btn.dataset.editch; renderChannelList(); }; });
   el.querySelectorAll('[data-cancelch]').forEach(btn=>{ btn.onclick = ()=>{ editingChannelId = null; renderChannelList(); }; });
+  el.querySelectorAll('[data-gentoken]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{ await regenerateChannelAccessToken(btn.dataset.gentoken); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-regentoken]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('重新產生會讓舊的客戶連結失效，客戶需要改用新連結。確定要繼續嗎？')) return;
+      try{ await regenerateChannelAccessToken(btn.dataset.regentoken); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
   el.querySelectorAll('[data-savech]').forEach(btn=>{
     btn.onclick = async ()=>{
       const ch = state.data.channels.find(x=>x.id===btn.dataset.savech);

@@ -55,6 +55,10 @@ create table channels (
   rate_point numeric not null default 50,
   flat_amount numeric not null default 0,
   tax_inclusive boolean not null default true,
+  -- 客戶專屬瀏覽頁用的存取權杖：知道這組亂碼＝能看這個通路的送達照片/時間/門市，
+  -- 不需要帳號密碼。驗證完全在後端 api/client-data.js 用 service role key 做，
+  -- 這裡刻意不開放 anon 角色直接查詢，資料庫層級維持完全鎖死。
+  access_token text unique,
   created_at timestamptz not null default now()
 );
 
