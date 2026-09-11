@@ -181,11 +181,12 @@ function exportPrintable(title, bodyHtml){
   if(previewWin){
     previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
   }
-  // wrap 一定要用 position:fixed 釘在畫面左上角、並給明確寬度：
-  // 如果只是append在body最後面，畫面本身很長（SPA內容很多），wrap會被排在
-  // 使用者目前捲動位置的下方甚至螢幕外，html2canvas截圖時內容常常是空的或只截到一角。
+  // 注意：wrap 不能用 position:fixed/absolute——實測html2canvas對這個函式庫版本
+  // 的離版面定位元素會量到高度0，截出全空白PDF。維持一般文件流（直接接在body
+  // 最後面），但給明確寬度，避免受周圍版面影響；html2canvas是用getBoundingClientRect
+  // 抓元素位置，不受目前捲動位置影響，所以就算頁面很長也不會截錯。
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:fixed; top:0; left:0; width:1050px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff; z-index:-1;';
+  wrap.style.cssText = 'width:1050px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
   wrap.innerHTML = `
     <style>
       table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
@@ -201,7 +202,7 @@ function exportPrintable(title, bodyHtml){
   html2pdf().set({
     margin: 10,
     filename,
-    html2canvas: { scale: 2, useCORS: true, windowWidth: 1050, scrollX: 0, scrollY: 0 },
+    html2canvas: { scale: 2, useCORS: true },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
   }).from(wrap).outputPdf('blob').then(blob=>{
     document.body.removeChild(wrap);
