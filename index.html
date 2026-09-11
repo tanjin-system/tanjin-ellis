@@ -70,6 +70,7 @@
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
   .modal-box .toolbar{ margin-bottom:10px; }
   .sig-modal-backdrop{ position:fixed; inset:0; background:#15181D; z-index:300; display:flex; flex-direction:column; }
+  .sig-modal-backdrop.sig-force-landscape{ inset:auto; top:50%; left:50%; width:100vh; height:100vw; transform:translate(-50%,-50%) rotate(90deg); transform-origin:center center; }
   .sig-modal-canvas-wrap{ flex:1; position:relative; background:#fff; margin:16px; border-radius:8px; overflow:hidden; min-height:0; }
   .sig-modal-canvas-wrap canvas{ width:100%; height:100%; touch-action:none; display:block; }
   .sig-watermark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:13vw; color:rgba(0,0,0,.06); font-weight:700; pointer-events:none; letter-spacing:2vw; white-space:nowrap; }
@@ -180,8 +181,11 @@ function exportPrintable(title, bodyHtml){
   if(previewWin){
     previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
   }
+  // wrap 一定要用 position:fixed 釘在畫面左上角、並給明確寬度：
+  // 如果只是append在body最後面，畫面本身很長（SPA內容很多），wrap會被排在
+  // 使用者目前捲動位置的下方甚至螢幕外，html2canvas截圖時內容常常是空的或只截到一角。
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+  wrap.style.cssText = 'position:fixed; top:0; left:0; width:1050px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff; z-index:-1;';
   wrap.innerHTML = `
     <style>
       table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
@@ -197,7 +201,7 @@ function exportPrintable(title, bodyHtml){
   html2pdf().set({
     margin: 10,
     filename,
-    html2canvas: { scale: 2, useCORS: true },
+    html2canvas: { scale: 2, useCORS: true, windowWidth: 1050, scrollX: 0, scrollY: 0 },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
   }).from(wrap).outputPdf('blob').then(blob=>{
     document.body.removeChild(wrap);
@@ -1878,8 +1882,11 @@ function renderMyProfile(c){
 // 全畫面橫版簽名視窗：點「已確認報酬」才跳出來簽，簽完按☑️送出、按❌取消不送出。
 function openSignatureModal(record){
   const host = document.getElementById('sigModalHost');
+  // 手機直放時簽名畫布會又窄又長不好簽，這裡用CSS把整個視窗轉90度，
+  // 讓司機不用自己轉手機也能用橫式畫面簽名（平板/電腦本來就是橫的就不用轉）。
+  const isPortrait = window.innerHeight > window.innerWidth;
   host.innerHTML = `
-    <div class="sig-modal-backdrop" id="sigBackdrop">
+    <div class="sig-modal-backdrop${isPortrait ? ' sig-force-landscape' : ''}" id="sigBackdrop">
       <div class="sig-modal-canvas-wrap">
         <div class="sig-watermark">請簽名</div>
         <canvas id="sigPad"></canvas>
@@ -1897,10 +1904,13 @@ function openSignatureModal(record){
   const ctx = canvas.getContext('2d');
   function resizeCanvas(){
     const rect = wrapEl.getBoundingClientRect();
+    const prev = canvas.width ? canvas.toDataURL('image/png') : null;
     canvas.width = rect.width * 2; canvas.height = rect.height * 2;
     ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.strokeStyle = '#1B2129';
+    if(prev){ const img = new Image(); img.onload = ()=> ctx.drawImage(img,0,0,canvas.width,canvas.height); img.src = prev; }
   }
   resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
   let drawing = false, hasSignature = false;
   function pos(e){
     const rect = canvas.getBoundingClientRect();
@@ -1911,11 +1921,12 @@ function openSignatureModal(record){
   canvas.addEventListener('pointermove', e=>{ if(!drawing) return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); });
   window.addEventListener('pointerup', ()=>{ drawing=false; });
   document.getElementById('sigClear').onclick = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); hasSignature=false; };
-  document.getElementById('sigCancel').onclick = ()=>{ host.innerHTML=''; };
+  document.getElementById('sigCancel').onclick = ()=>{ window.removeEventListener('resize', resizeCanvas); host.innerHTML=''; };
   document.getElementById('sigConfirm').onclick = async ()=>{
     if(!hasSignature){ alert('請先簽名再送出'); return; }
     try{
       await signStatement(record.id, canvas.toDataURL('image/png'));
+      window.removeEventListener('resize', resizeCanvas);
       host.innerHTML='';
       renderContent();
     }catch(err){ alert(err.message); }

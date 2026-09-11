@@ -62,5 +62,34 @@ module.exports = async (req, res) => {
     photoUrl: p.photo_url ? (signedUrls[p.photo_url] || null) : null
   }));
 
-  return res.status(200).json({ channelName: channel.name, deliveries });
+  // 讓客戶看到「這通路自己」最新的安排行程（尚未送達的部分），滿足「隨路線管理異動
+  // 即時更新」的需求——這裡直接查即時資料，沒有做任何快取。
+  // 安全上只用 channel_id 篩出這個通路自己的下貨點，绝不會帶到同一趟車上其他通路
+  // 的站點，也完全不選 fare/distance/billing 等金額欄位，所以無論哪個通路的連結，
+  // 客戶都看不到司機費用，也看不到共配車趟上其他客戶的行程。
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const { data: upcomingRows, error: upErr } = await supabase
+    .from('assignment_drop_points')
+    .select('id, address, code, sequence_no, assignments!inner(trip_date, status)')
+    .eq('channel_id', channel.id)
+    .eq('status', 'pending')
+    .gte('assignments.trip_date', today.toISOString().slice(0, 10))
+    .neq('assignments.status', 'cancelled')
+    .order('sequence_no', { ascending: true })
+    .limit(300);
+  if (upErr) {
+    console.error('client-data upcoming query failed:', upErr.message);
+    return res.status(500).json({ error: '伺服器錯誤，請稍後再試' });
+  }
+
+  const upcoming = (upcomingRows || [])
+    .map(p => ({
+      id: p.id,
+      name: p.code || p.address,
+      tripDate: p.assignments.trip_date
+    }))
+    .sort((a, b) => a.tripDate.localeCompare(b.tripDate));
+
+  return res.status(200).json({ channelName: channel.name, deliveries, upcoming });
 };
