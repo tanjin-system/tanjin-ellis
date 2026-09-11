@@ -95,11 +95,12 @@ function mapAssignment(row) {
   };
 }
 
-// 下貨點顯示用文字：有代號時代號在前、地址在後（例："萬家福桂林店 臺北市萬華區仁德里桂林路1號"），
-// 沒代號就只顯示地址。司機端行程畫面、即時通知訊息都共用這個格式。
+// 下貨點顯示用文字：全系統只顯示代號（例如"萬家福桂林店"），不顯示地址，
+// 只有「下貨點資料庫」那個管理頁面本身例外會顯示完整地址。沒設代號的下貨點
+// 才退回顯示地址（沒有別的資訊可顯示）。
 function dpLabel(dp) {
   if (!dp) return '';
-  return dp.code ? `${dp.code} ${dp.address}` : dp.address;
+  return dp.code || dp.address;
 }
 
 function mapAdjustment(row) {
