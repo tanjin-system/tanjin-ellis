@@ -35,6 +35,7 @@ create table drivers (
   bank_branch text,
   bank_account text,
   bank_holder text,
+  id_number text, -- 身分證／居留證號，勞務報酬單「所得人」欄位自動帶入用
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -215,7 +216,17 @@ create table statements (
   statement_month date not null,
   trip_total numeric not null default 0,
   adj_total numeric not null default 0,
-  net_amount numeric not null default 0,
+  net_amount numeric not null default 0, -- 報酬總額（車趟+調整項，未扣稅/健保前）
+  -- 以下是勞務報酬單的稅務/健保欄位，月結確認當下由系統自動判斷並凍結，
+  -- 道理跟 trip_total/adj_total/net_amount 一樣（司機回簽後金額不再變動）。
+  income_type text, -- 所得類別，全體司機固定套用同一個值（見 index.html 的 PAYROLL_INCOME_TYPE 常數）
+  withhold_tax boolean not null default false,
+  tax_rate numeric not null default 0,
+  tax_amount numeric not null default 0,
+  withhold_nhi boolean not null default false,
+  nhi_rate numeric not null default 0,
+  nhi_amount numeric not null default 0,
+  actual_net_amount numeric not null default 0, -- 實領金額 = net_amount − tax_amount − nhi_amount
   status text not null default 'awaiting_signature' check (status in ('awaiting_signature','signed')),
   confirmed_at timestamptz,
   signed_at timestamptz,

@@ -317,6 +317,66 @@ function exportPanelPrint(panelEl, title){
   clone.querySelectorAll('.no-print').forEach(el=>el.remove());
   exportPrintable(title, clone.innerHTML);
 }
+// 勞報單專用的直式PDF：每份 slipHtml（payrollSlipHtml() 產生的字串）固定佔
+// 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週班表那樣允許
+// 跨頁），符合「一位司機只能呈現一張直式勞報單」的規定；slipHtmls 傳多筆
+// 時，每筆各自佔一頁，組成同一份合併PDF，方便一次下載全體司機的勞報單。
+async function exportPayrollPortraitPdf(slipHtmls, filename){
+  if(!slipHtmls || !slipHtmls.length){ alert('沒有可產生的勞報單內容'); return; }
+  const previewWin = window.open('', '_blank');
+  if(previewWin){
+    previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
+  }
+  const scrollX = window.scrollX || window.pageXOffset || 0;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  try{
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
+    const marginMm = 10;
+    const pageWmm = pdf.internal.pageSize.getWidth() - marginMm*2;
+    const pageHmm = pdf.internal.pageSize.getHeight() - marginMm*2;
+    for(let i=0;i<slipHtmls.length;i++){
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'width:700px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+      wrap.innerHTML = `<style>
+        table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-top:8px; }
+        th,td{ padding:6px 8px; border:1px solid #999; text-align:left; }
+        h3,h4{ margin:0 0 8px; }
+        .amount{ font-family:monospace; font-weight:700; }
+      </style>${slipHtmls[i]}`;
+      document.body.appendChild(wrap);
+      const canvas = await html2canvas(wrap, { scale:2, useCORS:true, scrollX:-scrollX, scrollY:-scrollY, windowWidth:document.documentElement.scrollWidth, windowHeight:document.documentElement.scrollHeight });
+      document.body.removeChild(wrap);
+      // 整張畫布等比縮放塞進一頁（寧可留白，也不允許溢出到第二頁）。
+      const ratio = canvas.height / canvas.width;
+      let drawWmm = pageWmm, drawHmm = pageWmm*ratio;
+      if(drawHmm > pageHmm){ drawHmm = pageHmm; drawWmm = pageHmm/ratio; }
+      const xOffset = marginMm + (pageWmm-drawWmm)/2;
+      if(i>0) pdf.addPage();
+      pdf.addImage(canvas.toDataURL('image/jpeg',0.95), 'JPEG', xOffset, marginMm, drawWmm, drawHmm);
+    }
+    const dataUri = pdf.output('datauristring');
+    if(previewWin && !previewWin.closed){
+      previewWin.document.open();
+      previewWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${filename}</title></head>
+        <body style="margin:0; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;">
+          <div style="padding:10px 14px; background:#F5F5F2; border-bottom:1px solid #D9DCE1; display:flex; align-items:center; justify-content:space-between;">
+            <span style="font-size:13px; color:#5B6472;">${filename}.pdf</span>
+            <a href="${dataUri}" download="${filename}.pdf" style="color:#E0902E; font-weight:600; text-decoration:none; font-size:13.5px;">⬇ 下載PDF</a>
+          </div>
+          <embed src="${dataUri}" type="application/pdf" style="width:100%; height:calc(100vh - 44px); border:none; display:block;">
+        </body></html>`);
+      previewWin.document.close();
+    } else {
+      const a = document.createElement('a');
+      a.href = dataUri; a.download = filename+'.pdf';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
+  }catch(err){
+    if(previewWin && !previewWin.closed) previewWin.close();
+    alert('產生PDF失敗：' + err.message);
+  }
+}
 
 // 請款單上不需要標註星期幾（例如同一車次因為停靠站不同分成「星期一」跟
 // 「週二到週五」兩條路線，對客戶來說都叫同一個車次名稱）。這裡只是把
@@ -646,6 +706,9 @@ function renderDrivers(c){
           <div class="field"><label>LINE User ID</label><input id="dLine"></div>
         </div>
         <div class="grid3">
+          <div class="field"><label>身分證／居留證號</label><input id="dIdNumber"></div>
+        </div>
+        <div class="grid3">
           <div class="field"><label>車牌</label><input id="dPlate"></div>
           <div class="field"><label>車型</label><input id="dVType"></div>
           <div class="field"><label>載重(kg)</label><input id="dVLoad" type="number"></div>
@@ -686,6 +749,9 @@ function renderDrivers(c){
           <div class="field"><label>姓名</label><input id="eName" value="${d.name}"></div>
           <div class="field"><label>電話</label><input id="ePhone" value="${d.phone||''}"></div>
           <div class="field"><label>LINE User ID</label><input id="eLine" value="${d.lineId||''}"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>身分證／居留證號</label><input id="eIdNumber" value="${d.idNumber||''}"></div>
         </div>
         <div class="grid3">
           <div class="field"><label>車牌</label><input id="ePlate" value="${d.vehicle.plate||''}"></div>
@@ -758,6 +824,7 @@ function renderDrivers(c){
             status: document.getElementById('eStatus').value,
             phone: document.getElementById('ePhone').value.trim(),
             lineId: document.getElementById('eLine').value.trim(),
+            idNumber: document.getElementById('eIdNumber').value.trim(),
             plate: document.getElementById('ePlate').value.trim(),
             vtype: document.getElementById('eVType').value.trim(),
             vload: document.getElementById('eVLoad').value,
@@ -799,6 +866,7 @@ function renderDrivers(c){
         name,
         phone: document.getElementById('dPhone').value.trim(),
         lineId: document.getElementById('dLine').value.trim(),
+        idNumber: document.getElementById('dIdNumber').value.trim(),
         plate: document.getElementById('dPlate').value.trim(),
         vtype: document.getElementById('dVType').value.trim(),
         vload: document.getElementById('dVLoad').value,
@@ -1733,6 +1801,57 @@ function renderAssignmentDetail(id){
 }
 
 // ---------- 薪資結算 ----------
+// 給付單位資訊固定不變，不隨司機/月份變動。
+const PAYROLL_PAYER_NAME = '信興行銷有限公司';
+const PAYROLL_PAYER_TAX_ID = '62091835';
+// 正式的「勞務報酬單」樣式（取代原本單純的摘要表格），單一司機、單一月份、
+// 直式A4剛好一頁。r 是 driverMonthly() 或月結凍結後的資料（見 renderPayroll()
+// 呼叫端怎麼組出 r），ded 是 computePayrollDeductions() 算出來的稅務欄位
+// （月結確認前是即時預覽用系統自動判斷的結果，確認後就是當時凍結的數字，
+// 兩種情況欄位長得一樣，呼叫端統一組好再傳進來）。
+function payrollSlipHtml(driver, monthStr, r, ded, opts){
+  opts = opts || {};
+  const [y,m] = monthStr.split('-');
+  const contentRows = [];
+  if(r.trips.length){
+    contentRows.push(`<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
+  }
+  r.adjustments.forEach(a=>{
+    const label = a.type==='advance'?'預支':a.type==='add'?'加項':'減項';
+    const amt = a.type==='deduct' ? -Math.abs(Number(a.amount)) : Number(a.amount);
+    contentRows.push(`<tr><td>${monthStr}</td><td>${label}</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">${amt>=0?'':'-'}$${money(Math.abs(amt))}</td><td>—</td></tr>`);
+  });
+  const sigCell = opts.signatureDataUrl
+    ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
+    : '<div style="height:56px;"></div>';
+  return `
+    <div class="panel payroll-slip" style="max-width:720px;">
+      <h3 style="text-align:center; margin:0 0 14px;">${Number(m)}月勞務報酬單</h3>
+      <table>
+        <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
+        <tr><td>所得人姓名</td><td>${driver.name}</td><td>身分證／居留證號</td><td>${driver.idNumber||'（未填寫）'}</td></tr>
+        <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>銀行轉帳</td></tr>
+        <tr><td>銀行／分行</td><td>${driver.bank.bankName||'—'}／${driver.bank.branch||'—'}</td><td>帳號</td><td>${driver.bank.account||'—'}</td></tr>
+      </table>
+      <h4 style="margin:14px 0 6px;">勞務內容</h4>
+      <table>
+        <thead><tr><th>日期</th><th>勞務／案名</th><th>內容說明</th><th>數量</th><th>單位</th><th>單價</th><th>金額</th><th>備註</th></tr></thead>
+        <tbody>${contentRows.join('') || '<tr><td colspan="8"><div class="empty">本月無車趟或調整項</div></td></tr>'}</tbody>
+      </table>
+      <h4 style="margin:14px 0 6px;">扣款與實領</h4>
+      <table>
+        <tr><td style="width:18%;">報酬總額</td><td style="width:32%;" class="amount">$${money(r.net)}</td><td style="width:18%;">是否扣所得稅</td><td>${ded.withholdTax?'是':'否'}</td></tr>
+        <tr><td>參考稅率</td><td>${(PAYROLL_TAX_RATE*100).toFixed(0)}%</td><td>實際扣繳稅率</td><td>${(ded.taxRate*100).toFixed(2)}%</td></tr>
+        <tr><td>所得稅額</td><td class="amount">$${money(ded.taxAmount)}</td><td>是否扣補充保費</td><td>${ded.withholdNhi?'是':'否'}</td></tr>
+        <tr><td>補充保費率</td><td>${(PAYROLL_NHI_RATE*100).toFixed(2)}%</td><td>補充保費</td><td class="amount">$${money(ded.nhiAmount)}</td></tr>
+        <tr><td>其他扣款</td><td class="amount">$0</td><td><strong>實領金額</strong></td><td class="amount"><strong>$${money(ded.actualNet)}</strong></td></tr>
+      </table>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:12px 0;">本人確認上述勞務內容及金額無誤，並同意給付單位依法應適用之所得類別、扣繳率及補充保費規定辦理。所得類別與勞雇關係仍以實際事實認定。</p>
+      <table>
+        <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${opts.paidDate||'—'}</td></tr>
+      </table>
+    </div>`;
+}
 function renderPayroll(c){
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
@@ -1747,6 +1866,13 @@ function renderPayroll(c){
         <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
       </div>`).join('')}
     </div>` : ''}
+    <div class="panel">
+      <div class="grid2">
+        <div class="field"><label>合併下載月份</label><input id="pAllMonth" type="month" value="${month}"></div>
+        <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體司機勞報單（合併PDF）</button></div>
+      </div>
+      <p class="note">只會納入「已完成月結確認」的司機（每人各佔一頁，直式）；當月尚未月結確認的司機不會出現在合併檔案裡。</p>
+    </div>
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>司機</label><select id="pDriver">${driverOpts}</select></div>
@@ -1775,6 +1901,23 @@ function renderPayroll(c){
       refresh();
     };
   });
+  document.getElementById('printAllStatements').onclick = ()=>{
+    const monthStr = document.getElementById('pAllMonth').value;
+    const records = state.data.statements.filter(s=>s.month===monthStr);
+    if(!records.length){ alert(`${monthStr} 沒有任何司機完成月結確認`); return; }
+    const slips = records.map(record=>{
+      const driver = state.data.drivers.find(d=>d.id===record.driverId);
+      if(!driver) return null;
+      const r = driverMonthly(record.driverId, monthStr);
+      const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
+      const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
+      return payrollSlipHtml(driver, monthStr, merged, ded, {
+        signatureDataUrl: record.status==='signed' ? record.signatureDataUrl : null,
+        paidDate: record.status==='signed' ? (record.signedAt||'').slice(0,10) : ''
+      });
+    }).filter(Boolean);
+    exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
+  };
   function refresh(){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
@@ -1784,28 +1927,30 @@ function renderPayroll(c){
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
     const isFrozen = record && (record.status==='awaiting_signature' || record.status==='signed');
     const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net } : live;
+    const ded = isFrozen
+      ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
+      : computePayrollDeductions(r.net);
+    const driver = state.data.drivers.find(d=>d.id===driverId);
     const statusBadge = !record ? '' : record.status==='signed' ? '<span class="badge signed">司機已回簽</span>' : '<span class="badge progress">等待司機回簽</span>';
+    const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
+      signatureDataUrl: record && record.status==='signed' ? record.signatureDataUrl : null,
+      paidDate: record && record.status==='signed' ? (record.signedAt||'').slice(0,10) : ''
+    });
     document.getElementById('payrollResult').innerHTML = `
-      <div class="panel">
-        <h3 style="margin-top:0;">${driverName(driverId)} — ${monthStr} 勞報單預覽 ${statusBadge}</h3>
-        ${!record ? '<div class="note">尚未月結確認，下方金額為即時預覽，調整項仍可新增；確認無誤後按「月結確認」凍結金額並開放司機回簽。</div>' : ''}
+      <div class="panel no-print">
+        <h3 style="margin-top:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
+        ${!record ? '<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費），調整項仍可新增；確認無誤後按「月結確認」凍結金額並開放司機回簽。</div>' : ''}
         <table>
-          <tr><td>已完成車趟數</td><td class="amount">${r.trips.length}</td></tr>
-          <tr><td>車趟報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
-          <tr><td>調整項合計</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
-          <tr><td><strong>應付淨額</strong></td><td class="amount"><strong>$${money(r.net)}</strong></td></tr>
-        </table>
-        <table>
-          <thead><tr><th>類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
+          <thead><tr><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
           <tbody>${r.adjustments.map(a=>`<tr><td>${a.type==='advance'?'預支':a.type==='add'?'加錢':'減錢'}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
         </table>
-        ${record && record.status==='signed' && record.signatureDataUrl ? `<div style="margin-top:10px;"><label>司機簽名</label><br><img src="${record.signatureDataUrl}" style="max-width:240px; border:1px solid var(--border); border-radius:var(--radius);"></div>` : ''}
-        <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
-          ${!record ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
-        </div>
+      </div>
+      <div id="payrollSlipArea">${slipHtml}</div>
+      <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
+        ${!record ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
       </div>`;
-    document.getElementById('printStatement').onclick = ()=> exportPanelPrint(document.getElementById('printStatement').closest('.panel'), `${driverName(driverId)}_${monthStr}_勞報單`);
+    document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(driverId)}_${monthStr}_勞報單`);
     document.querySelectorAll('[data-deladj]').forEach(btn=>{
       btn.onclick=async()=>{
         try{ await deleteAdjustment(btn.dataset.deladj); refresh(); }
@@ -2508,35 +2653,29 @@ function renderMyStatement(c){
       box.innerHTML = `<div class="panel"><div class="empty">${m} 尚未由主控端完成月結確認，結算完成後才能在這裡看到並回簽勞報單。</div></div>`;
       return;
     }
+    const driver = state.data.drivers.find(d=>d.id===dId);
+    const r = driverMonthly(dId, m);
+    const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
+    const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
+    const slipHtml = payrollSlipHtml(driver, m, merged, ded, {
+      signatureDataUrl: record.status==='signed' ? record.signatureDataUrl : null,
+      paidDate: record.status==='signed' ? (record.signedAt||'').slice(0,10) : ''
+    });
     if(record.status==='awaiting_signature'){
       box.innerHTML = `
-        <div class="panel">
-          <h3 style="margin-top:0;">${driverName(dId)} — ${m} 勞報單 <span class="badge progress">待回簽</span></h3>
-          <table>
-            <tr><td>車趟報酬合計</td><td class="amount">$${money(record.tripTotal)}</td></tr>
-            <tr><td>調整項合計</td><td class="amount">${record.adjTotal>=0?'+':''}$${money(record.adjTotal)}</td></tr>
-            <tr><td><strong>應付淨額</strong></td><td class="amount"><strong>$${money(record.net)}</strong></td></tr>
-          </table>
-          <button class="btn amber no-print" id="ackPayBtn" style="width:100%; margin-top:6px;">已確認報酬</button>
+        <div id="payrollSlipArea">${slipHtml}</div>
+        <div class="panel no-print">
+          <button class="btn amber" id="ackPayBtn" style="width:100%;">已確認報酬並簽名</button>
         </div>
         <div id="sigModalHost"></div>`;
       document.getElementById('ackPayBtn').onclick = ()=> openSignatureModal(record);
     } else if(record.status==='signed'){
       box.innerHTML = `
-        <div class="panel">
-          <h3 style="margin-top:0;">${driverName(dId)} — ${m} 勞報單 <span class="badge signed">已回簽</span></h3>
-          <div class="note">此為回簽當下凍結的金額，之後不會再變動。</div>
-          <table>
-            <tr><td>車趟報酬合計</td><td class="amount">$${money(record.tripTotal)}</td></tr>
-            <tr><td>調整項合計</td><td class="amount">${record.adjTotal>=0?'+':''}$${money(record.adjTotal)}</td></tr>
-            <tr><td><strong>應付淨額</strong></td><td class="amount"><strong>$${money(record.net)}</strong></td></tr>
-          </table>
-          ${record.signatureDataUrl?`<label>您的簽名</label><br><img src="${record.signatureDataUrl}" style="max-width:280px; border:1px solid var(--border); border-radius:var(--radius);">`:''}
-          <div class="no-print" style="margin-top:10px;">
-            <button class="btn ghost" id="printMy">列印/另存PDF</button>
-          </div>
+        <div id="payrollSlipArea">${slipHtml}</div>
+        <div class="no-print" style="margin-top:10px;">
+          <button class="btn ghost" id="printMy">列印/另存PDF</button>
         </div>`;
-      document.getElementById('printMy').onclick = ()=> exportPanelPrint(document.getElementById('printMy').closest('.panel'), `${driverName(dId)}_${m}_對帳單`);
+      document.getElementById('printMy').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(dId)}_${m}_勞報單`);
     }
   }
   document.getElementById('smMonth').onchange = refresh;

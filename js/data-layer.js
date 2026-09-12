@@ -18,7 +18,8 @@ function mapDriver(row) {
     status: row.status,
     inactiveAt: row.inactive_at,
     vehicle: { plate: row.vehicle_plate || '', type: row.vehicle_type || '', load: row.vehicle_load ?? '' },
-    bank: { bankName: row.bank_name || '', branch: row.bank_branch || '', account: row.bank_account || '', holder: row.bank_holder || '' }
+    bank: { bankName: row.bank_name || '', branch: row.bank_branch || '', account: row.bank_account || '', holder: row.bank_holder || '' },
+    idNumber: row.id_number || ''
   };
 }
 
@@ -114,6 +115,10 @@ function mapStatement(row) {
   return {
     id: row.id, driverId: row.driver_id, month: row.statement_month.slice(0, 7),
     tripTotal: Number(row.trip_total), adjTotal: Number(row.adj_total), net: Number(row.net_amount),
+    incomeType: row.income_type || '',
+    withholdTax: !!row.withhold_tax, taxRate: Number(row.tax_rate || 0), taxAmount: Number(row.tax_amount || 0),
+    withholdNhi: !!row.withhold_nhi, nhiRate: Number(row.nhi_rate || 0), nhiAmount: Number(row.nhi_amount || 0),
+    actualNet: Number(row.actual_net_amount || 0),
     status: row.status, confirmedAt: row.confirmed_at, signedAt: row.signed_at,
     signatureDataUrl: null, adminAcked: row.admin_acked
   };
@@ -257,6 +262,7 @@ async function createDriver(input) {
     vehicle_plate: input.plate || null, vehicle_type: input.vtype || null, vehicle_load: input.vload || null,
     bank_name: input.bankName || null, bank_branch: input.branch || null,
     bank_account: input.account || null, bank_holder: input.holder || null,
+    id_number: input.idNumber || null,
     status: input.status || 'active'
   }).select().single();
   if (error) throw new Error('新增司機失敗：' + error.message);
@@ -307,6 +313,7 @@ async function updateDriverProfile(driverId, fields, changeSummary) {
   if ('branch' in fields) payload.bank_branch = fields.branch || null;
   if ('account' in fields) payload.bank_account = fields.account || null;
   if ('holder' in fields) payload.bank_holder = fields.holder || null;
+  if ('idNumber' in fields) payload.id_number = fields.idNumber || null;
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers').update(payload).eq('id', driverId).select().single();
   if (error) throw new Error('更新資料失敗：' + error.message);
@@ -778,12 +785,40 @@ async function deleteBillingAdjustment(id) {
   state.data.billingAdjustments = state.data.billingAdjustments.filter(a => a.id !== id);
 }
 
+// 全體司機固定套用同一個所得類別；如果貴公司實際適用的所得類別不是這個，
+// 請直接改這個常數即可，不用逐月手動修改每張勞報單。
+const PAYROLL_INCOME_TYPE = '執行業務所得';
+// 稅務／二代健保補充保費費率與起扣門檻。⚠️ 這兩個數字（10% 扣繳率、
+// 單筆NT$20,000起扣點、2.11%補充保費費率）是台灣目前普遍適用的參考值，
+// 但實際是否適用、門檻是否變動，請務必先請會計師／記帳士確認過一次再
+// 正式依賴這個自動判斷結果，避免扣錯稅或漏扣。
+const PAYROLL_TAX_RATE = 0.10;
+const PAYROLL_NHI_RATE = 0.0211;
+const PAYROLL_WITHHOLD_THRESHOLD = 20000;
+function computePayrollDeductions(grossAmount) {
+  const amt = Math.round(Number(grossAmount) || 0);
+  const withhold = amt >= PAYROLL_WITHHOLD_THRESHOLD;
+  const taxAmount = withhold ? Math.round(amt * PAYROLL_TAX_RATE) : 0;
+  const nhiAmount = withhold ? Math.round(amt * PAYROLL_NHI_RATE) : 0;
+  return {
+    incomeType: PAYROLL_INCOME_TYPE,
+    withholdTax: withhold, taxRate: withhold ? PAYROLL_TAX_RATE : 0, taxAmount,
+    withholdNhi: withhold, nhiRate: withhold ? PAYROLL_NHI_RATE : 0, nhiAmount,
+    actualNet: amt - taxAmount - nhiAmount
+  };
+}
+
 // live: driverMonthly() 算出來的即時金額（凍結當下的快照數字）
 async function confirmMonthlyStatement(driverId, month, live) {
   const supabase = getSupabase();
+  const ded = computePayrollDeductions(live.net);
   const { data, error } = await supabase.from('statements').insert({
     driver_id: driverId, statement_month: `${month}-01`,
     trip_total: live.tripTotal, adj_total: live.adjTotal, net_amount: live.net,
+    income_type: ded.incomeType,
+    withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
+    withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
+    actual_net_amount: ded.actualNet,
     status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
   }).select().single();
   if (error) throw new Error('月結確認失敗：' + error.message);
