@@ -1932,10 +1932,16 @@ function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
     addAOASheet(wb, `${originLabel(addr)}配送明細`, dAoa, [{ s:{r:0,c:0}, e:{r:0,c:dAoa[1].length-1} }]);
   });
 }
-function exportBillingExcel(channelIds, start, end){
+// channelIds 只有一個時，該通路的總覽沿用抓取範圍(start~end)；勾選多個通路時，
+// 每個通路的總覽改用自己在「通路管理」設定的週期（自然月／自訂區間），
+// 不會被抓取範圍污染——跟畫面渲染的 ownPeriodFor() 邏輯保持一致。
+function exportBillingExcel(channelIds, monthStr, start, end){
   const wb = XLSX.utils.book_new();
   channelIds.forEach(cid=>{
-    const report = computeChannelBillingReport(cid, start, end);
+    const channel = state.data.channels.find(ch=>ch.id===cid);
+    if(!channel) return;
+    const own = channelIds.length===1 ? {start, end} : defaultPeriod(channel, monthStr);
+    const report = computeChannelBillingReport(cid, own.start, own.end);
     if(report) buildChannelSummarySheet(wb, report);
   });
   const merged = mergedRunRows(channelIds, start, end);
@@ -1947,53 +1953,79 @@ function renderBilling(c){
   const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">勾選要一起結算的通路（可複選），系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一車趟，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
+    <p class="section-sub">勾選要一起結算的通路（可複選）。每個通路自己的請款總覽（未稅／含稅合計），永遠依「通路管理」設定的自己週期計算（例如康達盛通是自然月、7-11是每月27日至次月26日），不會因為同時勾了好幾個通路而互相污染；下方的「抓取範圍」只用來決定合併配送明細要撈多寬的資料，只勾一個通路時可直接當作那個通路自己的週期手動調整。系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一車趟，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
     <div class="panel">
       <div class="field">
         <label>通路（可複選；各通路各自產生一份請款總覽，配送明細則合併成一份，只顯示已選通路）</label>
         <div id="bChannelChecks" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;">${chChecks}</div>
       </div>
       <div class="grid3">
-        <div class="field"><label>對應月份（依第一個勾選的通路自動抓區間）</label><input id="bMonth" type="month" value="${month}"></div>
-        <div class="field"><label>區間起（可調整）</label><input id="bStart" type="date"></div>
-        <div class="field"><label>區間迄（可調整）</label><input id="bEnd" type="date"></div>
+        <div class="field"><label>對應月份（各通路的請款總覽會自動套用自己的週期）</label><input id="bMonth" type="month" value="${month}"></div>
+        <div class="field"><label>抓取範圍起（可調整；只勾一個通路時＝該通路自己的週期）</label><input id="bStart" type="date"></div>
+        <div class="field"><label>抓取範圍迄（可調整；只勾一個通路時＝該通路自己的週期）</label><input id="bEnd" type="date"></div>
       </div>
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">例外調整（人工加註的備註與金額，會併入該通路請款單總額）</h3>
       <div class="grid3">
         <div class="field"><label>調整項通路</label><select id="baChannel">${state.data.channels.map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('')}</select></div>
-        <div class="field"><label>備註</label><input id="baNote" placeholder="例如：7/28久陽一車未出車"></div>
+        <div class="field"><label>發生日期</label><input id="baDate" type="date"></div>
         <div class="field"><label>金額（可為負數）</label><input id="baAmount" type="number"></div>
       </div>
+      <div class="field"><label>備註</label><input id="baNote" placeholder="例如：久陽一車未出車"></div>
       <button class="btn ghost" id="addBillingAdj">新增調整項</button>
       <div id="billingAdjList" style="margin-top:8px;"></div>
     </div>
     <div id="billingResult"></div>`;
   function checkedChannelIds(){ return Array.from(document.querySelectorAll('.bChCheck:checked')).map(cb=>cb.value); }
-  function currentRange(){ return { start: document.getElementById('bStart').value, end: document.getElementById('bEnd').value }; }
+  // 例外調整永遠自動歸入「調整項通路」自己在通路管理設定的請款週期（不是
+  // 畫面上方那組給合併明細用的抓取範圍），使用者只需要填「發生日期」（單一
+  // 天，不是區間）方便日後查看，實際存檔的 periodStart/periodEnd 是自動算的。
+  function adjChannelPeriod(){
+    const channelId = document.getElementById('baChannel').value;
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    const monthStr = document.getElementById('bMonth').value;
+    return channel ? defaultPeriod(channel, monthStr) : null;
+  }
   function refreshAdjList(){
     const channelId = document.getElementById('baChannel').value;
-    const { start, end } = currentRange();
-    const list = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===start && x.periodEnd===end);
-    document.getElementById('billingAdjList').innerHTML = list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">此區間尚無例外調整</div>';
+    const period = adjChannelPeriod();
+    if(!period){ document.getElementById('billingAdjList').innerHTML = '<div class="empty">請先選擇對應月份</div>'; return; }
+    const list = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===period.start && x.periodEnd===period.end);
+    document.getElementById('billingAdjList').innerHTML = list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">此週期尚無例外調整</div>';
     document.getElementById('billingAdjList').querySelectorAll('[data-deladj]').forEach(btn=>{
       btn.onclick = async ()=>{ try{ await deleteBillingAdjustment(btn.dataset.deladj); refreshAdjList(); refresh(); }catch(err){ alert(err.message); } };
     });
   }
   document.getElementById('addBillingAdj').onclick = async ()=>{
     const channelId = document.getElementById('baChannel').value;
-    const { start, end } = currentRange();
-    const note = document.getElementById('baNote').value.trim();
+    const period = adjChannelPeriod();
+    const dateVal = document.getElementById('baDate').value;
+    const noteVal = document.getElementById('baNote').value.trim();
     const amount = Number(document.getElementById('baAmount').value);
-    if(!start || !end){ alert('請先選擇區間'); return; }
-    if(!note || !amount){ alert('請填寫備註與金額'); return; }
+    if(!period){ alert('請先選擇對應月份'); return; }
+    if(!dateVal || !noteVal || !amount){ alert('請填寫發生日期、備註與金額'); return; }
+    const d = new Date(dateVal+'T00:00:00');
+    const note = `${d.getMonth()+1}/${d.getDate()} ${noteVal}`;
     try{
-      await createBillingAdjustment({ channelId, periodStart:start, periodEnd:end, note, amount });
-      document.getElementById('baNote').value=''; document.getElementById('baAmount').value='';
+      await createBillingAdjustment({ channelId, periodStart:period.start, periodEnd:period.end, note, amount });
+      document.getElementById('baDate').value=''; document.getElementById('baNote').value=''; document.getElementById('baAmount').value='';
       refreshAdjList(); refresh();
     }catch(err){ alert(err.message); }
   };
+  document.getElementById('baChannel').onchange = refreshAdjList;
+  // 通路自己的請款總覽（未稅/含稅合計）永遠套用「通路管理」裡設定的自己週期
+  // 去算，只有勾選單一通路時，才會直接沿用共用的「區間起訖」欄位（維持原本
+  // 可手動調整單一通路週期的彈性）。多選通路時，共用的「區間起訖」欄位改成
+  // 只決定「抓取範圍」──要夠寬才能同時涵蓋每個已選通路各自的區間，讓合併
+  // 配送明細表看得到全部相關車趟；預設值會自動抓所有已選通路週期的聯集
+  // （最早的起始日～最晚的結束日）。
+  function ownPeriodFor(channelId, monthStr, channelIds, sharedStart, sharedEnd){
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    if(!channel) return null;
+    if(channelIds.length===1) return { start:sharedStart, end:sharedEnd };
+    return defaultPeriod(channel, monthStr);
+  }
   function refresh(){
     const channelIds = checkedChannelIds();
     state._billingChannelIds = channelIds;
@@ -2001,20 +2033,25 @@ function renderBilling(c){
     state._billingMonth = monthStr;
     const startInput = document.getElementById('bStart'), endInput = document.getElementById('bEnd');
     if(!startInput.value || !endInput.value){
-      const firstChannel = state.data.channels.find(ch=>ch.id===channelIds[0]) || state.data.channels[0];
-      if(firstChannel){
-        const period = defaultPeriod(firstChannel, monthStr);
-        if(!startInput.value) startInput.value = period.start;
-        if(!endInput.value) endInput.value = period.end;
+      const relevantChannels = (channelIds.length ? channelIds.map(cid=>state.data.channels.find(ch=>ch.id===cid)) : [state.data.channels[0]]).filter(Boolean);
+      const periods = relevantChannels.map(ch=> defaultPeriod(ch, monthStr));
+      if(periods.length){
+        const unionStart = periods.reduce((s,p)=> (s===null||p.start<s)?p.start:s, null);
+        const unionEnd = periods.reduce((s,p)=> (s===null||p.end>s)?p.end:s, null);
+        if(!startInput.value) startInput.value = unionStart;
+        if(!endInput.value) endInput.value = unionEnd;
       }
     }
-    const start = startInput.value, end = endInput.value;
+    const start = startInput.value, end = endInput.value; // 抓取範圍（合併配送明細用）
     refreshAdjList();
     if(!channelIds.length){
       document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">請至少勾選一個通路</div></div>';
       return;
     }
-    const reports = channelIds.map(cid=> computeChannelBillingReport(cid, start, end)).filter(Boolean);
+    const reports = channelIds.map(cid=>{
+      const own = ownPeriodFor(cid, monthStr, channelIds, start, end);
+      return own ? computeChannelBillingReport(cid, own.start, own.end) : null;
+    }).filter(Boolean);
     const merged = mergedRunRows(channelIds, start, end);
     document.getElementById('billingResult').innerHTML = `
       <div id="billingPrintArea">
@@ -2029,13 +2066,12 @@ function renderBilling(c){
         <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
       </div>`;
     document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('billingPrintArea'), `請款單_${start}_${end}`);
-    document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, start, end);
+    document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end);
   }
   document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
   document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
   document.getElementById('bStart').onchange = refresh;
   document.getElementById('bEnd').onchange = refresh;
-  document.getElementById('baChannel').onchange = refreshAdjList;
   refresh();
 }
 
