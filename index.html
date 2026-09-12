@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <title>信興-碳金車隊</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
@@ -190,12 +191,21 @@ function exportPrintable(title, bodyHtml){
   if(previewWin){
     previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
   }
-  // 注意：wrap 不能用 position:fixed/absolute——實測html2canvas對這個函式庫版本
-  // 的離版面定位元素會量到高度0，截出全空白PDF。維持一般文件流（直接接在body
-  // 最後面），但給明確寬度，避免受周圍版面影響；html2canvas是用getBoundingClientRect
-  // 抓元素位置，不受目前捲動位置影響，所以就算頁面很長也不會截錯。
+  // 注意：wrap 不能用 position:fixed/absolute——html2canvas 對離版面定位元素
+  // 會量到高度0，截出全空白PDF。維持一般文件流（直接接在body最後面），但給
+  // 明確寬度，避免受周圍版面影響。
+  // 另外 html2canvas 實際上會受目前捲動位置影響——如果使用者是把頁面往下捲動
+  // 之後才點擊「產生PDF」，擷取出來的畫面會整個往下位移、甚至整張全空白。下面
+  // 用 scrollX/scrollY 明確告訴 html2canvas 目前捲動了多少、要扣掉，才能穩定
+  // 截到 wrap 這個元素本身的內容，不受點擊當下頁面捲到哪裡影響。
+  const scrollX = window.scrollX || window.pageXOffset || 0;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'width:1050px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+  // min-width 1050px 讓一般內容（例如請款單）維持原本習慣的寬度；width:max-content
+  // 讓內容本來就比較寬的表格（例如週班表，一週7天x早晚班共15欄，本來就設計成
+  // 用 white-space:nowrap 讓每一欄不擠字）可以自然撐開到實際需要的寬度，不會被
+  // 硬性限制在1050px內導致最右邊的欄位（例如週六、週日）被截斷看不到。
+  wrap.style.cssText = 'min-width:1050px; width:max-content; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
   wrap.innerHTML = `
     <style>
       @page { size: A4 landscape; margin: 10mm; }
@@ -203,6 +213,9 @@ function exportPrintable(title, bodyHtml){
       th,td{ padding:7px 9px; border:1px solid #999; text-align:left; }
       h1,h3{ margin:0 0 10px; }
       .amount{ font-family:monospace; font-weight:700; }
+      /* 畫面上用深色格子表示「這個班次不存在」（例如週班表的 grid-black），
+         但印成PDF時大片純黑會像是壞掉，改成跟標籤格一致的淺灰。 */
+      .grid-black{ background:#E7E9EC !important; }
       /* 防斷頁：表格列、面板區塊、標題都不允許被硬切成兩半 */
       table, tr, thead, tbody, .panel, .version-block, .date-group{ break-inside: avoid; page-break-inside: avoid; }
       h1, h2, h3, h4{ break-after: avoid; page-break-after: avoid; }
@@ -212,13 +225,67 @@ function exportPrintable(title, bodyHtml){
   `;
   document.body.appendChild(wrap);
   const filename = title.replace(/[\\/:*?"<>|]/g,'_') + '.pdf';
-  html2pdf().set({
-    margin: 10,
-    filename,
-    html2canvas: { scale: 2, useCORS: true },
-    jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
-  }).from(wrap).outputPdf('datauristring').then(dataUri=>{
+  // 改直接用 html2canvas + jsPDF 自己組頁，不再透過 html2pdf.js 這個包裝套件——
+  // 那個套件版本的 from(element).toCanvas() 內部會重新量測/複製元素，量出來的
+  // 尺寸經常對不上實際內容（這正是一直反覆出現空白/跑版的根本原因），改成
+  // 自己控制每一步，才能穩定重現。
+  // 分頁邏輯：先整段截成一張完整長圖，再依照畫面上「不能被硬切」的最小單位
+  // （表格的每一列、標題）的實際位置，找出安全的分頁斷點，避免一列表格被
+  // 硬生生切成兩半、分散在兩頁。注意：這裡只能列「真的不可再分割」的最小
+  // 單位（單一列tr、標題），不能列 table/.panel 這種可能包住幾十列的大容器
+  // ——否則演算法為了不切到「這個大容器中間」，會把整個容器硬推到下一頁，
+  // 前一頁反而留下一大片空白（實測過，這正是分頁邏輯最初的bug）。
+  const AVOID_BREAK_SELECTOR = 'tr, thead, h1, h2, h3, h4';
+  const wrapRect = wrap.getBoundingClientRect();
+  const wrapTop = wrapRect.top;
+  const wrapWidthPx = wrapRect.width;
+  const avoidZones = Array.from(wrap.querySelectorAll(AVOID_BREAK_SELECTOR)).map(el=>{
+    const r = el.getBoundingClientRect();
+    return { top: r.top - wrapTop, bottom: r.bottom - wrapTop };
+  }).filter(z=> z.bottom > z.top);
+  html2canvas(wrap, { scale: 2, useCORS: true, scrollX: -scrollX, scrollY: -scrollY, windowWidth: document.documentElement.scrollWidth, windowHeight: document.documentElement.scrollHeight }).then(canvas=>{
     document.body.removeChild(wrap);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit:'mm', format:'a4', orientation:'landscape' });
+    const marginMm = 10;
+    const pageWmm = pdf.internal.pageSize.getWidth() - marginMm*2;
+    const pageHmm = pdf.internal.pageSize.getHeight() - marginMm*2;
+    // canvasScale：canvas像素 相對於 wrap本身的CSS像素寬度的倍數，用來把前面用
+    // getBoundingClientRect 量到的 avoidZones（CSS px）換算成canvas像素座標。
+    const canvasScale = canvas.width / wrapWidthPx;
+    // pxPerMm：canvas像素 相對於 PDF頁面mm 的倍數（圖片會被等比縮放貼滿頁寬 pageWmm）。
+    const pxPerMm = canvas.width / pageWmm;
+    const pageHeightPx = pageHmm * pxPerMm;
+    const avoidZonesPx = avoidZones.map(z=>({ top: z.top*canvasScale, bottom: z.bottom*canvasScale }));
+    // 找出安全的分頁斷點：從目前累積高度開始，往前找最後一個「不會切到區塊中間」
+    // 的座標；找不到（單一區塊本身就比一整頁還高）就只好照原訂高度硬切。
+    function findBreakPoint(idealBreakPx, cursorPx){
+      let safe = idealBreakPx;
+      for(const z of avoidZonesPx){
+        if(z.top < idealBreakPx && z.bottom > idealBreakPx && z.top >= cursorPx){
+          safe = Math.min(safe, z.top);
+        }
+      }
+      return safe > cursorPx ? safe : idealBreakPx;
+    }
+    const totalHeightPx = canvas.height;
+    let cursorPx = 0, pageIndex = 0;
+    while(cursorPx < totalHeightPx - 1){
+      const idealBreakPx = Math.min(cursorPx + pageHeightPx, totalHeightPx);
+      const breakPx = idealBreakPx >= totalHeightPx ? totalHeightPx : findBreakPoint(idealBreakPx, cursorPx);
+      const sliceHeightPx = Math.max(1, Math.round(breakPx - cursorPx));
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = sliceHeightPx;
+      pageCanvas.getContext('2d').drawImage(canvas, 0, Math.round(cursorPx), canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+      const imgData = pageCanvas.toDataURL('image/jpeg', 0.95);
+      if(pageIndex>0) pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', marginMm, marginMm, pageWmm, sliceHeightPx / pxPerMm);
+      cursorPx = breakPx;
+      pageIndex++;
+      if(pageIndex > 200) break; // 保險絲，避免斷點邏輯出錯陷入無限迴圈
+    }
+    const dataUri = pdf.output('datauristring');
     // 用data URI而不是blob URL：blob URL是綁在「產生它的那個分頁」的物件登記表裡，
     // Safari（尤其iPhone）常常沒辦法在另一個分頁（我們另外開的預覽分頁）打開別的
     // 分頁建立的blob URL，PDF因此看起來像「打不開」。data URI是自帶完整內容的
@@ -240,7 +307,7 @@ function exportPrintable(title, bodyHtml){
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
     }
   }).catch(err=>{
-    document.body.removeChild(wrap);
+    if(wrap.parentNode) document.body.removeChild(wrap);
     if(previewWin && !previewWin.closed) previewWin.close();
     alert('產生PDF失敗：' + err.message);
   });
