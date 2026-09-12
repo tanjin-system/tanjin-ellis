@@ -320,75 +320,76 @@ function findMondayQuoteRoute(route){
 // 對客戶的請款金額：如果這趟車的路線有一個「星期一」報價版本，不管實際是哪一天、
 // 用哪個版本跑的，請款一律套用星期一版本「當天生效」的拆賬金額（司機薪資
 // 不受影響，司機費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
+function effectiveByChannelForAssignment(a){
+  let byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  if(route){
+    const mondayRoute = findMondayQuoteRoute(route);
+    if(mondayRoute && mondayRoute.id!==route.id){
+      const mv = getActiveVersion(mondayRoute, a.date) || [...(mondayRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
+      if(mv && mv.billingByChannel && Object.keys(mv.billingByChannel).length) byChannel = mv.billingByChannel;
+    }
+  }
+  return byChannel;
+}
 function channelBillingTotal(channelId, start, end){
   let total=0; const contributing=[];
   state.data.assignments.forEach(a=>{
     if(a.status==='completed' && a.date>=start && a.date<=end){
-      let byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
-      const route = state.data.routes.find(r=>r.id===a.routeId);
-      if(route){
-        const mondayRoute = findMondayQuoteRoute(route);
-        if(mondayRoute && mondayRoute.id!==route.id){
-          const mv = getActiveVersion(mondayRoute, a.date) || [...(mondayRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
-          if(mv && mv.billingByChannel && Object.keys(mv.billingByChannel).length) byChannel = mv.billingByChannel;
-        }
-      }
+      const byChannel = effectiveByChannelForAssignment(a);
       if(byChannel[channelId]){ total+=byChannel[channelId]; contributing.push({a, amount:byChannel[channelId]}); }
     }
   });
   return {total, contributing};
 }
-// 某供應商（出發點）底下有哪些通路曾經被送過（不限日期區間，讓勾選清單穩定，
-// 不會因為換了日期就整批消失又出現）。
-function channelsForOrigin(originAddr){
-  const routeIds = new Set(state.data.routes.filter(r=>r.originAddr===originAddr).map(r=>r.id));
-  const cids = new Set();
-  state.data.assignments.forEach(a=>{
-    if(routeIds.has(a.routeId)) (a.dropPoints||[]).forEach(dp=>{ if(dp.channelId) cids.add(dp.channelId); });
-  });
-  return state.data.channels.filter(ch=>cids.has(ch.id));
+// 哪些路線曾經送過這個通路（不限日期區間，用來找版本異動日期切區間，
+// 以及列出這個通路底下有哪些供應商／出發點）。
+function routesForChannel(channelId){
+  return state.data.routes.filter(r=> (r.versions||[]).some(v=>
+    (v.dropPointIds||[]).some(id=>{
+      const dp = state.data.dropPoints.find(x=>x.id===id);
+      return dp && dp.channelId === channelId;
+    })
+  ));
 }
-// 依供應商（出發點）結算請款，可勾選要一併請款的通路：直接沿用channelBillingTotal()
-// 已經驗證過的「星期一報價套用」邏輯（逐通路呼叫），只是額外用route.originAddr
-// 篩出屬於這個供應商的車趟，避免同一通路如果也有別的出發點時互相污染金額。
-// 未稅/含稅：依各通路自己設定的稅別（channel.taxInclusive）反推課稅金額，
-// 未稅通路加5%營業稅、含稅通路則反算出內含的未稅與稅額，最後加總成供應商總表。
-function originBillingBreakdown(originAddr, start, end, includedChannelIds){
-  const channelBreakdown = includedChannelIds.map(cid=>{
-    const ch = state.data.channels.find(c=>c.id===cid);
-    const { contributing } = channelBillingTotal(cid, start, end);
-    const scoped = contributing.filter(x=>{
-      const route = state.data.routes.find(r=>r.id===x.a.routeId);
-      return route && route.originAddr === originAddr;
-    });
-    const amount = scoped.reduce((s,x)=>s+x.amount, 0);
-    const tripCount = scoped.length;
-    const storeCount = scoped.reduce((s,x)=> s + (x.a.dropPoints||[]).filter(dp=>dp.channelId===cid).length, 0);
-    // 先四捨五入到整數再往下加總，確保每個通路顯示的未稅+稅額+含稅跟總計欄位
-    // 對得起來（不會因為先加總浮點數再四捨五入，導致跟逐通路的顯示值差1元）。
-    const taxIncl = ch ? ch.taxInclusive !== false : true;
-    let untaxed, withTax;
-    if(taxIncl){ withTax = Math.round(amount); untaxed = Math.round(amount/1.05); }
-    else { untaxed = Math.round(amount); withTax = Math.round(amount*1.05); }
-    const tax = withTax - untaxed;
-    return { cid, name: ch?ch.name:'（已刪除通路）', tripCount, storeCount, amount, untaxed, tax, withTax, scoped };
+// 請款區間如果剛好橫跨路線版本異動的日期，自動切成好幾段小區間（對應
+// 舊人工Excel「0727-0731」「0803-0809」這種分段方式），不用手動輸入。
+function splitPeriodByVersionChanges(channelId, start, end){
+  const routes = routesForChannel(channelId);
+  const boundarySet = new Set([start]);
+  routes.forEach(r=>{
+    (r.versions||[]).forEach(v=>{ if(v.start > start && v.start <= end) boundarySet.add(v.start); });
   });
-  const rowMap = {};
-  channelBreakdown.forEach(cb=>{
-    cb.scoped.forEach(x=>{
-      const key = x.a.id;
-      if(!rowMap[key]) rowMap[key] = { date:x.a.date, routeId:x.a.routeId, driverId:x.a.driverId, a:x.a, amount:0 };
-      rowMap[key].amount += x.amount;
-    });
+  const boundaries = Array.from(boundarySet).sort();
+  return boundaries.map((segStart,i)=>{
+    let segEnd = end;
+    if(i+1 < boundaries.length){
+      const d = new Date(boundaries[i+1]+'T00:00:00'); d.setDate(d.getDate()-1);
+      segEnd = ymd(d);
+    }
+    return { start: segStart, end: segEnd };
   });
-  const rows = Object.values(rowMap).map(r=>({
-    date: r.date, routeId: r.routeId, driverId: r.driverId, amount: r.amount,
-    storeCount: (r.a.dropPoints||[]).filter(dp=>includedChannelIds.includes(dp.channelId)).length
-  })).sort((a,b)=> a.date.localeCompare(b.date));
-  const untaxedTotal = channelBreakdown.reduce((s,x)=>s+x.untaxed, 0);
-  const taxTotal = channelBreakdown.reduce((s,x)=>s+x.tax, 0);
-  const grandTotal = channelBreakdown.reduce((s,x)=>s+x.withTax, 0);
-  return { rows, channelBreakdown, untaxedTotal, taxTotal, grandTotal };
+}
+// 通路請款總額依「供應商（出發點）」拆開顯示（對應舊Excel「各區費用總覽」）。
+function channelOriginBreakdown(channelId, start, end){
+  const { contributing } = channelBillingTotal(channelId, start, end);
+  const byOrigin = {};
+  contributing.forEach(x=>{
+    const route = state.data.routes.find(r=>r.id===x.a.routeId);
+    const addr = route ? route.originAddr : '';
+    if(!byOrigin[addr]) byOrigin[addr] = { originAddr: addr, tripCount:0, storeCount:0, amount:0 };
+    byOrigin[addr].tripCount += 1;
+    byOrigin[addr].storeCount += (x.a.dropPoints||[]).filter(dp=>dp.channelId===channelId).length;
+    byOrigin[addr].amount += x.amount;
+  });
+  return Object.values(byOrigin).sort((a,b)=> b.amount - a.amount);
+}
+// 未稅/含稅：依通路自己設定的稅別反推（未稅通路加5%營業稅、含稅通路反算內含稅額）。
+function untaxWithTax(amount, taxInclusive){
+  let untaxed, withTax;
+  if(taxInclusive){ withTax = Math.round(amount); untaxed = Math.round(amount/1.05); }
+  else { untaxed = Math.round(amount); withTax = Math.round(amount*1.05); }
+  return { untaxed, withTax, tax: withTax-untaxed };
 }
 function driverMonthly(driverId, monthStr){
   const trips = state.data.assignments.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
@@ -1756,62 +1757,156 @@ function renderPayroll(c){
 }
 
 // ---------- 請款結算 ----------
+// 依「通路」（例如7-11、康達盛通）結算一整份請款單：先依路線版本異動日期自動切成
+// 好幾段小區間，各區間內再依供應商（出發點）拆開顯示，最後附上每一趟車的明細
+// （跟其他通路共配時，會一併列出各通路的店數/佔比/請款金額方便對照）。
+function originLabel(addr){
+  const og = state.data.origins.find(o=>o.address===addr);
+  return og ? (og.label||og.address) : (addr || '（未知出發點）');
+}
+function buildChannelRunRows(channelId, start, end){
+  const rows = state.data.assignments.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
+  const byOrigin = {};
+  rows.forEach(a=>{
+    const route = state.data.routes.find(r=>r.id===a.routeId);
+    if(!route) return;
+    const byChannel = effectiveByChannelForAssignment(a);
+    if(!byChannel[channelId]) return;
+    const addr = route.originAddr || '';
+    if(!byOrigin[addr]) byOrigin[addr] = [];
+    byOrigin[addr].push({ a, route, byChannel });
+  });
+  Object.values(byOrigin).forEach(list=> list.sort((x,y)=>
+    x.a.date.localeCompare(y.a.date) || (x.route.shift||'').localeCompare(y.route.shift||'') || seqSortKey(x.route.seq)-seqSortKey(y.route.seq)
+  ));
+  return byOrigin;
+}
+function renderRunDetailTables(channelId, start, end){
+  const byOrigin = buildChannelRunRows(channelId, start, end);
+  const originAddrs = Object.keys(byOrigin);
+  if(!originAddrs.length) return '<div class="empty">此區間無相關車趟</div>';
+  return originAddrs.map(addr=>{
+    const list = byOrigin[addr];
+    const channelIds = [...new Set(list.flatMap(x=>Object.keys(x.byChannel)))].sort((a,b)=> a===channelId?-1: b===channelId?1:0);
+    const bodyRows = list.map(({a,route,byChannel})=>{
+      const totalAmt = Object.values(byChannel).reduce((s,v)=>s+v,0);
+      const storeCells = channelIds.map(cid=>`<td>${(a.dropPoints||[]).filter(dp=>dp.channelId===cid).length}</td>`).join('');
+      const pctCells = channelIds.map(cid=>`<td>${totalAmt? ((byChannel[cid]||0)/totalAmt*100).toFixed(1):'0.0'}%</td>`).join('');
+      const amtCells = channelIds.map(cid=>`<td class="amount">$${money(Math.round(byChannel[cid]||0))}</td>`).join('');
+      return `<tr>
+        <td>${a.date}</td><td>${route.shift==='AM'?'上午':'下午'}</td><td>${stripWeekdayLabel(route.seq)}</td>
+        <td>${(a.dropPoints||[]).map(dpLabel).join('➔')||'—'}</td>
+        ${storeCells}<td>${a.distanceKm??'—'}</td><td class="amount">$${money(Math.round(totalAmt))}</td>
+        ${pctCells}${amtCells}
+      </tr>`;
+    }).join('');
+    return `<h4 style="margin:14px 0 6px;">${originLabel(addr)}｜配送明細</h4>
+      <table>
+        <thead><tr><th>日期</th><th>時段</th><th>車次</th><th>配送路線</th>${channelIds.map(cid=>`<th>${channelName(cid)}店數</th>`).join('')}<th>公里</th><th>總金額</th>${channelIds.map(cid=>`<th>${channelName(cid)}佔比</th>`).join('')}${channelIds.map(cid=>`<th>${channelName(cid)}請款</th>`).join('')}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>`;
+  }).join('');
+}
 function renderBilling(c){
-  const originOpts = state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
-  const defaultStart = `${todayStr().slice(0,7)}-01`;
+  const chOpts = state.data.channels.map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">依供應商（出發點）結算，勾選要一併請款的通路即可，取消勾選會自動排除該通路並重新計算未稅/含稅總額。每趟車的金額跟著路線管理裡設定的版本走；有星期一報價版本的路線，一律套用星期一版本的拆賬金額。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
+    <p class="section-sub">依通路結算請款單。系統會依「路線版本異動的日期」自動把請款區間切成好幾段小區間分開計算；每段區間內再依供應商（出發點）拆開顯示。每趟車的金額跟著路線管理裡設定的版本走；有星期一報價版本的路線，一律套用星期一版本的拆賬金額。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
     <div class="panel">
       <div class="grid3">
-        <div class="field"><label>供應商（出發點）</label><select id="bOrigin">${originOpts}</select></div>
-        <div class="field"><label>區間起</label><input id="bStart" type="date" value="${defaultStart}"></div>
-        <div class="field"><label>區間迄</label><input id="bEnd" type="date" value="${todayStr()}"></div>
+        <div class="field"><label>通路</label><select id="bChannel">${chOpts}</select></div>
+        <div class="field"><label>對應月份</label><input id="bMonth" type="month" value="${month}"></div>
       </div>
-      <div class="field">
-        <label>包含通路（取消勾選會排除該通路並重新計算金額）</label>
-        <div id="bChannelChecks" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;"></div>
+      <div class="grid2">
+        <div class="field"><label>區間起（可調整）</label><input id="bStart" type="date"></div>
+        <div class="field"><label>區間迄（可調整）</label><input id="bEnd" type="date"></div>
       </div>
     </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">例外調整（人工加註的備註與金額，會併入本張請款單總額）</h3>
+      <div class="grid3">
+        <div class="field" style="grid-column:span 2;"><label>備註</label><input id="baNote" placeholder="例如：7/28久陽一車未出車"></div>
+        <div class="field"><label>金額（可為負數）</label><input id="baAmount" type="number"></div>
+      </div>
+      <button class="btn ghost" id="addBillingAdj">新增調整項</button>
+      <div id="billingAdjList" style="margin-top:8px;"></div>
+    </div>
     <div id="billingResult"></div>`;
-  function refreshChecks(){
-    const originAddr = document.getElementById('bOrigin').value;
-    const chs = channelsForOrigin(originAddr);
-    const checksEl = document.getElementById('bChannelChecks');
-    checksEl.innerHTML = chs.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" checked style="width:auto;">${ch.name}</label>`).join('') || '<span style="font-size:12px; color:var(--ink-soft);">此供應商尚無相關通路的車趟紀錄</span>';
-    checksEl.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = refresh);
+  function currentPeriod(){
+    return { channelId: document.getElementById('bChannel').value, start: document.getElementById('bStart').value, end: document.getElementById('bEnd').value };
   }
+  function refreshAdjList(){
+    const { channelId, start, end } = currentPeriod();
+    const list = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===start && x.periodEnd===end);
+    document.getElementById('billingAdjList').innerHTML = list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">此區間尚無例外調整</div>';
+    document.getElementById('billingAdjList').querySelectorAll('[data-deladj]').forEach(btn=>{
+      btn.onclick = async ()=>{ try{ await deleteBillingAdjustment(btn.dataset.deladj); refreshAdjList(); refresh(); }catch(err){ alert(err.message); } };
+    });
+  }
+  document.getElementById('addBillingAdj').onclick = async ()=>{
+    const { channelId, start, end } = currentPeriod();
+    const note = document.getElementById('baNote').value.trim();
+    const amount = Number(document.getElementById('baAmount').value);
+    if(!note || !amount){ alert('請填寫備註與金額'); return; }
+    try{
+      await createBillingAdjustment({ channelId, periodStart:start, periodEnd:end, note, amount });
+      document.getElementById('baNote').value=''; document.getElementById('baAmount').value='';
+      refreshAdjList(); refresh();
+    }catch(err){ alert(err.message); }
+  };
   function refresh(){
-    const originAddr = document.getElementById('bOrigin').value;
-    const og = state.data.origins.find(o=>o.address===originAddr);
-    const start = document.getElementById('bStart').value, end = document.getElementById('bEnd').value;
-    const included = Array.from(document.querySelectorAll('.bChCheck:checked')).map(cb=>cb.value);
-    if(!start || !end || !included.length){
-      document.getElementById('billingResult').innerHTML = `<div class="panel"><div class="empty">請選擇區間並至少勾選一個通路</div></div>`;
-      return;
-    }
-    const r = originBillingBreakdown(originAddr, start, end, included);
+    const channelId = document.getElementById('bChannel').value;
+    const monthStr = document.getElementById('bMonth').value;
+    state._billingMonth = monthStr;
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    if(!channel){ document.getElementById('billingResult').innerHTML='<div class="empty">請先建立通路</div>'; return; }
+    let period = defaultPeriod(channel, monthStr);
+    const startInput = document.getElementById('bStart'), endInput = document.getElementById('bEnd');
+    if(!startInput.value) startInput.value = period.start;
+    if(!endInput.value) endInput.value = period.end;
+    const start = startInput.value, end = endInput.value;
+    refreshAdjList();
+
+    const segments = splitPeriodByVersionChanges(channelId, start, end);
+    // 先把每段小區間的金額四捨五入到整數再往下加總，確保畫面上顯示的每一列
+    // 跟「未稅/含稅合計」對得起來（不會因為先加總浮點數再四捨五入而差1元）。
+    const segRows = segments.map(seg=> ({ ...seg, amount: Math.round(channelBillingTotal(channelId, seg.start, seg.end).total) }));
+    const tripTotal = segRows.reduce((s,x)=>s+x.amount, 0);
+    const originRows = channelOriginBreakdown(channelId, start, end);
+    const adjustments = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===start && x.periodEnd===end);
+    const adjTotal = adjustments.reduce((s,x)=>s+x.amount, 0);
+    const combined = tripTotal + adjTotal;
+    const taxIncl = channel.taxInclusive !== false;
+    const grand = untaxWithTax(combined, taxIncl);
+    const originWithTax = originRows.map(o=> ({ ...o, ...untaxWithTax(o.amount, taxIncl) }));
+
     document.getElementById('billingResult').innerHTML = `
       <div class="panel">
-        <h3 style="margin-top:0;">${og?(og.label||og.address):''} — ${start} ~ ${end}</h3>
+        <h3 style="margin-top:0;">${channel.name}｜物流費用請款總覽（${start} ~ ${end}）</h3>
         <table>
-          <thead><tr><th>通路</th><th>車趟數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
-          <tbody>${r.channelBreakdown.map(x=>`<tr><td>${x.name}</td><td>${x.tripCount}</td><td>${x.storeCount}</td><td class="amount">$${money(x.untaxed.toFixed(0))}</td><td class="amount">$${money(x.tax.toFixed(0))}</td><td class="amount">$${money(x.withTax.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
-          <tfoot><tr><td><strong>合計</strong></td><td></td><td></td><td class="amount"><strong>$${money(r.untaxedTotal.toFixed(0))}</strong></td><td class="amount"><strong>$${money(r.taxTotal.toFixed(0))}</strong></td><td class="amount"><strong>$${money(r.grandTotal.toFixed(0))}</strong></td></tr></tfoot>
+          <thead><tr><th>請款期間</th><th>物流費</th></tr></thead>
+          <tbody>${segRows.map(s=>`<tr><td>${s.start} ~ ${s.end}</td><td class="amount">$${money(Math.round(s.amount))}</td></tr>`).join('') || '<tr><td colspan="2"><div class="empty">此區間無相關車趟</div></td></tr>'}
+          ${adjustments.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td></tr>`).join('')}
+          </tbody>
+          <tfoot><tr><td><strong>未稅合計</strong></td><td class="amount"><strong>$${money(grand.untaxed)}</strong></td></tr>
+          <tr><td><strong>稅額</strong></td><td class="amount"><strong>$${money(grand.tax)}</strong></td></tr>
+          <tr><td><strong>含稅合計</strong></td><td class="amount"><strong>$${money(grand.withTax)}</strong></td></tr></tfoot>
         </table>
-        <h4 style="margin:14px 0 6px;">逐日明細（車趟、配送店次與每日單價）</h4>
+        <h4 style="margin:14px 0 6px;">各區費用總覽（依供應商／出發點）</h4>
         <table>
-          <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>配送店次</th><th>當日金額</th></tr></thead>
-          <tbody>${r.rows.map(x=>`<tr><td>${x.date}</td><td>${stripWeekdayLabel(routeName(x.routeId))}</td><td>${driverName(x.driverId)}</td><td>${x.storeCount}</td><td class="amount">$${money(x.amount.toFixed(0))}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
+          <thead><tr><th>供應商</th><th>車趟數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
+          <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
         </table>
+        ${renderRunDetailTables(channelId, start, end)}
         <button class="btn amber no-print" id="printBilling" style="margin-top:10px;">產生請款單（列印/另存PDF）</button>
       </div>`;
-    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('printBilling').closest('.panel'), `${og?(og.label||og.address):'請款單'}_${start}_${end}_請款單`);
+    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('printBilling').closest('.panel'), `${channel.name}_${start}_${end}_請款單`);
   }
-  document.getElementById('bOrigin').onchange = ()=>{ refreshChecks(); refresh(); };
+  document.getElementById('bChannel').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
+  document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
   document.getElementById('bStart').onchange = refresh;
   document.getElementById('bEnd').onchange = refresh;
-  refreshChecks();
   refresh();
 }
 

@@ -192,6 +192,21 @@ create table adjustments (
 create index idx_adjustments_driver_month on adjustments(driver_id, adjustment_month);
 
 -- ------------------------------------------------------------
+-- 9b. 客戶請款例外調整（例如「未出車扣款」「回收費用」等人工加註的
+-- 備註+金額，跟司機薪資調整項是兩回事，只影響請款單顯示的總額）
+-- ------------------------------------------------------------
+create table billing_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  channel_id uuid not null references channels(id) on delete cascade,
+  period_start date not null,
+  period_end date not null,
+  note text not null,
+  amount numeric not null,
+  created_at timestamptz not null default now()
+);
+create index idx_billing_adjustments_channel on billing_adjustments(channel_id);
+
+-- ------------------------------------------------------------
 -- 10. 司機月結勞報單
 -- ------------------------------------------------------------
 create table statements (
@@ -377,6 +392,13 @@ grant select on adjustments to app_driver;
 create policy admin_all on adjustments for all to app_admin using (true) with check (true);
 create policy driver_select_own on adjustments for select to app_driver
   using (driver_id = auth_driver_id());
+
+-- ------------------------------------------------------------
+-- billing_adjustments：只有 app_admin 會用到（客戶請款例外調整，司機不需要看）。
+-- ------------------------------------------------------------
+alter table billing_adjustments enable row level security;
+grant select, insert, update, delete on billing_adjustments to app_admin;
+create policy admin_all on billing_adjustments for all to app_admin using (true) with check (true);
 
 -- ------------------------------------------------------------
 -- statements：app_admin 全權限；app_driver 只能看自己的月結單，

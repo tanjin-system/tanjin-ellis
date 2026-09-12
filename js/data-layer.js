@@ -123,6 +123,13 @@ function mapNotification(row) {
   return { id: row.id, type: row.type, message: row.message, createdAt: row.created_at, read: row.read };
 }
 
+function mapBillingAdjustment(row) {
+  return {
+    id: row.id, channelId: row.channel_id, periodStart: row.period_start, periodEnd: row.period_end,
+    note: row.note, amount: Number(row.amount)
+  };
+}
+
 // ---------------- 照片／簽名：Storage 路徑 → 短期有效的可存取連結 ----------------
 // 沿用 demo 原本欄位名稱（dp.photo / statement.signatureDataUrl），
 // 這樣 index.html 裡 <img src="${dp.photo}"> 這類渲染程式碼完全不用改。
@@ -181,7 +188,9 @@ async function loadAllData() {
     // 同樣的道理：schema.sql 只 grant app_driver 對 notifications 的 insert 權限
     // （司機端沒有通知頁，出發/完成時只需要新增一筆，不需要讀取），所以司機身份
     // 查這個表一定 permission denied，只有 admin 才查。
-    ...(isAdmin ? { notificationsRes: supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200) } : {})
+    ...(isAdmin ? { notificationsRes: supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200) } : {}),
+    // billing_adjustments 只 grant app_admin，司機身份查會 permission denied，只有 admin 才查。
+    ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {})
   };
   const keys = Object.keys(queries);
   const results = await Promise.all(Object.values(queries));
@@ -201,7 +210,8 @@ async function loadAllData() {
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
     statements: (byKey.statementsRes.data || []).map(mapStatement),
-    notifications: (byKey.notificationsRes?.data || []).map(mapNotification)
+    notifications: (byKey.notificationsRes?.data || []).map(mapNotification),
+    billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment)
   };
 
   await resolvePhotoUrls(data.assignments);
@@ -745,6 +755,27 @@ async function bulkDeleteAdjustments(ids) {
   if (error) throw new Error('刪除資料失敗：' + error.message);
   const idSet = new Set(ids);
   state.data.adjustments = state.data.adjustments.filter(a => !idSet.has(a.id));
+}
+
+// ---------------- 客戶請款例外調整（跟司機薪資調整項是兩回事） ----------------
+
+async function createBillingAdjustment(input) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('billing_adjustments').insert({
+    channel_id: input.channelId, period_start: input.periodStart, period_end: input.periodEnd,
+    note: input.note, amount: input.amount
+  }).select().single();
+  if (error) throw new Error('新增請款調整項失敗：' + error.message);
+  const adj = mapBillingAdjustment(data);
+  state.data.billingAdjustments.push(adj);
+  return adj;
+}
+
+async function deleteBillingAdjustment(id) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('billing_adjustments').delete().eq('id', id);
+  if (error) throw new Error('刪除請款調整項失敗：' + error.message);
+  state.data.billingAdjustments = state.data.billingAdjustments.filter(a => a.id !== id);
 }
 
 // live: driverMonthly() 算出來的即時金額（凍結當下的快照數字）
