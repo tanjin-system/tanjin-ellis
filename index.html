@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
-<title>碳金車隊調度系統</title>
+<title>信興-碳金車隊</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -114,7 +114,7 @@
 </head>
 <body>
 <header>
-  <h1 id="appTitle">碳金車隊調度系統</h1>
+  <h1 id="appTitle">信興-碳金車隊</h1>
   <div class="role-switch">
     <span id="whoAmI" style="font-size:12.5px;"></span>
     <button class="btn ghost" id="logoutBtn" style="display:none; padding:5px 10px; font-size:12px;">登出／切換身份</button>
@@ -1770,31 +1770,14 @@ function renderPayroll(c){
 
 // ---------- 請款結算 ----------
 // 依「通路」（例如7-11、康達盛通）結算一整份請款單：先依路線版本異動日期自動切成
-// 好幾段小區間，各區間內再依供應商（出發點）拆開顯示，最後附上每一趟車的明細
-// （跟其他通路共配時，會一併列出各通路的店數/佔比/請款金額方便對照）。
+// 好幾段小區間算出各通路自己的未稅/含稅總額；配送明細則是「已選通路」共用一份，
+// 只列出已選通路的店數/佔比/金額，未勾選的通路完全不會出現（見 mergedRunRows）。
 function originLabel(addr){
   const og = state.data.origins.find(o=>o.address===addr);
   return og ? (og.label||og.address) : (addr || '（未知出發點）');
 }
-function buildChannelRunRows(channelId, start, end){
-  const rows = state.data.assignments.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
-  const byOrigin = {};
-  rows.forEach(a=>{
-    const route = state.data.routes.find(r=>r.id===a.routeId);
-    if(!route) return;
-    const byChannel = effectiveByChannelForAssignment(a);
-    if(!byChannel[channelId]) return;
-    const addr = route.originAddr || '';
-    if(!byOrigin[addr]) byOrigin[addr] = [];
-    byOrigin[addr].push({ a, route, byChannel });
-  });
-  Object.values(byOrigin).forEach(list=> list.sort((x,y)=>
-    x.a.date.localeCompare(y.a.date) || (x.route.shift||'').localeCompare(y.route.shift||'') || seqSortKey(x.route.seq)-seqSortKey(y.route.seq)
-  ));
-  return byOrigin;
-}
-// 算出一個通路在某區間的完整請款單資料（純資料，不含畫面），畫面渲染跟Excel
-// 匯出共用同一份資料，確保兩邊數字保證一致。
+// 算出一個通路在某區間的請款總覽資料（未稅/含稅/各出發點總額，純資料不含畫面），
+// 畫面渲染跟Excel匯出共用同一份資料，確保兩邊數字保證一致。
 function computeChannelBillingReport(channelId, start, end){
   const channel = state.data.channels.find(ch=>ch.id===channelId);
   if(!channel) return null;
@@ -1810,36 +1793,81 @@ function computeChannelBillingReport(channelId, start, end){
   const taxIncl = channel.taxInclusive !== false;
   const grand = untaxWithTax(combined, taxIncl);
   const originWithTax = originRows.map(o=> ({ ...o, ...untaxWithTax(o.amount, taxIncl) }));
-  const runsByOrigin = buildChannelRunRows(channelId, start, end);
-  return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax, runsByOrigin };
+  return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax };
 }
-function runDetailTableHtml(channelId, runsByOrigin){
-  const originAddrs = Object.keys(runsByOrigin);
+// 多通路合併配送明細：只計入「已選通路」的店數/金額，未勾選的通路即使共用同一
+// 車趟也完全不會出現（避免把其他通路的請款資訊洩漏到對帳用的明細表裡）。
+// 同一條路線如果連續好幾天下貨點組成、金額都完全相同（代表路線沒有異動），
+// 會自動合併成一列「生效區間＋天數」；只有真的異動過的路線才會拆成好幾列，
+// 不需要像人工作業一樣，一有異動就整個出發點的車都重新複製一份。
+function mergedRunRows(channelIds, start, end){
+  const rows = state.data.assignments.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
+  const byOriginRoute = {};
+  rows.forEach(a=>{
+    const route = state.data.routes.find(r=>r.id===a.routeId);
+    if(!route) return;
+    const fullByChannel = effectiveByChannelForAssignment(a);
+    const byChannel = {}; const storeCounts = {}; let dailyTotal = 0; let relevant = false;
+    channelIds.forEach(cid=>{
+      const amt = Math.round(fullByChannel[cid]||0);
+      const cnt = (a.dropPoints||[]).filter(dp=>dp.channelId===cid).length;
+      byChannel[cid] = amt; storeCounts[cid] = cnt; dailyTotal += amt;
+      if(amt>0 || cnt>0) relevant = true;
+    });
+    if(!relevant) return; // 這趟車跟已選通路完全無關，略過
+    const addr = route.originAddr || '';
+    if(!byOriginRoute[addr]) byOriginRoute[addr] = {};
+    if(!byOriginRoute[addr][route.id]) byOriginRoute[addr][route.id] = { route, items: [] };
+    const dropLabel = (a.dropPoints||[]).filter(dp=>channelIds.includes(dp.channelId)).map(dpLabel).join('➔')||'—';
+    byOriginRoute[addr][route.id].items.push({ date:a.date, dropLabel, km:a.distanceKm, storeCounts, byChannel, dailyTotal });
+  });
+  const byOrigin = {};
+  Object.keys(byOriginRoute).forEach(addr=>{
+    const routeGroups = Object.values(byOriginRoute[addr]);
+    routeGroups.sort((x,y)=> (x.route.shift||'').localeCompare(y.route.shift||'') || seqSortKey(x.route.seq)-seqSortKey(y.route.seq));
+    const collapsedRows = [];
+    routeGroups.forEach(({route, items})=>{
+      items.sort((x,y)=> x.date.localeCompare(y.date));
+      let run = null;
+      const flush = ()=>{ if(run) collapsedRows.push(run); run = null; };
+      items.forEach(item=>{
+        const sig = JSON.stringify([item.dropLabel, item.km, channelIds.map(cid=>[item.storeCounts[cid]||0, item.byChannel[cid]||0])]);
+        if(run && run.sig===sig){ run.dateEnd = item.date; run.dayCount += 1; }
+        else { flush(); run = { route, sig, dateStart:item.date, dateEnd:item.date, dayCount:1, dropLabel:item.dropLabel, km:item.km, storeCounts:item.storeCounts, byChannel:item.byChannel, dailyTotal:item.dailyTotal }; }
+      });
+      flush();
+    });
+    if(collapsedRows.length) byOrigin[addr] = collapsedRows;
+  });
+  return byOrigin;
+}
+function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
+  const originAddrs = Object.keys(mergedByOrigin);
   if(!originAddrs.length) return '<div class="empty">此區間無相關車趟</div>';
   return originAddrs.map(addr=>{
-    const list = runsByOrigin[addr];
-    const channelIds = [...new Set(list.flatMap(x=>Object.keys(x.byChannel)))].sort((a,b)=> a===channelId?-1: b===channelId?1:0);
-    const bodyRows = list.map(({a,route,byChannel})=>{
-      const totalAmt = Object.values(byChannel).reduce((s,v)=>s+v,0);
-      const storeCells = channelIds.map(cid=>`<td>${(a.dropPoints||[]).filter(dp=>dp.channelId===cid).length}</td>`).join('');
-      const pctCells = channelIds.map(cid=>`<td>${totalAmt? ((byChannel[cid]||0)/totalAmt*100).toFixed(1):'0.0'}%</td>`).join('');
-      const amtCells = channelIds.map(cid=>`<td class="amount">$${money(Math.round(byChannel[cid]||0))}</td>`).join('');
+    const list = mergedByOrigin[addr];
+    const bodyRows = list.map(r=>{
+      const totalStores = channelIds.reduce((s,cid)=> s+(r.storeCounts[cid]||0), 0);
+      const storeCells = channelIds.map(cid=>`<td>${r.storeCounts[cid]||0}</td>`).join('');
+      const pctCells = channelIds.map(cid=>`<td>${r.dailyTotal? ((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1):'0.0'}%</td>`).join('');
+      const periodAmtCells = channelIds.map(cid=>`<td class="amount">$${money(Math.round((r.byChannel[cid]||0)*r.dayCount))}</td>`).join('');
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
       return `<tr>
-        <td>${a.date}</td><td>${route.shift==='AM'?'上午':'下午'}</td><td>${stripWeekdayLabel(route.seq)}</td>
-        <td>${(a.dropPoints||[]).map(dpLabel).join('➔')||'—'}</td>
-        ${storeCells}<td>${a.distanceKm??'—'}</td><td class="amount">$${money(Math.round(totalAmt))}</td>
-        ${pctCells}${amtCells}
+        <td>${period}</td><td>${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${stripWeekdayLabel(r.route.seq)}</td>
+        <td>${r.dropLabel}</td>
+        ${storeCells}<td>${totalStores}</td><td>${r.km??'—'}</td><td class="amount">$${money(Math.round(r.dailyTotal))}</td>
+        ${pctCells}<td class="amount">$${money(Math.round(r.dailyTotal*r.dayCount))}</td>${periodAmtCells}
       </tr>`;
     }).join('');
     return `<h4 style="margin:14px 0 6px;">${originLabel(addr)}｜配送明細</h4>
       <table>
-        <thead><tr><th>日期</th><th>時段</th><th>車次</th><th>配送路線</th>${channelIds.map(cid=>`<th>${channelName(cid)}店數</th>`).join('')}<th>公里</th><th>總金額</th>${channelIds.map(cid=>`<th>${channelName(cid)}佔比</th>`).join('')}${channelIds.map(cid=>`<th>${channelName(cid)}請款</th>`).join('')}</tr></thead>
+        <thead><tr><th>生效區間</th><th>天數</th><th>時段</th><th>車次</th><th>配送路線</th>${channelIds.map(cid=>`<th>${channelName(cid)}店數</th>`).join('')}<th>總店數</th><th>公里</th><th>單日總金額</th>${channelIds.map(cid=>`<th>${channelName(cid)}佔比</th>`).join('')}<th>期間合計</th>${channelIds.map(cid=>`<th>${channelName(cid)}請款</th>`).join('')}</tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>`;
   }).join('');
 }
-function channelBillingPanelHtml(report){
-  const { channel, start, end, segRows, adjustments, grand, originWithTax, runsByOrigin } = report;
+function channelSummaryPanelHtml(report){
+  const { channel, start, end, segRows, adjustments, grand, originWithTax } = report;
   return `
     <div class="panel">
       <h3 style="margin-top:0;">${channel.name}｜物流費用請款總覽（${start} ~ ${end}）</h3>
@@ -1857,11 +1885,10 @@ function channelBillingPanelHtml(report){
         <thead><tr><th>供應商</th><th>車趟數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
         <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
       </table>
-      ${runDetailTableHtml(report.channel.id, runsByOrigin)}
     </div>`;
 }
-// ---- Excel（.xlsx）匯出：跟畫面用同一份 computeChannelBillingReport() 資料，
-// 保證數字一致；萬一系統算錯，這份檔案可以直接在Excel裡手動修正金額。----
+// ---- Excel（.xlsx）匯出：跟畫面用同一份資料（computeChannelBillingReport／
+// mergedRunRows），保證數字一致；萬一系統算錯，這份檔案可以直接在Excel裡手動修正金額。----
 function addAOASheet(wb, sheetName, aoa, merges){
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   if(merges && merges.length) ws['!merges'] = merges;
@@ -1870,8 +1897,8 @@ function addAOASheet(wb, sheetName, aoa, merges){
   while(wb.SheetNames.includes(name)){ name = safeName.slice(0,28) + '_' + (++i); }
   XLSX.utils.book_append_sheet(wb, ws, name);
 }
-function buildChannelBillingSheets(wb, report){
-  const { channel, start, end, segRows, adjustments, grand, originWithTax, runsByOrigin } = report;
+function buildChannelSummarySheet(wb, report){
+  const { channel, start, end, segRows, adjustments, grand, originWithTax } = report;
   const aoa = [];
   aoa.push([`${channel.name}｜物流費用請款總覽（${start}~${end}）`]);
   aoa.push(['請款期間','物流費']);
@@ -1886,29 +1913,33 @@ function buildChannelBillingSheets(wb, report){
   originWithTax.forEach(o=> aoa.push([originLabel(o.originAddr), o.tripCount, o.storeCount, o.untaxed, o.tax, o.withTax]));
   const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:5} }];
   addAOASheet(wb, `${channel.name}請款總覽`, aoa, merges);
-
-  Object.keys(runsByOrigin).forEach(addr=>{
-    const list = runsByOrigin[addr];
-    const channelIds = [...new Set(list.flatMap(x=>Object.keys(x.byChannel)))].sort((a,b)=> a===channel.id?-1: b===channel.id?1:0);
+}
+function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
+  const channelNamesJoined = channelIds.map(channelName).join('、');
+  Object.keys(mergedByOrigin).forEach(addr=>{
+    const list = mergedByOrigin[addr];
     const dAoa = [];
-    dAoa.push([`${originLabel(addr)}｜配送明細（${start}~${end}）`]);
-    dAoa.push(['日期','時段','車次','配送路線', ...channelIds.map(cid=>`${channelName(cid)}店數`), '公里','總金額', ...channelIds.map(cid=>`${channelName(cid)}佔比`), ...channelIds.map(cid=>`${channelName(cid)}請款`)]);
-    list.forEach(({a,route,byChannel})=>{
-      const totalAmt = Math.round(Object.values(byChannel).reduce((s,v)=>s+v,0));
-      const storeCounts = channelIds.map(cid=>(a.dropPoints||[]).filter(dp=>dp.channelId===cid).length);
-      const pcts = channelIds.map(cid=> totalAmt? Number(((byChannel[cid]||0)/totalAmt*100).toFixed(1)) : 0);
-      const amts = channelIds.map(cid=> Math.round(byChannel[cid]||0));
-      dAoa.push([a.date, route.shift==='AM'?'上午':'下午', stripWeekdayLabel(route.seq), (a.dropPoints||[]).map(dpLabel).join('➔')||'—', ...storeCounts, a.distanceKm??'', totalAmt, ...pcts, ...amts]);
+    dAoa.push([`${originLabel(addr)}｜配送明細（${start}~${end}，已選通路：${channelNamesJoined}）`]);
+    dAoa.push(['生效區間','天數','時段','車次','配送路線', ...channelIds.map(cid=>`${channelName(cid)}店數`), '總店數','公里','單日總金額', ...channelIds.map(cid=>`${channelName(cid)}佔比`), '期間合計', ...channelIds.map(cid=>`${channelName(cid)}請款`)]);
+    list.forEach(r=>{
+      const totalStores = channelIds.reduce((s,cid)=> s+(r.storeCounts[cid]||0), 0);
+      const storeCounts = channelIds.map(cid=> r.storeCounts[cid]||0);
+      const pcts = channelIds.map(cid=> r.dailyTotal? Number(((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1)) : 0);
+      const periodAmts = channelIds.map(cid=> Math.round((r.byChannel[cid]||0)*r.dayCount));
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
+      dAoa.push([period, r.dayCount, r.route.shift==='AM'?'上午':'下午', stripWeekdayLabel(r.route.seq), r.dropLabel, ...storeCounts, totalStores, r.km??'', Math.round(r.dailyTotal), ...pcts, Math.round(r.dailyTotal*r.dayCount), ...periodAmts]);
     });
-    addAOASheet(wb, `${start.slice(5).replace('-','')}-${end.slice(5).replace('-','')}${originLabel(addr)}`, dAoa, [{ s:{r:0,c:0}, e:{r:0,c:3+channelIds.length} }]);
+    addAOASheet(wb, `${originLabel(addr)}配送明細`, dAoa, [{ s:{r:0,c:0}, e:{r:0,c:dAoa[1].length-1} }]);
   });
 }
 function exportBillingExcel(channelIds, start, end){
   const wb = XLSX.utils.book_new();
   channelIds.forEach(cid=>{
     const report = computeChannelBillingReport(cid, start, end);
-    if(report) buildChannelBillingSheets(wb, report);
+    if(report) buildChannelSummarySheet(wb, report);
   });
+  const merged = mergedRunRows(channelIds, start, end);
+  buildMergedDetailSheets(wb, channelIds, merged, start, end);
   XLSX.writeFile(wb, `請款單_${start}_${end}.xlsx`);
 }
 function renderBilling(c){
@@ -1916,10 +1947,10 @@ function renderBilling(c){
   const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">勾選要一起結算的通路（可複選），系統會依「路線版本異動的日期」自動把請款區間切成好幾段小區間分開計算；每段區間內再依供應商（出發點）拆開顯示。每趟車的金額跟著路線管理裡設定的版本走；有星期一報價版本的路線，一律套用星期一版本的拆賬金額。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
+    <p class="section-sub">勾選要一起結算的通路（可複選），系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一車趟，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
     <div class="panel">
       <div class="field">
-        <label>通路（可複選，會各自產生一份總覽＋配送明細）</label>
+        <label>通路（可複選；各通路各自產生一份請款總覽，配送明細則合併成一份，只顯示已選通路）</label>
         <div id="bChannelChecks" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;">${chChecks}</div>
       </div>
       <div class="grid3">
@@ -1984,8 +2015,15 @@ function renderBilling(c){
       return;
     }
     const reports = channelIds.map(cid=> computeChannelBillingReport(cid, start, end)).filter(Boolean);
+    const merged = mergedRunRows(channelIds, start, end);
     document.getElementById('billingResult').innerHTML = `
-      <div id="billingPrintArea">${reports.map(channelBillingPanelHtml).join('')}</div>
+      <div id="billingPrintArea">
+        ${reports.map(channelSummaryPanelHtml).join('')}
+        <div class="panel">
+          <h3 style="margin-top:0;">配送明細（已選通路：${reports.map(r=>r.channel.name).join('、')}）</h3>
+          ${mergedRunDetailTableHtml(channelIds, merged)}
+        </div>
+      </div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
         <button class="btn amber" id="printBilling">產生請款單（列印/另存PDF）</button>
         <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
@@ -2409,7 +2447,7 @@ function renderMyStatement(c){
 // JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
 function updateTitle(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
-  document.getElementById('appTitle').textContent = inDriverView ? '碳金車隊' : '碳金車隊調度系統';
+  document.getElementById('appTitle').textContent = inDriverView ? '碳金車隊' : '信興-碳金車隊';
 }
 function updateHeaderBar(){
   const who = document.getElementById('whoAmI');
