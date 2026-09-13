@@ -2579,6 +2579,48 @@ function renderMyProfile(c){
   };
 }
 
+// 簽名畫布記錄下來的圖片形狀，跟簽名當下手機實際橫拿還是直拿有關（尤其
+// iOS Safari 在簽名視窗開著時轉方向，畫布尺寸不一定會正確跟著重算），存進
+// 勞報單「所得人簽章」欄位時，欄位是固定高度、盡量佔滿寬度顯示——如果存的
+// 圖片是「直的」（窄高），欄位就只能把它壓成一條極窄的直線，看起來像轉了
+// 90度或整個消失。這裡在送出前統一處理：先掃描找出真正有畫到墨水的範圍
+// （裁掉四周空白，讓簽名盡量佔滿欄位），裁完如果還是「高度大於寬度」就整張
+// 轉90度──保證不管簽名當下手機怎麼拿，存起來的圖一定是橫式、能撐滿欄位。
+function normalizeSignatureDataUrl(canvas){
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  let minX=w, minY=h, maxX=0, maxY=0, found=false;
+  const data = ctx.getImageData(0,0,w,h).data;
+  const step = 2; // 抽樣掃描加快速度，簽名筆畫夠粗不會因此漏掉範圍
+  for(let y=0; y<h; y+=step){
+    for(let x=0; x<w; x+=step){
+      if(data[(y*w+x)*4+3] > 10){
+        found = true;
+        if(x<minX) minX=x; if(x>maxX) maxX=x;
+        if(y<minY) minY=y; if(y>maxY) maxY=y;
+      }
+    }
+  }
+  if(!found) return canvas.toDataURL('image/png');
+  const pad = 20;
+  minX = Math.max(0, minX-pad); minY = Math.max(0, minY-pad);
+  maxX = Math.min(w, maxX+pad); maxY = Math.min(h, maxY+pad);
+  const cropW = maxX-minX, cropH = maxY-minY;
+  const landscape = cropW >= cropH;
+  const out = document.createElement('canvas');
+  out.width = landscape ? cropW : cropH;
+  out.height = landscape ? cropH : cropW;
+  const octx = out.getContext('2d');
+  octx.fillStyle = '#fff'; octx.fillRect(0,0,out.width,out.height);
+  if(landscape){
+    octx.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+  } else {
+    octx.translate(out.width, 0);
+    octx.rotate(Math.PI/2);
+    octx.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+  }
+  return out.toDataURL('image/png');
+}
 // 全畫面簽名視窗：點「已確認報酬」才跳出來簽，簽完按☑️送出、按❌取消不送出。
 // 畫布填滿當下裝置實際方向的可用空間（不管直放橫放）；先前用CSS把整個視窗
 // 強制轉90度模擬橫向的做法太容易在不同機型/瀏覽器對不齊（按鈕位置、畫布
@@ -2626,7 +2668,7 @@ function openSignatureModal(record){
   document.getElementById('sigConfirm').onclick = async ()=>{
     if(!hasSignature){ alert('請先簽名再送出'); return; }
     try{
-      await signStatement(record.id, canvas.toDataURL('image/png'));
+      await signStatement(record.id, normalizeSignatureDataUrl(canvas));
       window.removeEventListener('resize', resizeCanvas);
       host.innerHTML='';
       renderContent();
