@@ -59,6 +59,17 @@
   .badge.locked{ background:#E7E9EC; color:var(--ink-soft); }
   .badge.progress{ background:#DCE7F2; color:#2C5F8A; }
   .amount{ font-family:'IBM Plex Mono'; font-weight:600; }
+  .pw-wrap{ position:relative; }
+  .pw-wrap input{ padding-right:52px; }
+  .pw-toggle{ position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--ink-soft); font-size:11.5px; cursor:pointer; padding:5px 8px; }
+  .date-group{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:12px; overflow:hidden; }
+  .date-head{ display:flex; justify-content:space-between; align-items:center; padding:11px 14px; cursor:pointer; font-weight:600; font-size:13.5px; background:#FAF7F1; }
+  .date-head .chevron{ transition:transform .15s; color:var(--ink-soft); }
+  .date-group.open .chevron{ transform:rotate(90deg); }
+  .date-body{ display:none; padding:0 14px 12px; }
+  .date-group.open .date-body{ display:block; }
+  header #logoutBtn{ color:#fff; border-color:rgba(255,255,255,.45); }
+  .required-mark{ color:var(--danger); }
   .drop-point{ border:1px dashed var(--border); border-radius:var(--radius); padding:9px; margin-top:7px; font-size:12.5px; }
   .drop-point img{ max-width:70px; border-radius:2px; margin-top:6px; }
   .week-nav{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
@@ -587,14 +598,31 @@ const DRIVER_TABS = [
   {id:'my-statement', label:'對帳單'},
   {id:'profile', label:'我的資料'}
 ];
+// 電話、銀行資訊為必填(車牌/車型選填)——司機本人（非主控檢視）資料未填妥前，
+// 鎖定在「我的資料」頁，其他分頁停用，直到補齊必填欄位並儲存為止。
+function isDriverProfileRequiredComplete(d){
+  if(!d) return true;
+  return !!(d.phone && d.bank && d.bank.bankName && d.bank.branch && d.bank.account && d.bank.holder);
+}
 function renderNav(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
   const tabs = inDriverView ? DRIVER_TABS : ADMIN_TABS;
-  if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
+  const lockToProfile = state.role==='driver' && !state.adminViewDriver &&
+    !isDriverProfileRequiredComplete(state.data.drivers.find(d=>d.id===state.activeDriverId));
+  if(lockToProfile) state.tab = 'profile';
+  else if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
   const unread = (state.data.notifications||[]).filter(n=>!n.read).length;
   const nav = document.getElementById('tabsNav');
-  nav.innerHTML = tabs.map(t=>`<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}">${t.label}${(t.id==='notifications' && unread)?` <span class="badge pending" style="margin-left:4px;">${unread}</span>`:''}</button>`).join('');
-  nav.querySelectorAll('button').forEach(b=>{ b.onclick=()=>{ state.tab=b.dataset.tab; renderNav(); renderContent(); }; });
+  nav.innerHTML = tabs.map(t=>{
+    const disabled = lockToProfile && t.id!=='profile';
+    return `<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}" ${disabled?'disabled style="opacity:.4; cursor:not-allowed;"':''}>${t.label}${(t.id==='notifications' && unread)?` <span class="badge pending" style="margin-left:4px;">${unread}</span>`:''}</button>`;
+  }).join('');
+  nav.querySelectorAll('button').forEach(b=>{
+    b.onclick=()=>{
+      if(lockToProfile && b.dataset.tab!=='profile'){ alert('請先補齊必填的基本資料（電話、銀行帳戶）並儲存，才能使用其他功能。'); return; }
+      state.tab=b.dataset.tab; renderNav(); renderContent();
+    };
+  });
 }
 function renderContent(){
   const c = document.getElementById('content');
@@ -2436,7 +2464,6 @@ function renderToday(c){
   c.innerHTML = `
     <h2 class="section-title">今日行程</h2>
     <p class="section-sub">${driverName(dId)}，這是您今天的出車行程。</p>
-    <div class="note">目前為手動分享通知：點擊「分享至LINE」會開啟LINE讓您傳送提醒。系統自動於前一日推播需另外設定LINE官方帳號後台。</div>
     <div id="todayDetail"></div>
     <h3 style="margin-top:20px;">本週行程總覽</h3>
     <div class="schedule-grid">
@@ -2520,18 +2547,35 @@ function renderTodayDetail(todays){
 function renderHistory(c){
   const dId = state.activeDriverId;
   const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed').sort((a,b)=>b.date.localeCompare(a.date));
+  const groups = {};
+  list.forEach(a=>{ if(!groups[a.date]) groups[a.date] = []; groups[a.date].push(a); });
+  const dateKeys = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
   c.innerHTML = `
     <h2 class="section-title">歷史班表</h2>
     <p class="section-sub">已完成並封存的行程紀錄，不可再編輯。</p>
-    ${list.map(a=>`
-      <div class="panel">
-        <div class="toolbar"><strong>${a.date} · ${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
-        <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
-        ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-        ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`).join('')}
-      </div>
-    `).join('') || '<div class="empty">尚無已完成的歷史行程</div>'}
+    ${dateKeys.map(date=>{
+      const items = groups[date];
+      return `<div class="date-group" data-key="${date}">
+        <div class="date-head">
+          <span>${date}</span>
+          <span><span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${items.length} 趟</span> <span class="chevron">▸</span></span>
+        </div>
+        <div class="date-body">
+          ${items.map(a=>`
+            <div class="panel" style="margin-top:12px;">
+              <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
+              <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
+              ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
+              ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`).join('')}
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+    }).join('') || '<div class="empty">尚無已完成的歷史行程</div>'}
   `;
+  c.querySelectorAll('.date-head').forEach(head=>{
+    head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
+  });
 }
 function renderMyEarnings(c){
   const dId = state.activeDriverId;
@@ -2566,20 +2610,23 @@ function renderMyEarnings(c){
 function renderMyProfile(c){
   const dId = state.activeDriverId;
   const d = state.data.drivers.find(x=>x.id===dId);
+  const isDriverOwn = state.role==='driver' && !state.adminViewDriver;
+  const incomplete = isDriverOwn && !isDriverProfileRequiredComplete(d);
   c.innerHTML = `
     <h2 class="section-title">我的資料</h2>
     <p class="section-sub">修改後主控端會收到通知。姓名與狀態如需變更請聯絡主控。</p>
+    ${incomplete ? `<div class="note" style="border-color:var(--amber); color:#8A5A17;">電話、銀行帳戶資訊為必填，請補齊並儲存後才能使用其他功能。</div>` : ''}
     <div class="panel">
       <div class="grid3">
-        <div class="field"><label>電話</label><input id="mpPhone" value="${d.phone||''}"></div>
-        <div class="field"><label>車牌</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
-        <div class="field"><label>車型</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
+        <div class="field"><label>電話 <span class="required-mark">*</span></label><input id="mpPhone" value="${d.phone||''}"></div>
+        <div class="field"><label>車牌（選填）</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
+        <div class="field"><label>車型（選填）</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
       </div>
       <div class="grid4">
-        <div class="field"><label>銀行</label><input id="mpBankName" value="${d.bank.bankName||''}"></div>
-        <div class="field"><label>分行</label><input id="mpBranch" value="${d.bank.branch||''}"></div>
-        <div class="field"><label>帳號</label><input id="mpAccount" value="${d.bank.account||''}"></div>
-        <div class="field"><label>戶名</label><input id="mpHolder" value="${d.bank.holder||''}"></div>
+        <div class="field"><label>銀行 <span class="required-mark">*</span></label><input id="mpBankName" value="${d.bank.bankName||''}"></div>
+        <div class="field"><label>分行 <span class="required-mark">*</span></label><input id="mpBranch" value="${d.bank.branch||''}"></div>
+        <div class="field"><label>帳號 <span class="required-mark">*</span></label><input id="mpAccount" value="${d.bank.account||''}"></div>
+        <div class="field"><label>戶名 <span class="required-mark">*</span></label><input id="mpHolder" value="${d.bank.holder||''}"></div>
       </div>
       <button class="btn amber" id="mpSave">儲存修改</button>
     </div>
@@ -2608,7 +2655,7 @@ function renderMyProfile(c){
         holder: document.getElementById('mpHolder').value.trim()
       }, changes.join('、'));
       alert('已儲存，主控端會收到通知。');
-      renderContent();
+      renderNav(); renderContent();
     }catch(err){ alert(err.message); }
   };
 }
@@ -2819,7 +2866,7 @@ function updateHeaderBar(){
     btn.textContent = '登出／切換身份';
   } else {
     who.textContent = `司機：${driverName(state.activeDriverId)}`;
-    btn.textContent = '登出／切換身份';
+    btn.textContent = '登出';
   }
 }
 function viewAsDriver(driverId){

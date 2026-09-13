@@ -21,6 +21,16 @@ function clearAuth() {
   localStorage.removeItem(AUTH_DRIVER_KEY);
 }
 
+// 登入代碼/PIN 預設用 type=password 遮起來，按鈕可以切換顯示明碼——純前端顯示切換，
+// 不影響送出的值。
+function setupPwToggle(input, btn) {
+  btn.onclick = () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.textContent = show ? '隱藏' : '顯示';
+  };
+}
+
 async function loginAsAdmin(pin) {
   const res = await fetch('/api/auth-admin', {
     method: 'POST',
@@ -68,8 +78,11 @@ function renderLoginGate(message) {
       </select>
     </div>
     <div class="field">
-      <label id="loginCodeLabel">登入代碼（4碼）</label>
-      <input id="loginCode" inputmode="numeric" maxlength="8">
+      <label id="loginCodeLabel">登入代碼</label>
+      <div class="pw-wrap">
+        <input id="loginCode" type="password" inputmode="numeric" maxlength="8">
+        <button type="button" class="pw-toggle" id="loginCodeToggle" tabindex="-1">顯示</button>
+      </div>
     </div>
     <div id="loginError" style="color:var(--danger); font-size:12.5px; margin-bottom:8px; display:none;"></div>
     <button class="btn amber" id="loginSubmit" style="width:100%;">登入</button>
@@ -95,13 +108,14 @@ function renderLoginGate(message) {
       codeInput.removeAttribute('maxlength');
       forgotWrap.style.display = 'none';
     } else {
-      codeLabel.textContent = '登入代碼（4碼）';
+      codeLabel.textContent = '登入代碼';
       codeInput.setAttribute('inputmode', 'numeric');
       codeInput.setAttribute('maxlength', '8');
       forgotWrap.style.display = 'block';
     }
   };
   roleSel.onchange = applyRoleInputMode;
+  setupPwToggle(codeInput, document.getElementById('loginCodeToggle'));
   document.getElementById('forgotCodeLink').onclick = () => {
     forgotNote.style.display = 'block';
   };
@@ -123,7 +137,9 @@ function renderLoginGate(message) {
 
 // 司機首次登入(或主控重新產生代碼後)強制要求自訂新代碼的畫面，蓋在 #loginGate 上——
 // 跟 renderLoginGate 一樣先把 #appLayout 藏起來，這樣司機在設定新代碼前完全碰不到
-// 系統其他任何畫面。設定成功後直接呼叫 bootApp() 重新走一次開機流程進正式畫面。
+// 系統其他任何畫面。設定成功後不直接放行——退回登入畫面，強制司機實際用新代碼
+// 重新登入一次（確認新代碼真的能用），登入成功後 bootApp() 會自動導向「我的資料」
+// （見 index.html 的 renderNav()：司機本人資料未填妥時一律鎖定在該頁)。
 function renderForceCodeResetGate(driverId, driverName) {
   const appLayout = document.getElementById('appLayout');
   if (appLayout) appLayout.style.display = 'none';
@@ -132,11 +148,25 @@ function renderForceCodeResetGate(driverId, driverName) {
   gate.innerHTML = `
     <h2 class="section-title">設定新的登入代碼</h2>
     <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入（或代碼被主控重設後）需要自訂一組新的登入代碼才能繼續使用。</p>
-    <div class="field"><label>新登入代碼</label><input id="newCode1" inputmode="numeric" maxlength="8"></div>
-    <div class="field"><label>再輸入一次確認</label><input id="newCode2" inputmode="numeric" maxlength="8"></div>
+    <div class="field">
+      <label>新登入代碼</label>
+      <div class="pw-wrap">
+        <input id="newCode1" type="password" inputmode="numeric" maxlength="8">
+        <button type="button" class="pw-toggle" id="newCode1Toggle" tabindex="-1">顯示</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>再輸入一次確認</label>
+      <div class="pw-wrap">
+        <input id="newCode2" type="password" inputmode="numeric" maxlength="8">
+        <button type="button" class="pw-toggle" id="newCode2Toggle" tabindex="-1">顯示</button>
+      </div>
+    </div>
     <div id="resetCodeError" style="color:var(--danger); font-size:12.5px; margin-bottom:8px; display:none;"></div>
-    <button class="btn amber" id="resetCodeSubmit" style="width:100%;">設定並登入</button>
+    <button class="btn amber" id="resetCodeSubmit" style="width:100%;">設定新代碼</button>
   `;
+  setupPwToggle(document.getElementById('newCode1'), document.getElementById('newCode1Toggle'));
+  setupPwToggle(document.getElementById('newCode2'), document.getElementById('newCode2Toggle'));
   const errEl = document.getElementById('resetCodeError');
   document.getElementById('resetCodeSubmit').onclick = async () => {
     const c1 = document.getElementById('newCode1').value.trim();
@@ -146,7 +176,9 @@ function renderForceCodeResetGate(driverId, driverName) {
     if (c1 !== c2) { errEl.textContent = '兩次輸入的代碼不一致'; errEl.style.display = 'block'; return; }
     try {
       await changeMyAccessCode(driverId, c1);
-      await bootApp();
+      clearAuth();
+      alert('新代碼設定完成，請使用新代碼重新登入。');
+      renderLoginGate();
     } catch (e) {
       errEl.textContent = e.message;
       errEl.style.display = 'block';
