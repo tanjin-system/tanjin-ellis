@@ -29,7 +29,7 @@ function mapChannel(row) {
     id: row.id, name: row.name, periodType: row.period_type,
     startDay: row.start_day, endDay: row.end_day, status: row.status,
     formulaType: row.formula_type, rateKm: Number(row.rate_km), ratePoint: Number(row.rate_point),
-    flatAmount: Number(row.flat_amount), taxInclusive: row.tax_inclusive !== false,
+    flatAmount: Number(row.flat_amount), taxMode: row.tax_mode || 'inclusive',
     accessToken: row.access_token || ''
   };
 }
@@ -346,7 +346,7 @@ function channelPayload(input) {
     name: input.name, period_type: input.periodType, start_day: input.startDay,
     end_day: input.periodType === 'custom' ? input.endDay : null,
     formula_type: input.formulaType, rate_km: input.rateKm, rate_point: input.ratePoint, flat_amount: input.flatAmount,
-    tax_inclusive: input.taxInclusive !== false
+    tax_mode: input.taxMode || 'inclusive'
   };
 }
 

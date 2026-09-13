@@ -537,10 +537,12 @@ function channelOriginBreakdown(channelId, start, end){
   });
   return Object.values(byOrigin).sort((a,b)=> b.amount - a.amount);
 }
-// 未稅/含稅：依通路自己設定的稅別反推（未稅通路加5%營業稅、含稅通路反算內含稅額）。
-function untaxWithTax(amount, taxInclusive){
+// 未稅/含稅/免稅：依通路自己設定的稅別反推（未稅通路加5%營業稅、含稅通路反算內含稅額、
+// 免稅通路完全不計稅，未稅=含稅=原金額）。
+function untaxWithTax(amount, taxMode){
   let untaxed, withTax;
-  if(taxInclusive){ withTax = Math.round(amount); untaxed = Math.round(amount/1.05); }
+  if(taxMode==='exempt'){ untaxed = Math.round(amount); withTax = untaxed; }
+  else if(taxMode==='inclusive'){ withTax = Math.round(amount); untaxed = Math.round(amount/1.05); }
   else { untaxed = Math.round(amount); withTax = Math.round(amount*1.05); }
   return { untaxed, withTax, tax: withTax-untaxed };
 }
@@ -966,7 +968,7 @@ function renderChannels(c){
         <div class="field"><label>整趟固定金額（元）</label><input id="chFlat" type="number" placeholder="選「整趟固定金額」時填寫"></div>
       </div>
       <div class="field" style="max-width:160px;"><label>請款金額</label>
-        <select id="chTax"><option value="1">含稅</option><option value="0">未稅</option></select>
+        <select id="chTax"><option value="inclusive">含稅</option><option value="exclusive">未稅</option><option value="exempt">免稅</option></select>
       </div>
       <button class="btn amber" id="addChannel">新增通路</button>
     </div>
@@ -985,7 +987,7 @@ function renderChannels(c){
         rateKm: Number(document.getElementById('chRateKm').value)||0,
         ratePoint: Number(document.getElementById('chRatePoint').value)||0,
         flatAmount: Number(document.getElementById('chFlat').value)||0,
-        taxInclusive: document.getElementById('chTax').value==='1'
+        taxMode: document.getElementById('chTax').value
       });
       renderContent();
     }catch(err){ alert(err.message); }
@@ -1019,13 +1021,18 @@ function renderChannelList(){
                   <div class="field"><label>整趟固定金額（元）</label><input id="ecFlat" type="number" value="${ch.flatAmount}"></div>
                 </div>
                 <div class="field" style="max-width:160px;"><label>請款金額</label>
-                  <select id="ecTax"><option value="1" ${ch.taxInclusive?'selected':''}>含稅</option><option value="0" ${!ch.taxInclusive?'selected':''}>未稅</option></select>
+                  <select id="ecTax">
+                    <option value="inclusive" ${ch.taxMode==='inclusive'?'selected':''}>含稅</option>
+                    <option value="exclusive" ${ch.taxMode==='exclusive'?'selected':''}>未稅</option>
+                    <option value="exempt" ${ch.taxMode==='exempt'?'selected':''}>免稅</option>
+                  </select>
                 </div>
                 <button class="btn amber" data-savech="${ch.id}">儲存</button>
                 <button class="btn ghost" data-cancelch="${ch.id}">取消</button>
               </td></tr>`;
             }
-            const formulaText = (ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`) + `・${ch.taxInclusive?'含稅':'未稅'}`;
+            const taxModeLabel = ch.taxMode==='exempt' ? '免稅' : ch.taxMode==='exclusive' ? '未稅' : '含稅';
+            const formulaText = (ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`) + `・${taxModeLabel}`;
             const clientUrl = ch.accessToken ? `${location.origin}/client.html?token=${ch.accessToken}` : '';
             return `<tr>
               <td>${ch.name}</td>
@@ -1069,7 +1076,7 @@ function renderChannelList(){
           rateKm: Number(document.getElementById('ecRateKm').value)||0,
           ratePoint: Number(document.getElementById('ecRatePoint').value)||0,
           flatAmount: Number(document.getElementById('ecFlat').value)||0,
-          taxInclusive: document.getElementById('ecTax').value==='1'
+          taxMode: document.getElementById('ecTax').value
         });
         editingChannelId = null;
         renderContent();
@@ -2060,9 +2067,9 @@ function computeChannelBillingReport(channelId, start, end){
   const adjustments = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===start && x.periodEnd===end);
   const adjTotal = adjustments.reduce((s,x)=>s+x.amount, 0);
   const combined = tripTotal + adjTotal;
-  const taxIncl = channel.taxInclusive !== false;
-  const grand = untaxWithTax(combined, taxIncl);
-  const originWithTax = originRows.map(o=> ({ ...o, ...untaxWithTax(o.amount, taxIncl) }));
+  const taxMode = channel.taxMode || 'inclusive';
+  const grand = untaxWithTax(combined, taxMode);
+  const originWithTax = originRows.map(o=> ({ ...o, ...untaxWithTax(o.amount, taxMode) }));
   return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax };
 }
 // 多通路合併配送明細：只計入「已選通路」的店數/金額，未勾選的通路即使共用同一
