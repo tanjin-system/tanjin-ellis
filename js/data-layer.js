@@ -154,7 +154,7 @@ async function resolvePhotoUrls(assignments) {
 
 async function resolveSignatureUrls(statements) {
   const supabase = getSupabase();
-  const targets = statements.filter(s => s.status === 'signed');
+  const targets = statements.filter(s => s.status === 'signed' || s.status === 'confirmed');
   if (!targets.length) return;
   const { data, error } = await supabase.storage
     .from('signatures')
