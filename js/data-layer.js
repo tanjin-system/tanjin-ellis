@@ -853,6 +853,20 @@ async function signStatement(statementId, signatureDataUrl) {
   await createNotification('statement', `${driverName(s?.driverId)} 已完成 ${s?.month || ''} 對帳單回簽`);
 }
 
+// 主控退回簽名：把已回簽的勞報單退回「待回簽」狀態，讓司機可以重新簽名
+// （例如簽名簽錯、看不清楚）。不刪除舊的簽名圖檔（司機重簽時 signStatement()
+// 會用同一個路徑 upsert 覆蓋掉），只重置狀態欄位。
+async function rejectStatementSignature(statementId) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('statements')
+    .update({ status: 'awaiting_signature', signed_at: null, signature_url: null })
+    .eq('id', statementId);
+  if (error) throw new Error('退回簽名失敗：' + error.message);
+  const s = state.data.statements.find(x => x.id === statementId);
+  if (s) { s.status = 'awaiting_signature'; s.signedAt = null; s.signatureDataUrl = null; s.adminAcked = false; }
+  await createNotification('statement', `主控已退回 ${driverName(s?.driverId)} ${s?.month || ''} 的勞報單簽名，待司機重新簽名`);
+}
+
 // ---------------- 系統設定 ----------------
 
 async function updateAdminPin(pin) {

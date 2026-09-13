@@ -71,8 +71,8 @@
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
   .modal-box .toolbar{ margin-bottom:10px; }
-  .sig-modal-backdrop{ position:fixed; inset:0; background:#15181D; z-index:300; display:flex; flex-direction:column; }
-  .sig-modal-canvas-wrap{ flex:1; position:relative; background:#fff; margin:16px; border-radius:8px; overflow:hidden; min-height:0; }
+  .sig-modal-backdrop{ position:fixed; inset:0; background:#15181D; z-index:300; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; }
+  .sig-modal-canvas-wrap{ position:relative; background:#fff; border-radius:8px; overflow:hidden; flex:none; }
   .sig-modal-canvas-wrap canvas{ width:100%; height:100%; touch-action:none; display:block; }
   .sig-watermark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:13vw; color:rgba(0,0,0,.06); font-weight:700; pointer-events:none; letter-spacing:2vw; white-space:nowrap; }
   .sig-modal-actions{ display:flex; justify-content:space-between; align-items:center; padding:10px 20px 20px; flex-shrink:0; }
@@ -1863,7 +1863,7 @@ function renderPayroll(c){
       <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
       ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
         <span>${driverName(s.driverId)} － ${s.month}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'}</span>
-        <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
+        <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn danger" data-reject="${s.id}">退回簽名</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
       </div>`).join('')}
     </div>` : ''}
     <div class="panel">
@@ -1890,6 +1890,13 @@ function renderPayroll(c){
   c.querySelectorAll('[data-ack]').forEach(btn=>{
     btn.onclick = async ()=>{
       try{ await ackStatement(btn.dataset.ack); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-reject]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('確定要退回這份簽名嗎？退回後司機需要重新簽名，這份勞報單會回到「待回簽」狀態。')) return;
+      try{ await rejectStatementSignature(btn.dataset.reject); renderContent(); }
       catch(err){ alert(err.message); }
     };
   });
@@ -1949,6 +1956,7 @@ function renderPayroll(c){
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
         ${!record ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
+        ${record && record.status==='signed' ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
       </div>`;
     document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(driverId)}_${monthStr}_勞報單`);
     document.querySelectorAll('[data-deladj]').forEach(btn=>{
@@ -1957,6 +1965,12 @@ function renderPayroll(c){
         catch(err){ alert(err.message); }
       };
     });
+    const rejectBtn = document.getElementById('rejectSignBtn');
+    if(rejectBtn) rejectBtn.onclick = async ()=>{
+      if(!confirm(`確定要退回 ${driverName(driverId)} ${monthStr} 的簽名嗎？退回後司機需要重新簽名。`)) return;
+      try{ await rejectStatementSignature(record.id); refresh(); }
+      catch(err){ alert(err.message); }
+    };
     const confirmBtn = document.getElementById('confirmMonth');
     if(confirmBtn) confirmBtn.onclick = async ()=>{
       if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放司機回簽？凍結後車趟報酬不會再變動。`)) return;
@@ -2622,30 +2636,51 @@ function normalizeSignatureDataUrl(canvas){
   return out.toDataURL('image/png');
 }
 // 全畫面簽名視窗：點「已確認報酬」才跳出來簽，簽完按☑️送出、按❌取消不送出。
-// 畫布填滿當下裝置實際方向的可用空間（不管直放橫放）；先前用CSS把整個視窗
-// 強制轉90度模擬橫向的做法太容易在不同機型/瀏覽器對不齊（按鈕位置、畫布
-// 對應座標都可能跟著跑掉），已經拿掉，改成不管方向、永遠照實際版面填滿，
-// 更簡單也更不容易出錯。
+// 簽名框固定顯示成橫式（見下方 applyBoxSize()），不依賴偵測手機當下是橫放
+// 還是直放——先前試過「跟著裝置方向調整」跟「CSS強制轉90度模擬橫向」兩種
+// 做法，都會在部分手機瀏覽器上出狀況（尤其簽名視窗開著時轉方向，畫布不一
+// 定會正確跟著重算尺寸），改成固定寬高比的框最可靠。
 function openSignatureModal(record){
   const host = document.getElementById('sigModalHost');
   host.innerHTML = `
     <div class="sig-modal-backdrop" id="sigBackdrop">
-      <div class="sig-modal-canvas-wrap">
-        <div class="sig-watermark">請簽名</div>
-        <canvas id="sigPad"></canvas>
-      </div>
-      <div class="sig-modal-actions">
-        <div class="sig-side"><button class="sig-clear-link" id="sigClear">清除重簽</button></div>
-        <div class="sig-side">
-          <button class="sig-icon-btn cancel" id="sigCancel" title="取消">❌</button>
-          <button class="sig-icon-btn confirm" id="sigConfirm" title="確認送出">☑️</button>
+      <div id="sigInner" style="display:flex; flex-direction:column; align-items:stretch;">
+        <div class="sig-modal-canvas-wrap">
+          <div class="sig-watermark">請簽名</div>
+          <canvas id="sigPad"></canvas>
+        </div>
+        <div class="sig-modal-actions">
+          <div class="sig-side"><button class="sig-clear-link" id="sigClear">清除重簽</button></div>
+          <div class="sig-side">
+            <button class="sig-icon-btn cancel" id="sigCancel" title="取消">❌</button>
+            <button class="sig-icon-btn confirm" id="sigConfirm" title="確認送出">☑️</button>
+          </div>
         </div>
       </div>
     </div>`;
   const canvas = document.getElementById('sigPad');
   const wrapEl = canvas.parentElement;
+  const innerEl = document.getElementById('sigInner');
   const ctx = canvas.getContext('2d');
+  // 簽名框「不論手機當下橫拿還是直拿，一律強制顯示成寬扁的橫式方框」——
+  // 不依賴偵測裝置目前是橫向還是直向（部分手機瀏覽器在簽名視窗開著時轉
+  // 方向，畫布尺寸並不會正確跟著重算，靠偵測方向來決定畫布形狀並不可靠）。
+  // 固定寬高比（寬是高的1.8倍），依畫面剩餘空間算出能放的最大尺寸，這樣
+  // 使用者永遠是對著一個橫式的框簽名，簽出來的筆畫天生就是橫式。
+  const ASPECT = 1.8;
+  function applyBoxSize(){
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const actionsH = 70, gap = 16, sidePad = 24;
+    const maxW = vw - sidePad*2;
+    const maxH = vh - actionsH - gap - sidePad*2;
+    let w = maxW, h = w/ASPECT;
+    if(h > maxH){ h = maxH; w = h*ASPECT; }
+    innerEl.style.width = w+'px';
+    wrapEl.style.width = w+'px';
+    wrapEl.style.height = h+'px';
+  }
   function resizeCanvas(){
+    applyBoxSize();
     const rect = wrapEl.getBoundingClientRect();
     const prev = canvas.width ? canvas.toDataURL('image/png') : null;
     canvas.width = rect.width * 2; canvas.height = rect.height * 2;
@@ -2654,6 +2689,7 @@ function openSignatureModal(record){
   }
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('orientationchange', resizeCanvas);
   let drawing = false, hasSignature = false;
   function pos(e){
     const rect = canvas.getBoundingClientRect();
@@ -2664,12 +2700,12 @@ function openSignatureModal(record){
   canvas.addEventListener('pointermove', e=>{ if(!drawing) return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); });
   window.addEventListener('pointerup', ()=>{ drawing=false; });
   document.getElementById('sigClear').onclick = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); hasSignature=false; };
-  document.getElementById('sigCancel').onclick = ()=>{ window.removeEventListener('resize', resizeCanvas); host.innerHTML=''; };
+  document.getElementById('sigCancel').onclick = ()=>{ window.removeEventListener('resize', resizeCanvas); window.removeEventListener('orientationchange', resizeCanvas); host.innerHTML=''; };
   document.getElementById('sigConfirm').onclick = async ()=>{
     if(!hasSignature){ alert('請先簽名再送出'); return; }
     try{
       await signStatement(record.id, normalizeSignatureDataUrl(canvas));
-      window.removeEventListener('resize', resizeCanvas);
+      window.removeEventListener('resize', resizeCanvas); window.removeEventListener('orientationchange', resizeCanvas);
       host.innerHTML='';
       renderContent();
     }catch(err){ alert(err.message); }
@@ -2714,10 +2750,13 @@ function renderMyStatement(c){
     } else if(record.status==='signed'){
       box.innerHTML = `
         <div id="payrollSlipArea">${slipHtml}</div>
-        <div class="no-print" style="margin-top:10px;">
+        <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
           <button class="btn ghost" id="printMy">列印/另存PDF</button>
-        </div>`;
+          <button class="btn ghost" id="resignBtn">重新簽名</button>
+        </div>
+        <div id="sigModalHost"></div>`;
       document.getElementById('printMy').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(dId)}_${m}_勞報單`);
+      document.getElementById('resignBtn').onclick = ()=> openSignatureModal(record);
     }
   }
   document.getElementById('smMonth').onchange = refresh;

@@ -305,7 +305,7 @@ grant anon to app_admin, app_driver;
 grant usage on schema storage to app_admin, app_driver;
 grant select on storage.buckets to app_admin, app_driver;
 grant select, insert, update, delete on storage.objects to app_admin;
-grant select, insert on storage.objects to app_driver;
+grant select, insert, update on storage.objects to app_driver;
 
 -- 從 JWT claims 讀出目前登入司機的 id（由 Netlify Function 簽發時放入 driver_id claim）
 create or replace function auth_driver_id() returns uuid
@@ -423,8 +423,12 @@ grant update (status, signed_at, signature_url) on statements to app_driver;
 create policy admin_all on statements for all to app_admin using (true) with check (true);
 create policy driver_select_own on statements for select to app_driver
   using (driver_id = auth_driver_id());
+-- 不限制 status 才能更新：司機自己回簽後想重新簽名、或主控把已回簽的
+-- 勞報單「退回」讓司機重簽，都需要司機能對「已經是 signed 狀態」的自己
+-- 那筆紀錄再次更新（grant 只開放 status/signed_at/signature_url 這三欄，
+-- 金額欄位司機仍然完全碰不到，不影響凍結金額的安全性）。
 create policy driver_sign_own on statements for update to app_driver
-  using (driver_id = auth_driver_id() and status = 'awaiting_signature')
+  using (driver_id = auth_driver_id())
   with check (driver_id = auth_driver_id());
 
 -- ------------------------------------------------------------
@@ -574,6 +578,8 @@ create policy driver_select_own_signature on storage.objects for select to app_d
     )
   );
 
+-- 上傳（第一次簽名）跟更新（重新簽名覆蓋舊檔）都不限制 status，理由同上
+-- statements 表的 driver_sign_own policy。
 create policy driver_upload_own_signature on storage.objects for insert to app_driver
   with check (
     bucket_id = 'signatures'
@@ -581,6 +587,22 @@ create policy driver_upload_own_signature on storage.objects for insert to app_d
       select 1 from statements s
       where s.id::text = split_part(name, '.', 1)
         and s.driver_id = auth_driver_id()
-        and s.status = 'awaiting_signature'
+    )
+  );
+create policy driver_update_own_signature on storage.objects for update to app_driver
+  using (
+    bucket_id = 'signatures'
+    and exists (
+      select 1 from statements s
+      where s.id::text = split_part(name, '.', 1)
+        and s.driver_id = auth_driver_id()
+    )
+  )
+  with check (
+    bucket_id = 'signatures'
+    and exists (
+      select 1 from statements s
+      where s.id::text = split_part(name, '.', 1)
+        and s.driver_id = auth_driver_id()
     )
   );
