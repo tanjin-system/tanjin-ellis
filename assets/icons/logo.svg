@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">碳金車隊金屬立體加強版 Logo</title>
+  <desc id="desc">保留碳金車隊圖騰，以寬幅金色拉絲金屬面、黑色內嵌凹槽、深層側邊與高光呈現實體徽章感。</desc>
+  <defs>
+    <linearGradient id="goldMetal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6E5010"/>
+      <stop offset="0.17" stop-color="#B88A22"/>
+      <stop offset="0.36" stop-color="#D4AF37"/>
+      <stop offset="0.50" stop-color="#F4E29A"/>
+      <stop offset="0.64" stop-color="#D4AF37"/>
+      <stop offset="0.82" stop-color="#A87B1B"/>
+      <stop offset="1" stop-color="#5C420B"/>
+    </linearGradient>
+    <linearGradient id="blackFace" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#202020"/>
+      <stop offset="0.22" stop-color="#030303"/>
+      <stop offset="0.58" stop-color="#000000"/>
+      <stop offset="1" stop-color="#0E0E0E"/>
+    </linearGradient>
+    <radialGradient id="goldNode" cx="35%" cy="28%" r="72%">
+      <stop offset="0" stop-color="#FFF3B7"/>
+      <stop offset="0.30" stop-color="#E2C25B"/>
+      <stop offset="0.58" stop-color="#D4AF37"/>
+      <stop offset="1" stop-color="#7A5710"/>
+    </radialGradient>
+    <filter id="brushedMetal" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.002 0.48" numOctaves="2" seed="14" result="grain"/>
+      <feColorMatrix in="grain" type="matrix" values="0.55 0 0 0 0.18  0 0.48 0 0 0.12  0 0 0.35 0 0.03  0 0 0 0.32 0" result="goldGrain"/>
+      <feComposite in="goldGrain" in2="SourceAlpha" operator="in" result="clippedGrain"/>
+      <feBlend in="SourceGraphic" in2="clippedGrain" mode="soft-light"/>
+    </filter>
+    <filter id="softDepth" x="-20%" y="-20%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+    <mask id="routeCutouts" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#FFFFFF"/>
+      <circle cx="512" cy="168" r="22" fill="#000000"/>
+      <circle cx="178" cy="468" r="22" fill="#000000"/>
+      <circle cx="512" cy="820" r="22" fill="#000000"/>
+    </mask>
+    <g id="markLines" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M178 468 Q142 416 171 356 L427 181 Q512 116 597 181 L724 282"/>
+      <path d="M178 468 L178 640 Q178 692 218 725 L376 820 L706 820"/>
+      <path d="M178 468 L332 468"/>
+      <path d="M512 168 L512 820"/>
+      <path d="M348 366 L676 366"/>
+      <path d="M314 500 L570 500"/>
+      <path d="M512 596 L386 732"/>
+      <path d="M512 596 L651 732"/>
+      <path d="M628 486 Q683 493 725 448 L800 366"/>
+    </g>
+  </defs>
+
+  <!-- Dark offset side creates real depth while keeping the original silhouette. -->
+  <g mask="url(#routeCutouts)" opacity="0.98" transform="translate(25 30)">
+    <use href="#markLines" stroke="#050505" stroke-width="118"/>
+    <polygon points="862,300 835,400 803,364 760,342 806,332" fill="#050505" stroke="#050505" stroke-width="28" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Brushed gold bevel. #D4AF37 is the core brand gold inside this gradient. -->
+  <g mask="url(#routeCutouts)" filter="url(#brushedMetal)">
+    <use href="#markLines" stroke="url(#goldMetal)" stroke-width="108"/>
+    <polygon points="862,300 835,400 803,364 760,342 806,332" fill="url(#goldMetal)" stroke="url(#goldMetal)" stroke-width="28" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Matte-black front face leaves a controlled gold rim. -->
+  <g mask="url(#routeCutouts)">
+    <use href="#markLines" stroke="url(#blackFace)" stroke-width="52"/>
+    <polygon points="862,300 835,400 803,364 760,342 806,332" transform="translate(812 350) scale(.78) translate(-812 -350)" fill="url(#blackFace)" stroke="url(#blackFace)" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Route node rings and active gold waypoint. -->
+  <g fill="none" stroke="url(#goldMetal)" stroke-width="12" filter="url(#brushedMetal)">
+    <circle cx="512" cy="168" r="30"/>
+    <circle cx="178" cy="468" r="30"/>
+    <circle cx="512" cy="820" r="30"/>
+  </g>
+  <polygon points="586,478 618,498 618,538 586,558 554,538 554,498" fill="#050505" opacity="0.96"/>
+  <polygon points="570,460 602,480 602,520 570,540 538,520 538,480" fill="url(#goldNode)" stroke="#FFEAA0" stroke-width="4" stroke-linejoin="round" filter="url(#brushedMetal)"/>
+  <polygon points="570,474 591,487 591,513 570,526 549,513 549,487" fill="url(#blackFace)" stroke="#6E5010" stroke-width="3" stroke-linejoin="round"/>
+</svg>
