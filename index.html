@@ -42,10 +42,10 @@
   .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
   @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} }
-  button.btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; }
-  button.btn.amber{ background:var(--amber); color:#1B2129; }
-  button.btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
-  button.btn.danger{ background:none; border:1px solid var(--danger); color:var(--danger); }
+  .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
+  .btn.amber{ background:var(--amber); color:#1B2129; }
+  .btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
+  .btn.danger{ background:none; border:1px solid var(--danger); color:var(--danger); }
   button.btn:hover{ opacity:.88; }
   button.btn[disabled]{ opacity:.4; cursor:not-allowed; }
   .badge{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
@@ -1305,7 +1305,7 @@ function renderRouteList(){
 function renderRouteTable(){
   const wrap = document.getElementById('routeTableWrap');
   const kw = routeListSearch.trim().toLowerCase();
-  const filtered = state.data.routes.filter(r=>{
+  const filtered = sortedRoutes().filter(r=>{
     if(!kw) return true;
     const og = state.data.origins.find(o=>o.address===r.originAddr);
     const originText = (og?(og.label||og.address):r.originAddr||'').toLowerCase();
@@ -1558,10 +1558,24 @@ function seqSortKey(seq){
   if(s[1] === '十') return (digit[s[0]] || 0) * 10 + (s[2] ? (digit[s[2]] || 0) : 0);
   return 9999;
 }
+// 所有列出多條路線的地方都用這個排序：先依出發點名稱、再依車次數字（第一車
+// ～第十車…）、同車次再讓上午排在下午前面——不管是路線管理列表、批次建立
+// 的路線選單、還是其他任何要列出多條路線的畫面，統一套用這個順序。
+function routeSortCompare(a,b){
+  const oa = originLabel(a.originAddr), ob = originLabel(b.originAddr);
+  if(oa !== ob) return oa.localeCompare(ob, 'zh-Hant');
+  const sa = seqSortKey(a.seq), sb = seqSortKey(b.seq);
+  if(sa !== sb) return sa-sb;
+  if(a.shift !== b.shift) return a.shift==='AM' ? -1 : 1;
+  return (a.seq||'').localeCompare(b.seq||'', 'zh-Hant');
+}
+function sortedRoutes(){
+  return state.data.routes.slice().sort(routeSortCompare);
+}
 function renderScheduleAdmin(c){
   const week1 = getWeekDates(state.weekOffset);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  const routeOpts = state.data.routes.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+  const routeOpts = sortedRoutes().map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
   const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">週班表</h2>
@@ -2450,8 +2464,11 @@ function renderTodayDetail(todays){
           <div class="drop-point">
             ${dpLabel(dp)}（${channelName(dp.channelId)}）
             ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
-            <br><a class="link" href="${mapLink(dp.address)}" target="_blank">開啟Google導航</a>
-            ${dp.status!=='completed' ? `<label style="margin-top:6px;">拍照回報並標記完成<input type="file" accept="image/*" data-photo="${a.id}|${dp.id}"></label>` : (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'')}
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              ${dp.status!=='completed' ? `<label class="btn ghost" style="flex:1; margin:0;">拍照上傳<input type="file" accept="image/*" data-photo="${a.id}|${dp.id}" style="display:none;"></label>` : ''}
+              <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1;">Google導航</a>
+            </div>
+            ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
           </div>`).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
         ${!allDone?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有下貨點未完成拍照，結束時需填寫備註說明原因</p>':''}
