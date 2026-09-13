@@ -53,6 +53,20 @@ function pad(n){ return String(n).padStart(2,'0'); }
 function formatDate(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function formatTime(d){ return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function weekdayZh(d){ return ['日','一','二','三','四','五','六'][d.getDay()]; }
+function todayKeyTaipei(){
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Taipei', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date());
+  const get = t => parts.find(p=>p.type===t).value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+function dateKeyCompare(a, b, todayKey){
+  if(a === b) return 0;
+  if(a === todayKey) return -1;
+  if(b === todayKey) return 1;
+  const aFuture = a > todayKey, bFuture = b > todayKey;
+  if(aFuture && !bFuture) return -1;
+  if(!aFuture && bFuture) return 1;
+  return aFuture ? a.localeCompare(b) : b.localeCompare(a);
+}
 
 async function main(){
   const params = new URLSearchParams(location.search);
@@ -89,7 +103,8 @@ async function main(){
     }
     const groups = {};
     items.forEach(it=>{ if(!groups[it.key]) groups[it.key] = []; groups[it.key].push(it); });
-    const dateKeys = Object.keys(groups).sort((a,b)=> b.localeCompare(a));
+    const todayKey = todayKeyTaipei();
+    const dateKeys = Object.keys(groups).sort((a,b)=> dateKeyCompare(a, b, todayKey));
     content.innerHTML = dateKeys.map((key)=>{
       const rows = groups[key];
       const sample = new Date(key + 'T00:00:00');
