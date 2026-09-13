@@ -71,7 +71,7 @@
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
   .modal-box .toolbar{ margin-bottom:10px; }
-  .sig-modal-backdrop{ position:fixed; inset:0; background:#15181D; z-index:300; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; }
+  .sig-modal-backdrop{ position:fixed; inset:0; background:#15181D; z-index:300; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   .sig-modal-canvas-wrap{ position:relative; background:#fff; border-radius:8px; overflow:hidden; flex:none; }
   .sig-modal-canvas-wrap canvas{ width:100%; height:100%; touch-action:none; display:block; }
   .sig-watermark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:13vw; color:rgba(0,0,0,.06); font-weight:700; pointer-events:none; letter-spacing:2vw; white-space:nowrap; }
@@ -1848,21 +1848,21 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       </table>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:12px 0;">本人確認上述勞務內容及金額無誤，並同意給付單位依法應適用之所得類別、扣繳率及補充保費規定辦理。所得類別與勞雇關係仍以實際事實認定。</p>
       <table>
-        <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${opts.paidDate||'—'}</td></tr>
+        <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${monthStr}-15</td></tr>
       </table>
     </div>`;
 }
 function renderPayroll(c){
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  const inbox = state.data.statements.filter(s=>s.status==='signed' && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
+  const inbox = state.data.statements.filter(s=>(s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
   c.innerHTML = `
     <h2 class="section-title">薪資結算</h2>
     <p class="section-sub">月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。</p>
     ${inbox.length ? `<div class="panel">
       <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
       ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
-        <span>${driverName(s.driverId)} － ${s.month}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'}</span>
+        <span>${driverName(s.driverId)} － ${s.month}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'} ${s.status==='confirmed'?'<span class="badge signed">已鎖定</span>':'<span class="badge progress">未鎖定</span>'}</span>
         <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn danger" data-reject="${s.id}">退回簽名</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
       </div>`).join('')}
     </div>` : ''}
@@ -1919,8 +1919,7 @@ function renderPayroll(c){
       const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
       const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
       return payrollSlipHtml(driver, monthStr, merged, ded, {
-        signatureDataUrl: record.status==='signed' ? record.signatureDataUrl : null,
-        paidDate: record.status==='signed' ? (record.signedAt||'').slice(0,10) : ''
+        signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
       });
     }).filter(Boolean);
     exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
@@ -1932,16 +1931,15 @@ function renderPayroll(c){
     if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
     const live = driverMonthly(driverId, monthStr);
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
-    const isFrozen = record && (record.status==='awaiting_signature' || record.status==='signed');
+    const isFrozen = !!record;
     const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net } : live;
     const ded = isFrozen
       ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
       : computePayrollDeductions(r.net);
     const driver = state.data.drivers.find(d=>d.id===driverId);
-    const statusBadge = !record ? '' : record.status==='signed' ? '<span class="badge signed">司機已回簽</span>' : '<span class="badge progress">等待司機回簽</span>';
+    const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">司機已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">司機已回簽（未鎖定）</span>' : '<span class="badge progress">等待司機回簽</span>';
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
-      signatureDataUrl: record && record.status==='signed' ? record.signatureDataUrl : null,
-      paidDate: record && record.status==='signed' ? (record.signedAt||'').slice(0,10) : ''
+      signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
@@ -1956,7 +1954,7 @@ function renderPayroll(c){
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
         ${!record ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
-        ${record && record.status==='signed' ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
+        ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
       </div>`;
     document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(driverId)}_${monthStr}_勞報單`);
     document.querySelectorAll('[data-deladj]').forEach(btn=>{
@@ -2736,8 +2734,7 @@ function renderMyStatement(c){
     const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
     const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
     const slipHtml = payrollSlipHtml(driver, m, merged, ded, {
-      signatureDataUrl: record.status==='signed' ? record.signatureDataUrl : null,
-      paidDate: record.status==='signed' ? (record.signedAt||'').slice(0,10) : ''
+      signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     if(record.status==='awaiting_signature'){
       box.innerHTML = `
@@ -2748,15 +2745,31 @@ function renderMyStatement(c){
         <div id="sigModalHost"></div>`;
       document.getElementById('ackPayBtn').onclick = ()=> openSignatureModal(record);
     } else if(record.status==='signed'){
+      // 簽了名但還沒按「確認簽名」鎖定前，司機可以隨時重新簽名改掉。
       box.innerHTML = `
         <div id="payrollSlipArea">${slipHtml}</div>
+        <div class="note">請確認簽名清楚無誤。按下方「確認簽名」後就會鎖定，不能再修改（如果需要修改，要請主控端退回才能重簽）。</div>
         <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
           <button class="btn ghost" id="printMy">列印/另存PDF</button>
           <button class="btn ghost" id="resignBtn">重新簽名</button>
+          <button class="btn amber" id="confirmSignBtn">確認簽名（鎖定，不可再改）</button>
         </div>
         <div id="sigModalHost"></div>`;
       document.getElementById('printMy').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(dId)}_${m}_勞報單`);
       document.getElementById('resignBtn').onclick = ()=> openSignatureModal(record);
+      document.getElementById('confirmSignBtn').onclick = async ()=>{
+        if(!confirm('確認簽名後就不能再修改，需要主控退回才能重簽，確定要鎖定嗎？')) return;
+        try{ await confirmSignature(record.id); refresh(); }
+        catch(err){ alert(err.message); }
+      };
+    } else if(record.status==='confirmed'){
+      // 已鎖定，只能列印，不能再重新簽名。
+      box.innerHTML = `
+        <div id="payrollSlipArea">${slipHtml}</div>
+        <div class="no-print" style="margin-top:10px;">
+          <button class="btn ghost" id="printMy">列印/另存PDF</button>
+        </div>`;
+      document.getElementById('printMy').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(dId)}_${m}_勞報單`);
     }
   }
   document.getElementById('smMonth').onchange = refresh;

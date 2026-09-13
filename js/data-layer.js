@@ -867,6 +867,19 @@ async function rejectStatementSignature(statementId) {
   await createNotification('statement', `主控已退回 ${driverName(s?.driverId)} ${s?.month || ''} 的勞報單簽名，待司機重新簽名`);
 }
 
+// 司機自己按「確認簽名」把 signed 鎖定成 confirmed，鎖定後司機端不再顯示
+// 「重新簽名」按鈕（例如主控已經拿這份簽名去申報國稅局之後，就不該再讓
+// 簽名內容悄悄變掉）。主控的退回簽名不受這個狀態影響，隨時能退回重簽。
+async function confirmSignature(statementId) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('statements')
+    .update({ status: 'confirmed' })
+    .eq('id', statementId);
+  if (error) throw new Error('確認簽名失敗：' + error.message);
+  const s = state.data.statements.find(x => x.id === statementId);
+  if (s) s.status = 'confirmed';
+}
+
 // ---------------- 系統設定 ----------------
 
 async function updateAdminPin(pin) {

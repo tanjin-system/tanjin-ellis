@@ -227,7 +227,10 @@ create table statements (
   nhi_rate numeric not null default 0,
   nhi_amount numeric not null default 0,
   actual_net_amount numeric not null default 0, -- 實領金額 = net_amount − tax_amount − nhi_amount
-  status text not null default 'awaiting_signature' check (status in ('awaiting_signature','signed')),
+  -- signed：司機已簽名，但還能自己重新簽名改掉；confirmed：司機自己點過
+  -- 「確認簽名」，正式鎖定不能再改（例如主控已經拿去申報國稅局之後）。
+  -- 主控的「退回簽名」不受這個狀態限制，隨時可以退回 awaiting_signature。
+  status text not null default 'awaiting_signature' check (status in ('awaiting_signature','signed','confirmed')),
   confirmed_at timestamptz,
   signed_at timestamptz,
   signature_url text,
