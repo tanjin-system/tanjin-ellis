@@ -15,6 +15,7 @@ function mapDriver(row) {
     phone: row.phone || '',
     lineId: row.line_user_id || '',
     accessCode: row.access_code || '',
+    forceCodeReset: !!row.force_code_reset,
     status: row.status,
     inactiveAt: row.inactive_at,
     vehicle: { plate: row.vehicle_plate || '', type: row.vehicle_type || '', load: row.vehicle_load ?? '' },
@@ -274,10 +275,26 @@ async function createDriver(input) {
 async function regenerateDriverAccessCode(driverId) {
   const supabase = getSupabase();
   const newCode = String(Math.floor(1000 + Math.random() * 9000));
-  const { data, error } = await supabase.from('drivers').update({ access_code: newCode }).eq('id', driverId).select().single();
+  const { data, error } = await supabase.from('drivers').update({ access_code: newCode, force_code_reset: true }).eq('id', driverId).select().single();
   if (error) throw new Error('重新產生代碼失敗：' + error.message);
   const driver = state.data.drivers.find(d => d.id === driverId);
-  if (driver) driver.accessCode = data.access_code;
+  if (driver) { driver.accessCode = data.access_code; driver.forceCodeReset = true; }
+}
+
+// 司機自己設定新的登入代碼（首次登入，或主控重新產生代碼後）：
+// 只有本人（driver_id 來自 JWT）能改自己這一列的 access_code/force_code_reset，
+// 改完就把 force_code_reset 清成 false，之後登入不會再被強制要求重設。
+async function changeMyAccessCode(driverId, newCode) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('drivers')
+    .update({ access_code: newCode, force_code_reset: false })
+    .eq('id', driverId).select().single();
+  if (error) {
+    if (error.code === '23505') throw new Error('這組代碼已經有人使用，請換一組。');
+    throw new Error('設定新代碼失敗：' + error.message);
+  }
+  const driver = state.data.drivers.find(d => d.id === driverId);
+  if (driver) { driver.accessCode = data.access_code; driver.forceCodeReset = false; }
 }
 
 async function deleteOrDeactivateDriver(driverId) {

@@ -789,6 +789,7 @@ function renderDrivers(c){
             <div class="driver-card-sub">
               電話：${d.phone||'—'}　車牌：${d.vehicle.plate||'—'}<br>
               登入代碼：<span class="mono">${d.accessCode}</span>
+              ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
             </div>
           </div>
         </div>
@@ -2862,8 +2863,9 @@ async function bootApp(){
     return;
   }
   if(auth.role==='driver'){
-    const stillActive = state.data.drivers.some(d=>d.id===auth.driver.id && d.status==='active');
-    if(!stillActive){ clearAuth(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
+    const me = state.data.drivers.find(d=>d.id===auth.driver.id);
+    if(!me || me.status!=='active'){ clearAuth(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
+    if(me.forceCodeReset){ renderForceCodeResetGate(me.id, me.name); return; }
   }
   showApp();
 }

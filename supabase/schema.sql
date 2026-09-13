@@ -26,6 +26,7 @@ create table drivers (
   phone text,
   line_user_id text unique,
   access_code text unique,
+  force_code_reset boolean not null default true, -- true：目前是主控指派/重置的代碼，司機下次登入須自行改成新代碼才能進入系統
   status text not null default 'active' check (status in ('active','inactive')),
   inactive_at timestamptz,
   vehicle_plate text,
@@ -348,13 +349,16 @@ end $$;
 
 -- ------------------------------------------------------------
 -- drivers：app_admin 全權限；app_driver 只能看/改自己那一列，
--- 且只能改「我的資料」頁允許編輯的欄位，不能碰 name/status/access_code。
+-- 且只能改「我的資料」頁允許編輯的欄位，不能碰 name/status。
+-- access_code/force_code_reset 額外開放給司機自己更新，僅用於「首次登入/忘記代碼後
+-- 主控重置」強制要求司機自訂新代碼的流程（見 changeMyAccessCode()）。
 -- ------------------------------------------------------------
 alter table drivers enable row level security;
 grant select, insert, update, delete on drivers to app_admin;
 grant select on drivers to app_driver;
 grant update (phone, line_user_id, vehicle_plate, vehicle_type, vehicle_load,
-              bank_name, bank_branch, bank_account, bank_holder) on drivers to app_driver;
+              bank_name, bank_branch, bank_account, bank_holder,
+              access_code, force_code_reset) on drivers to app_driver;
 
 create policy admin_all on drivers for all to app_admin using (true) with check (true);
 create policy driver_select_self on drivers for select to app_driver

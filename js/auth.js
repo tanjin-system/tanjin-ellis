@@ -73,13 +73,37 @@ function renderLoginGate(message) {
     </div>
     <div id="loginError" style="color:var(--danger); font-size:12.5px; margin-bottom:8px; display:none;"></div>
     <button class="btn amber" id="loginSubmit" style="width:100%;">登入</button>
+    <div id="forgotCodeWrap" style="text-align:center; margin-top:10px;">
+      <a href="javascript:void(0)" id="forgotCodeLink" style="font-size:12.5px; color:var(--ink-soft);">忘記登入代碼？</a>
+    </div>
+    <div id="forgotCodeNote" style="display:none; font-size:12.5px; color:var(--ink-soft); margin-top:8px; text-align:center;">
+      請聯絡主控管理員，由主控重新產生一組新代碼給您；拿到新代碼登入後，系統會請您自行設定一組新的登入代碼。
+    </div>
   `;
   const roleSel = document.getElementById('loginRole');
   const codeLabel = document.getElementById('loginCodeLabel');
+  const codeInput = document.getElementById('loginCode');
   const errEl = document.getElementById('loginError');
+  const forgotWrap = document.getElementById('forgotCodeWrap');
+  const forgotNote = document.getElementById('forgotCodeNote');
   if (message) { errEl.textContent = message; errEl.style.display = 'block'; }
-  roleSel.onchange = () => {
-    codeLabel.textContent = roleSel.value === 'admin' ? '主控PIN碼' : '登入代碼（4碼）';
+  const applyRoleInputMode = () => {
+    forgotNote.style.display = 'none';
+    if (roleSel.value === 'admin') {
+      codeLabel.textContent = '主控PIN碼';
+      codeInput.removeAttribute('inputmode');
+      codeInput.removeAttribute('maxlength');
+      forgotWrap.style.display = 'none';
+    } else {
+      codeLabel.textContent = '登入代碼（4碼）';
+      codeInput.setAttribute('inputmode', 'numeric');
+      codeInput.setAttribute('maxlength', '8');
+      forgotWrap.style.display = 'block';
+    }
+  };
+  roleSel.onchange = applyRoleInputMode;
+  document.getElementById('forgotCodeLink').onclick = () => {
+    forgotNote.style.display = 'block';
   };
   document.getElementById('loginSubmit').onclick = async () => {
     const role = roleSel.value;
@@ -89,6 +113,39 @@ function renderLoginGate(message) {
     try {
       if (role === 'admin') await loginAsAdmin(code);
       else await loginAsDriver(code);
+      await bootApp();
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.style.display = 'block';
+    }
+  };
+}
+
+// 司機首次登入(或主控重新產生代碼後)強制要求自訂新代碼的畫面，蓋在 #loginGate 上——
+// 跟 renderLoginGate 一樣先把 #appLayout 藏起來，這樣司機在設定新代碼前完全碰不到
+// 系統其他任何畫面。設定成功後直接呼叫 bootApp() 重新走一次開機流程進正式畫面。
+function renderForceCodeResetGate(driverId, driverName) {
+  const appLayout = document.getElementById('appLayout');
+  if (appLayout) appLayout.style.display = 'none';
+  const gate = document.getElementById('loginGate');
+  gate.style.display = 'block';
+  gate.innerHTML = `
+    <h2 class="section-title">設定新的登入代碼</h2>
+    <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入（或代碼被主控重設後）需要自訂一組新的登入代碼才能繼續使用。</p>
+    <div class="field"><label>新登入代碼</label><input id="newCode1" inputmode="numeric" maxlength="8"></div>
+    <div class="field"><label>再輸入一次確認</label><input id="newCode2" inputmode="numeric" maxlength="8"></div>
+    <div id="resetCodeError" style="color:var(--danger); font-size:12.5px; margin-bottom:8px; display:none;"></div>
+    <button class="btn amber" id="resetCodeSubmit" style="width:100%;">設定並登入</button>
+  `;
+  const errEl = document.getElementById('resetCodeError');
+  document.getElementById('resetCodeSubmit').onclick = async () => {
+    const c1 = document.getElementById('newCode1').value.trim();
+    const c2 = document.getElementById('newCode2').value.trim();
+    errEl.style.display = 'none';
+    if (!c1) { errEl.textContent = '請輸入新代碼'; errEl.style.display = 'block'; return; }
+    if (c1 !== c2) { errEl.textContent = '兩次輸入的代碼不一致'; errEl.style.display = 'block'; return; }
+    try {
+      await changeMyAccessCode(driverId, c1);
       await bootApp();
     } catch (e) {
       errEl.textContent = e.message;
