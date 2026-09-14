@@ -301,12 +301,22 @@ function exportPrintable(title, bodyHtml){
       pageIndex++;
       if(pageIndex > 200) break; // 保險絲，避免斷點邏輯出錯陷入無限迴圈
     }
-    const dataUri = pdf.output('datauristring');
     // 用data URI而不是blob URL：blob URL是綁在「產生它的那個分頁」的物件登記表裡，
     // Safari（尤其iPhone）常常沒辦法在另一個分頁（我們另外開的預覽分頁）打開別的
     // 分頁建立的blob URL，PDF因此看起來像「打不開」。data URI是自帶完整內容的
     // 字串，不受這個限制，用<embed>嵌入＋<a download>都能穩定運作。
-    if(previewWin && !previewWin.closed){
+    const dataUri = pdf.output('datauristring');
+    // 電腦版Chrome桌機曾回報「另存PDF都無法顯示」：實測發現這裡的 window.open('', '_blank')
+    // 常常被瀏覽器的彈出視窗封鎖直接回傳 null——程式碼原本雖然有 fallback（改成
+    // 直接觸發<a download>下載），但下載是完全無聲無息的，畫面上什麼提示都沒有，
+    // 使用者以為「PDF功能整個壞掉」，其實檔案已經默默存進下載資料夾。另外資料
+    // 量大的班表/請款單，data URI 常常超過幾MB，部分瀏覽器的<embed>對超大 data URI
+    // 會整個顯示空白（一樣看起來像「無法顯示」）。這裡統一處理：只要預覽視窗打不開，
+    // 或內容大到embed容易顯示空白，就直接觸發下載＋跳出明確提示，不要讓使用者
+    // 猜「到底有沒有成功」。
+    const EMBED_SIZE_LIMIT = 6 * 1024 * 1024; // data URI 字元數，超過就不冒險用embed預覽
+    const canPreview = previewWin && !previewWin.closed && dataUri.length <= EMBED_SIZE_LIMIT;
+    if(canPreview){
       previewWin.document.open();
       previewWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title></head>
         <body style="margin:0; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;">
@@ -318,9 +328,11 @@ function exportPrintable(title, bodyHtml){
         </body></html>`);
       previewWin.document.close();
     } else {
+      if(previewWin && !previewWin.closed) previewWin.close();
       const a = document.createElement('a');
       a.href = dataUri; a.download = filename;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      alert(`PDF已下載：${filename}\n（瀏覽器封鎖了預覽視窗彈出，或檔案較大不適合直接預覽，已改為直接下載，請到「下載項目」查看。）`);
     }
   }).catch(err=>{
     if(wrap.parentNode) document.body.removeChild(wrap);
@@ -1173,7 +1185,7 @@ function renderDpListBody(){
               </td></tr>`;
             }
             return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}</td><td><span class="badge ${dp.status==='inactive'?'pending':'completed'}">${dp.status==='inactive'?'已停用':'使用中'}</span></td>
-            <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> ${dp.status!=='inactive'?`<button class="btn danger" data-del="${dp.id}">刪除</button>`:''}</td></tr>`;
+            <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn danger" data-del="${dp.id}">刪除</button></td></tr>`;
           }).join('') || `<tr><td colspan="4"><div class="empty">此通路尚無下貨點</div></td></tr>`}
         </tbody>
       </table>

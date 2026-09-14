@@ -7,6 +7,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
   auth: { persistSession: false }
 });
 
+function pad(n) { return String(n).padStart(2, '0'); }
+
 module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
 
@@ -24,28 +26,32 @@ module.exports = async (req, res) => {
   }
   if (!channel) return res.status(404).json({ error: '連結無效或已失效，請跟貨運公司確認最新連結。' });
 
-  // 只給最近 60 天的資料，避免頁面一次載入太多筆、也避免舊資料無意義地一直曝光。
+  // 只回溯最近 60 天（依車趟日期，不是完成時間），避免舊資料無意義地一直曝光；
+  // 未來排定的車趟沒有上限，路線管理排多遠、這裡就顯示多遠。
   const since = new Date();
   since.setDate(since.getDate() - 60);
+  const sinceStr = `${since.getFullYear()}-${pad(since.getMonth() + 1)}-${pad(since.getDate())}`;
 
-  // 這裡故意不加「photo_url is not null」的條件——司機完成車趟時如果沒有全部拍照
-  // 回報（例如手機臨時沒電、趕時間），該筆下貨點一樣會標記 completed，只是沒有照片；
-  // 這種情況客戶還是應該看到「已送達」的紀錄，只是沒有照片可看，不能整筆消失不見。
-  const { data: points, error: dpErr } = await supabase
+  // 這裡故意用「這個通路在路線管理裡的每一個下貨點」單一查詢，不再依 completed/
+  // pending 狀態分開查、也不對 completed_at/photo_url 加條件——之前拆成「已送達」
+  // 「即將送達」兩支查詢，各自還有 500/300 筆的 limit，通路下貨點一多（例如7-11
+  // 88個點，同時有445筆車趟下貨點紀錄）很容易被 limit 截斷，導致「明明路線管理裡
+  // 有安排，客戶查詢卻看不到」。現在一次抓齊，用 delivered 欄位分辨已完成/尚未完成，
+  // 完全不會因為狀態或筆數而整批消失。
+  const { data: rows, error: rowsErr } = await supabase
     .from('assignment_drop_points')
-    .select('id, address, code, completed_at, photo_url, assignments!inner(routes!inner(shift))')
+    .select('id, address, code, status, completed_at, photo_url, assignments!inner(trip_date, status, routes!inner(shift))')
     .eq('channel_id', channel.id)
-    .eq('status', 'completed')
-    .gte('completed_at', since.toISOString())
-    .order('completed_at', { ascending: false })
-    .limit(500);
-  if (dpErr) {
-    console.error('client-data points query failed:', dpErr.message);
+    .neq('assignments.status', 'cancelled')
+    .gte('assignments.trip_date', sinceStr)
+    .limit(5000);
+  if (rowsErr) {
+    console.error('client-data points query failed:', rowsErr.message);
     return res.status(500).json({ error: '伺服器錯誤，請稍後再試' });
   }
 
   let signedUrls = {};
-  const paths = points.filter(p => p.photo_url).map(p => p.photo_url);
+  const paths = rows.filter(p => p.photo_url).map(p => p.photo_url);
   if (paths.length) {
     const { data: signed, error: signErr } = await supabase.storage
       .from('assignment-photos')
@@ -57,43 +63,18 @@ module.exports = async (req, res) => {
     }
   }
 
-  const deliveries = points.map(p => ({
+  // 安全上只選 address/code/completed_at/photo_url/trip_date/shift，绝不會帶到
+  // fare/distance/billing 等金額欄位，所以無論哪個通路的連結，客戶都看不到司機費用，
+  // 也看不到共配車趟上其他通路的站點（一律只用 channel_id 篩出這個通路自己的點）。
+  const items = (rows || []).map(p => ({
     id: p.id,
     name: p.code || p.address,
-    completedAt: p.completed_at,
+    date: p.assignments.trip_date,
     shift: p.assignments?.routes?.shift || null,
+    delivered: p.status === 'completed',
+    completedAt: p.completed_at,
     photoUrl: p.photo_url ? (signedUrls[p.photo_url] || null) : null
   }));
 
-  // 讓客戶看到「這通路自己」最新的安排行程（尚未送達的部分），滿足「隨路線管理異動
-  // 即時更新」的需求——這裡直接查即時資料，沒有做任何快取。
-  // 安全上只用 channel_id 篩出這個通路自己的下貨點，绝不會帶到同一趟車上其他通路
-  // 的站點，也完全不選 fare/distance/billing 等金額欄位，所以無論哪個通路的連結，
-  // 客戶都看不到司機費用，也看不到共配車趟上其他客戶的行程。
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const { data: upcomingRows, error: upErr } = await supabase
-    .from('assignment_drop_points')
-    .select('id, address, code, sequence_no, assignments!inner(trip_date, status, routes!inner(shift))')
-    .eq('channel_id', channel.id)
-    .eq('status', 'pending')
-    .gte('assignments.trip_date', today.toISOString().slice(0, 10))
-    .neq('assignments.status', 'cancelled')
-    .order('sequence_no', { ascending: true })
-    .limit(300);
-  if (upErr) {
-    console.error('client-data upcoming query failed:', upErr.message);
-    return res.status(500).json({ error: '伺服器錯誤，請稍後再試' });
-  }
-
-  const upcoming = (upcomingRows || [])
-    .map(p => ({
-      id: p.id,
-      name: p.code || p.address,
-      tripDate: p.assignments.trip_date,
-      shift: p.assignments?.routes?.shift || null
-    }))
-    .sort((a, b) => a.tripDate.localeCompare(b.tripDate));
-
-  return res.status(200).json({ channelName: channel.name, deliveries, upcoming });
+  return res.status(200).json({ channelName: channel.name, items });
 };

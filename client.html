@@ -40,7 +40,13 @@
   .lightbox img{ max-width:100%; max-height:100%; border-radius:4px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
   .upcoming-badge{ font-size:11px; color:var(--teal); background:rgba(63,110,108,.12); border-radius:10px; padding:2px 9px; flex-shrink:0; }
-  .shift-label{ padding:9px 14px 3px; font-size:11.5px; font-weight:600; color:var(--ink-soft); }
+  .shift-group{ border-top:1px solid var(--border); }
+  .shift-group:first-child{ border-top:none; }
+  .shift-head{ display:flex; justify-content:space-between; align-items:center; padding:9px 14px; cursor:pointer; font-size:12px; font-weight:600; color:var(--ink-soft); }
+  .shift-head .chevron{ transition:transform .15s; font-size:11px; }
+  .shift-group.open .shift-head .chevron{ transform:rotate(90deg); }
+  .shift-body{ display:none; }
+  .shift-group.open .shift-body{ display:block; }
   .search-wrap{ margin-bottom:14px; }
   .search-wrap input{ width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); font-family:inherit; font-size:13.5px; background:var(--panel); color:var(--ink); }
   .search-wrap input:focus{ outline:2px solid var(--teal); outline-offset:-1px; }
@@ -59,7 +65,6 @@
 
 <script>
 function pad(n){ return String(n).padStart(2,'0'); }
-function formatDate(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function formatTime(d){ return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function weekdayZh(d){ return ['日','一','二','三','四','五','六'][d.getDay()]; }
 function todayKeyTaipei(){
@@ -77,19 +82,25 @@ function dateKeyCompare(a, b, todayKey){
   return aFuture ? a.localeCompare(b) : b.localeCompare(a);
 }
 
-function shiftLabel(shift){ return shift==='AM' ? '上午' : shift==='PM' ? '下午' : ''; }
 function rowHtml(it){
   return it.delivered ? `<div class="delivery-row">
     ${it.photoUrl ? `<img src="${it.photoUrl}" data-full="${it.photoUrl}">` : '<div style="width:52px;height:52px;background:#EFEEE9;border-radius:4px;flex-shrink:0;"></div>'}
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
-      <div class="delivery-time">送達時間 ${formatTime(it.dt)}</div>
+      <div class="delivery-time">送達時間 ${formatTime(new Date(it.completedAt))}</div>
     </div>
   </div>` : `<div class="delivery-row">
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
     </div>
     <span class="upcoming-badge">尚未送達</span>
+  </div>`;
+}
+function shiftGroupHtml(label, rows, forceOpen){
+  if(!rows.length) return '';
+  return `<div class="shift-group ${forceOpen?'open':''}">
+    <div class="shift-head"><span>${label}（${rows.length}）</span><span class="chevron">▸</span></div>
+    <div class="shift-body">${rows.map(rowHtml).join('')}</div>
   </div>`;
 }
 let allItems = [];
@@ -102,7 +113,7 @@ function renderList(filterText){
     return;
   }
   const groups = {};
-  items.forEach(it=>{ if(!groups[it.key]) groups[it.key] = []; groups[it.key].push(it); });
+  items.forEach(it=>{ if(!groups[it.date]) groups[it.date] = []; groups[it.date].push(it); });
   const todayKey = todayKeyTaipei();
   const dateKeys = Object.keys(groups).sort((a,b)=> dateKeyCompare(a, b, todayKey));
   content.innerHTML = dateKeys.map((key)=>{
@@ -117,8 +128,8 @@ function renderList(filterText){
         <span><span class="count">${rows.length} 筆</span> <span class="chevron">▸</span></span>
       </div>
       <div class="date-body">
-        ${amRows.length ? `<div class="shift-label">上午</div>${amRows.map(rowHtml).join('')}` : ''}
-        ${pmRows.length ? `<div class="shift-label">下午</div>${pmRows.map(rowHtml).join('')}` : ''}
+        ${shiftGroupHtml('上午', amRows, !!kw)}
+        ${shiftGroupHtml('下午', pmRows, !!kw)}
         ${otherRows.map(rowHtml).join('')}
       </div>
     </div>`;
@@ -126,6 +137,9 @@ function renderList(filterText){
 
   content.querySelectorAll('.date-head').forEach(head=>{
     head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
+  });
+  content.querySelectorAll('.shift-head').forEach(head=>{
+    head.onclick = (e)=>{ e.stopPropagation(); head.closest('.shift-group').classList.toggle('open'); };
   });
   content.querySelectorAll('img[data-full]').forEach(img=>{
     img.onclick = ()=>{
@@ -154,16 +168,10 @@ async function main(){
       return;
     }
     document.getElementById('channelTitle').textContent = body.channelName + ' 配送記錄';
-    sub.textContent = `最近60天，共 ${body.deliveries.length} 筆送達紀錄`;
+    const items = body.items || [];
+    const deliveredCount = items.filter(it=>it.delivered).length;
+    sub.textContent = `最近60天，共 ${deliveredCount} 筆送達紀錄`;
 
-    const items = [];
-    body.deliveries.forEach(d=>{
-      const dt = new Date(d.completedAt);
-      items.push({ ...d, dt, key: formatDate(dt), delivered:true });
-    });
-    (body.upcoming || []).forEach(d=>{
-      items.push({ ...d, key: d.tripDate, delivered:false });
-    });
     allItems = items;
     if(items.length){
       document.getElementById('searchWrap').style.display = 'block';
