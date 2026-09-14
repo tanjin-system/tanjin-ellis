@@ -80,7 +80,7 @@ function renderLoginGate(message) {
     <div class="field">
       <label id="loginCodeLabel">登入代碼</label>
       <div class="pw-wrap">
-        <input id="loginCode" type="password" inputmode="numeric" maxlength="8">
+        <input id="loginCode" type="password" inputmode="numeric" maxlength="12">
         <button type="button" class="pw-toggle" id="loginCodeToggle" tabindex="-1">顯示</button>
       </div>
     </div>
@@ -110,7 +110,7 @@ function renderLoginGate(message) {
     } else {
       codeLabel.textContent = '登入代碼';
       codeInput.setAttribute('inputmode', 'numeric');
-      codeInput.setAttribute('maxlength', '8');
+      codeInput.setAttribute('maxlength', '12');
       forgotWrap.style.display = 'block';
     }
   };
@@ -140,6 +140,9 @@ function renderLoginGate(message) {
 // 系統其他任何畫面。設定成功後不直接放行——退回登入畫面，強制司機實際用新代碼
 // 重新登入一次（確認新代碼真的能用），登入成功後 bootApp() 會自動導向「我的資料」
 // （見 index.html 的 renderNav()：司機本人資料未填妥時一律鎖定在該頁)。
+const DRIVER_CODE_MIN_LEN = 4;
+const DRIVER_CODE_MAX_LEN = 12;
+
 function renderForceCodeResetGate(driverId, driverName) {
   const appLayout = document.getElementById('appLayout');
   if (appLayout) appLayout.style.display = 'none';
@@ -149,16 +152,16 @@ function renderForceCodeResetGate(driverId, driverName) {
     <h2 class="section-title">設定新的登入代碼</h2>
     <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入（或代碼被主控重設後）需要自訂一組新的登入代碼才能繼續使用。</p>
     <div class="field">
-      <label>新登入代碼</label>
+      <label>新登入代碼（請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼數字）</label>
       <div class="pw-wrap">
-        <input id="newCode1" type="password" inputmode="numeric" maxlength="8">
+        <input id="newCode1" type="password" inputmode="numeric" maxlength="${DRIVER_CODE_MAX_LEN}">
         <button type="button" class="pw-toggle" id="newCode1Toggle" tabindex="-1">顯示</button>
       </div>
     </div>
     <div class="field">
       <label>再輸入一次確認</label>
       <div class="pw-wrap">
-        <input id="newCode2" type="password" inputmode="numeric" maxlength="8">
+        <input id="newCode2" type="password" inputmode="numeric" maxlength="${DRIVER_CODE_MAX_LEN}">
         <button type="button" class="pw-toggle" id="newCode2Toggle" tabindex="-1">顯示</button>
       </div>
     </div>
@@ -173,6 +176,11 @@ function renderForceCodeResetGate(driverId, driverName) {
     const c2 = document.getElementById('newCode2').value.trim();
     errEl.style.display = 'none';
     if (!c1) { errEl.textContent = '請輸入新代碼'; errEl.style.display = 'block'; return; }
+    if (c1.length < DRIVER_CODE_MIN_LEN || c1.length > DRIVER_CODE_MAX_LEN) {
+      errEl.textContent = `新代碼請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼數字`;
+      errEl.style.display = 'block';
+      return;
+    }
     if (c1 !== c2) { errEl.textContent = '兩次輸入的代碼不一致'; errEl.style.display = 'block'; return; }
     try {
       await changeMyAccessCode(driverId, c1);
