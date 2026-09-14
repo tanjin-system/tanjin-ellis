@@ -100,6 +100,7 @@ create table routes (
   origin_id uuid not null references origins(id),
   seq text not null,
   shift text not null check (shift in ('AM','PM')),
+  region text, -- 人工自訂的地區分組標籤，純顯示用（路線管理收合分組），不影響任何計費/排班邏輯
   created_at timestamptz not null default now(),
   unique (origin_id, seq, shift)
 );

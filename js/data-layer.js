@@ -59,7 +59,7 @@ function mapRoute(row) {
         .slice().sort((a, b) => a.sequence_no - b.sequence_no)
         .map(p => p.drop_point_id)
     }));
-  return { id: row.id, name: row.name, originAddr, seq: row.seq, shift: row.shift, versions };
+  return { id: row.id, name: row.name, originAddr, seq: row.seq, shift: row.shift, region: row.region || '', versions };
 }
 
 function mapAssignment(row) {
@@ -434,8 +434,6 @@ async function deleteOrDeactivateOrigin(originId) {
 // ---------------- 下貨點 ----------------
 
 async function createDropPoint(input) {
-  const dup = state.data.dropPoints.find(dp => dp.status !== 'inactive' && dp.address.trim().toLowerCase() === input.address.trim().toLowerCase());
-  if (dup) throw new Error(`地址重複，已存在相同的下貨點：「${dup.address}」（${channelName(dup.channelId)}），已取消新增。`);
   const code = (input.code || '').trim();
   if (code) {
     const dupCode = state.data.dropPoints.find(dp => dp.status !== 'inactive' && dp.channelId === input.channelId && (dp.code || '').trim().toLowerCase() === code.toLowerCase());
@@ -452,8 +450,6 @@ async function createDropPoint(input) {
 }
 
 async function updateDropPoint(dpId, input) {
-  const dup = state.data.dropPoints.find(x => x.id !== dpId && x.status !== 'inactive' && x.address.trim().toLowerCase() === input.address.trim().toLowerCase());
-  if (dup) throw new Error(`地址重複，已存在相同的下貨點：「${dup.address}」（${channelName(dup.channelId)}），已取消儲存。`);
   const code = (input.code || '').trim();
   if (code) {
     const dupCode = state.data.dropPoints.find(x => x.id !== dpId && x.status !== 'inactive' && x.channelId === input.channelId && (x.code || '').trim().toLowerCase() === code.toLowerCase());
@@ -492,13 +488,21 @@ async function createRoute(input) {
   if (!origin) throw new Error('找不到對應的出發點');
   const supabase = getSupabase();
   const { data, error } = await supabase.from('routes')
-    .insert({ name: input.name, origin_id: origin.id, seq: input.seq, shift: input.shift })
+    .insert({ name: input.name, origin_id: origin.id, seq: input.seq, shift: input.shift, region: input.region || null })
     .select('*, origins(address), route_versions(*, route_version_points(*))')
     .single();
   if (error) throw new Error('新增路線失敗：' + error.message);
   const route = mapRoute(data);
   state.data.routes.push(route);
   return route;
+}
+
+async function updateRouteRegion(routeId, region) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('routes').update({ region: region || null }).eq('id', routeId);
+  if (error) throw new Error('更新地區失敗：' + error.message);
+  const route = state.data.routes.find(r => r.id === routeId);
+  if (route) route.region = region || '';
 }
 
 async function deleteRoute(routeId) {
@@ -623,11 +627,14 @@ async function createAssignment(input) {
   const version = route.versions.find(v => input.date >= v.start && (!v.end || input.date <= v.end));
   const dropPointIds = version ? version.dropPointIds : [];
 
+  // fare 可在排班當下手動填「調整金額」覆寫路線版本的司機費用（例如這一趟臨時加點、
+  // 繞遠路），留空則沿用版本預設值，跟 updateAssignmentFinance() 事後覆寫是同一個欄位。
+  const fareOverride = input.fare !== undefined && input.fare !== '' && input.fare !== null ? Number(input.fare) : null;
   const supabase = getSupabase();
   const { data: assignRow, error } = await supabase.from('assignments').insert({
     trip_date: input.date, route_id: input.routeId, driver_id: input.driverId,
     origin_snapshot: route.originAddr || '',
-    fare: version?.driverFare ?? 0,
+    fare: fareOverride ?? (version?.driverFare ?? 0),
     distance_km: version?.distanceKm ?? null,
     billing_total_snapshot: version?.billingTotal ?? null,
     billing_by_channel_snapshot: version?.billingByChannel ?? null,

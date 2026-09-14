@@ -725,6 +725,7 @@ function renderHomeDriver(c){
 
 // ---------- 司機資料（含車輛、銀行細節） ----------
 let editingDriverId = null;
+let driverListSearch = '';
 function renderDrivers(c){
   c.innerHTML = `
     <div class="toolbar"><h2 class="section-title" style="margin:0;">司機資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部司機資料</button></div>
@@ -763,6 +764,7 @@ function renderDrivers(c){
       </div>
       <button class="btn amber" id="addDriver">新增司機</button>
     </div>
+    <div class="field" style="max-width:280px;"><label>搜尋司機姓名</label><input id="driverSearch" value="${driverListSearch}" placeholder="輸入司機姓名關鍵字篩選"></div>
     <div class="panel">
       <div id="driverCardList"></div>
       <p class="note" style="margin-top:10px;">登入代碼請私下告知司機本人（例如用LINE私訊），司機打開系統選「司機帳號」後輸入這組代碼即可看到自己的資料，不會看到其他司機。</p>
@@ -813,7 +815,9 @@ function renderDrivers(c){
   }
   function renderDriverCards(){
     const listEl = document.getElementById('driverCardList');
-    listEl.innerHTML = state.data.drivers.map(d=>{
+    const kw = driverListSearch.trim().toLowerCase();
+    const filteredDrivers = kw ? state.data.drivers.filter(d=>d.name.toLowerCase().includes(kw)) : state.data.drivers;
+    listEl.innerHTML = filteredDrivers.map(d=>{
       if(editingDriverId === d.id){
         return `<div class="driver-card">${renderEditForm(d)}</div>`;
       }
@@ -836,7 +840,7 @@ function renderDrivers(c){
           <button class="btn danger" data-del="${d.id}">刪除</button>
         </div>
       </div>`;
-    }).join('') || `<div class="empty">尚無司機資料</div>`;
+    }).join('') || `<div class="empty">${kw?'找不到符合的司機':'尚無司機資料'}</div>`;
     listEl.querySelectorAll('[data-etabtn]').forEach(btn=>{
       btn.onclick = ()=>{
         const card = btn.closest('.driver-card');
@@ -895,6 +899,15 @@ function renderDrivers(c){
     });
   }
   renderDriverCards();
+  const driverSearchEl = document.getElementById('driverSearch');
+  let driverSearchComposing = false;
+  driverSearchEl.addEventListener('compositionstart', ()=>{ driverSearchComposing = true; });
+  driverSearchEl.addEventListener('compositionend', (e)=>{ driverSearchComposing=false; driverListSearch = e.target.value; renderDriverCards(); });
+  driverSearchEl.addEventListener('input', (e)=>{
+    if(driverSearchComposing) return;
+    driverListSearch = e.target.value;
+    renderDriverCards();
+  });
   document.getElementById('addDriver').onclick = async ()=>{
     const name = document.getElementById('dName').value.trim();
     if(!name){ alert('請輸入姓名'); return; }
@@ -1281,17 +1294,23 @@ function isOriginReferenced(id){
 }
 
 // ---------- 路線管理（版本化，不綁司機） ----------
+function distinctRegions(){
+  return [...new Set(state.data.routes.map(r=>r.region).filter(Boolean))].sort();
+}
 function renderRoutes(c){
   const ogOptsTop = state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  const regionOpts = distinctRegions().map(rg=>`<option value="${rg}"></option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">路線管理</h2>
     <p class="section-sub">路線本身不綁司機。修改下貨點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
     <div class="panel">
-      <div class="grid3">
+      <div class="grid4">
         <div class="field"><label>出發點</label><select id="rOrigin">${ogOptsTop}</select></div>
         <div class="field"><label>車次</label><input id="rSeq" placeholder="例：第一車"></div>
         <div class="field"><label>班次</label><select id="rShift"><option value="AM">上午</option><option value="PM">下午</option></select></div>
+        <div class="field"><label>地區（選填，用於下方收合分組）</label><input id="rRegion" list="regionOptions" placeholder="例：北區"></div>
       </div>
+      <datalist id="regionOptions">${regionOpts}</datalist>
       <button class="btn amber" id="addRoute">新增路線</button>
     </div>
     <div id="routeList"></div>
@@ -1300,11 +1319,12 @@ function renderRoutes(c){
     const originAddr = document.getElementById('rOrigin').value;
     const seq = document.getElementById('rSeq').value.trim();
     const shift = document.getElementById('rShift').value;
+    const region = document.getElementById('rRegion').value.trim();
     if(!originAddr || !seq){ alert('請選擇出發點並輸入車次'); return; }
     const og = state.data.origins.find(o=>o.address===originAddr);
     const name = `${og?(og.label||og.address):originAddr} ${seq} ${shift==='AM'?'上午':'下午'}`;
     try{
-      await createRoute({ name, originAddr, seq, shift });
+      await createRoute({ name, originAddr, seq, shift, region });
       renderRoutes(c);
     }catch(err){ alert(err.message); }
   };
@@ -1313,6 +1333,7 @@ function renderRoutes(c){
 let routeDraft = {};
 let expandedRouteId = null;
 let routeListSearch = '';
+let regionCollapsedSet = new Set();
 function ensureDraft(route){
   if(!routeDraft[route.id]){
     const open = (route.versions||[]).find(v=>!v.end);
@@ -1344,6 +1365,19 @@ function renderRouteList(){
     renderRouteTable();
   });
 }
+function routeRowHtml(r){
+  // 司機費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
+  // （見路線管理下方的版本設定），不再是每趟臨時填的。
+  const openVersion = (r.versions||[]).find(v=>!v.end);
+  const fareText = openVersion && openVersion.driverFare != null ? `$${money(openVersion.driverFare)}` : '尚未設定';
+  const billingText = openVersion && openVersion.billingTotal != null ? `$${money(openVersion.billingTotal)}` : '尚未設定';
+  return `<tr>
+    <td>${r.name}</td>
+    <td class="amount">${fareText}</td>
+    <td class="amount">${billingText}</td>
+    <td><button class="btn ${expandedRouteId===r.id?'amber':'ghost'}" data-toggleroute="${r.id}">${expandedRouteId===r.id?'收合':'管理'}</button></td>
+  </tr>`;
+}
 function renderRouteTable(){
   const wrap = document.getElementById('routeTableWrap');
   const kw = routeListSearch.trim().toLowerCase();
@@ -1353,28 +1387,36 @@ function renderRouteTable(){
     const originText = (og?(og.label||og.address):r.originAddr||'').toLowerCase();
     return r.name.toLowerCase().includes(kw) || originText.includes(kw) || (r.seq||'').toLowerCase().includes(kw);
   });
-  wrap.innerHTML = `
-    <div class="panel" style="overflow-x:auto;">
-      <table>
-        <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th></th></tr></thead>
-        <tbody>
-          ${filtered.map(r=>{
-            // 司機費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
-            // （見路線管理下方的版本設定），不再是每趟臨時填的。
-            const openVersion = (r.versions||[]).find(v=>!v.end);
-            const fareText = openVersion && openVersion.driverFare != null ? `$${money(openVersion.driverFare)}` : '尚未設定';
-            const billingText = openVersion && openVersion.billingTotal != null ? `$${money(openVersion.billingTotal)}` : '尚未設定';
-            return `<tr>
-              <td>${r.name}</td>
-              <td class="amount">${fareText}</td>
-              <td class="amount">${billingText}</td>
-              <td><button class="btn ${expandedRouteId===r.id?'amber':'ghost'}" data-toggleroute="${r.id}">${expandedRouteId===r.id?'收合':'管理'}</button></td>
-            </tr>`;
-          }).join('') || `<tr><td colspan="4"><div class="empty">${kw?'找不到符合的路線':'尚未建立任何路線'}</div></td></tr>`}
-        </tbody>
-      </table>
-    </div>
-  `;
+  if(!filtered.length){
+    wrap.innerHTML = `<div class="panel"><div class="empty">${kw?'找不到符合的路線':'尚未建立任何路線'}</div></div>`;
+    return;
+  }
+  const byRegion = {};
+  filtered.forEach(r=>{ const key = r.region || '未分類'; if(!byRegion[key]) byRegion[key] = []; byRegion[key].push(r); });
+  const regionKeys = Object.keys(byRegion).filter(k=>k!=='未分類').sort();
+  if(byRegion['未分類']) regionKeys.push('未分類');
+  wrap.innerHTML = regionKeys.map(region=>{
+    const rows = byRegion[region];
+    const collapsed = regionCollapsedSet.has(region) && !kw;
+    return `<div class="panel" style="overflow-x:auto;">
+      <h3 data-regiontoggle="${region}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+        <span>${region}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
+      </h3>
+      <div style="${collapsed?'display:none;':''}">
+        <table>
+          <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th></th></tr></thead>
+          <tbody>${rows.map(routeRowHtml).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
+    h.onclick = ()=>{
+      const key = h.dataset.regiontoggle;
+      if(regionCollapsedSet.has(key)) regionCollapsedSet.delete(key); else regionCollapsedSet.add(key);
+      renderRouteTable();
+    };
+  });
   wrap.querySelectorAll('[data-toggleroute]').forEach(btn=>{
     btn.onclick = ()=>{
       expandedRouteId = (expandedRouteId===btn.dataset.toggleroute) ? null : btn.dataset.toggleroute;
@@ -1406,6 +1448,13 @@ function renderRouteDetail(rid){
         ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
       </div>
       <p style="font-size:12.5px; color:var(--ink-soft);">出發點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改出發點請新增一條路線）</p>
+      <div class="field" style="max-width:260px;"><label>地區（選填，用於路線列表收合分組）</label>
+        <div style="display:flex; gap:6px;">
+          <input id="rvRegion" list="regionOptionsDetail" value="${r.region||''}" style="flex:1;">
+          <button class="btn ghost" data-saveregion="${r.id}" style="flex-shrink:0;">儲存</button>
+        </div>
+      </div>
+      <datalist id="regionOptionsDetail">${distinctRegions().map(rg=>`<option value="${rg}"></option>`).join('')}</datalist>
       ${openVersion ? `<h4 style="margin:10px 0 4px;">目前生效版本</h4>${renderVer(openVersion)}` : ''}
       ${closedVersions.length ? `
         <div class="toolbar" style="margin-top:10px;">
@@ -1491,6 +1540,14 @@ function renderRouteDetail(rid){
         await deleteRoute(btn.dataset.delroute);
         delete routeDraft[btn.dataset.delroute]; expandedRouteId=null;
         renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  detailEl.querySelectorAll('[data-saveregion]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        await updateRouteRegion(btn.dataset.saveregion, document.getElementById('rvRegion').value.trim());
+        renderRouteList();
       }catch(err){ alert(err.message); }
     };
   });
@@ -1670,7 +1727,7 @@ function renderScheduleAdmin(c){
     const weekdays = Array.from(document.querySelectorAll('.wdcheck:checked')).map(cb=>Number(cb.value));
     if(!routeId || !driverId || !start){ alert('請選擇路線、司機與日期'); return; }
     const route = state.data.routes.find(r=>r.id===routeId);
-    let created=0, skippedNoVersion=0, skippedExisting=0, skippedConflict=0;
+    let created=0, skippedNoVersion=0, skippedExisting=0;
     let cursor = start;
     try{
       while(cursor <= end){
@@ -1679,7 +1736,6 @@ function renderScheduleAdmin(c){
         if(weekdays.includes(isoWeekday)){
           const already = state.data.assignments.some(a=>a.date===cursor && a.routeId===routeId);
           if(already){ skippedExisting++; }
-          else if(hasDriverConflict(driverId, cursor, route.shift)){ skippedConflict++; }
           else {
             const version = getActiveVersion(route, cursor);
             if(!version){ skippedNoVersion++; }
@@ -1692,7 +1748,7 @@ function renderScheduleAdmin(c){
         cursor = ymd(addDays(cursor,1));
       }
     }catch(err){ alert(err.message); }
-    alert(`已建立 ${created} 筆車趟。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過。`:''}${skippedConflict? `\n${skippedConflict} 天因司機當天已有相同班次而略過。`:''}`);
+    alert(`已建立 ${created} 筆車趟。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過。`:''}`);
     renderContent();
   };
   renderWeekGrid('gridWeek1', week1);
@@ -1762,8 +1818,9 @@ function renderQuickCreate(routeId, date){
     <div class="panel">
       <h3 style="margin-top:0;">指派：${date} · ${route.name}</h3>
       <p style="font-size:12.5px;">出發點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
-      <p style="font-size:12.5px; color:var(--ink-soft);">司機費用 $${money(version.driverFare||0)} ・ 里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
       <div class="field"><label>司機</label><select id="qDriver">${driverOpts}</select></div>
+      <div class="field"><label>調整金額（元，選填，留空則使用路線目前生效版本的司機費用 $${money(version.driverFare||0)}）</label><input id="qFareAdjust" type="number" placeholder="$${money(version.driverFare||0)}"></div>
       <button class="btn amber" id="qSave">確認指派</button>
       <button class="btn ghost" id="qCancel">取消</button>
     </div>
@@ -1772,21 +1829,12 @@ function renderQuickCreate(routeId, date){
   document.getElementById('qSave').onclick = async ()=>{
     const driverId = document.getElementById('qDriver').value;
     if(!driverId){ alert('請選擇司機'); return; }
-    if(hasDriverConflict(driverId, date, route.shift)){
-      alert('這位司機在同一天已經有相同班次（上午／下午）的指派，請確認是否排錯。'); return;
-    }
+    const fareAdjust = document.getElementById('qFareAdjust').value;
     try{
-      await createAssignment({ date, routeId, driverId });
+      await createAssignment({ date, routeId, driverId, fare: fareAdjust });
       box.innerHTML=''; renderContent();
     }catch(err){ alert(err.message); }
   };
-}
-function hasDriverConflict(driverId, date, shift, excludeId=null){
-  if(!shift) return false;
-  return state.data.assignments.some(a=>
-    a.id!==excludeId && a.driverId===driverId && a.date===date && a.status!=='cancelled' &&
-    (state.data.routes.find(r=>r.id===a.routeId)||{}).shift === shift
-  );
 }
 function renderAssignmentDetail(id){
   const box = document.getElementById('assignDetail');
@@ -1825,9 +1873,6 @@ function renderAssignmentDetail(id){
   if(canReassign) document.getElementById('afReassignBtn').onclick = async ()=>{
     const newDriverId = document.getElementById('afReassignDriver').value;
     if(!newDriverId){ alert('請選擇司機'); return; }
-    if(hasDriverConflict(newDriverId, a.date, (state.data.routes.find(r=>r.id===a.routeId)||{}).shift, a.id)){
-      alert('這位司機在同一天已經有相同班次的指派，請確認是否排錯。'); return;
-    }
     try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
     catch(err){ alert(err.message); }
   };
@@ -1873,6 +1918,10 @@ const PAYROLL_PAYER_TAX_ID = '62091835';
 function payrollSlipHtml(driver, monthStr, r, ded, opts){
   opts = opts || {};
   const [y,m] = monthStr.split('-');
+  // 給付日期固定是「該薪資單所屬月份」的次月15日（例如9月的勞務，10/15撥款），
+  // 不是當月15日；跨年（12月→次年1月）要記得年份也要跟著加1。
+  const payMonthDate = new Date(Number(y), Number(m), 1); // Date月份參數0-indexed，剛好等於「下一個月」
+  const payDateStr = `${payMonthDate.getFullYear()}-${String(payMonthDate.getMonth()+1).padStart(2,'0')}-15`;
   const contentRows = [];
   if(r.trips.length){
     contentRows.push(`<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
@@ -1909,7 +1958,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       </table>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:12px 0;">本人確認上述勞務內容及金額無誤，並同意給付單位依法應適用之所得類別、扣繳率及補充保費規定辦理。所得類別與勞雇關係仍以實際事實認定。</p>
       <table>
-        <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${monthStr}-15</td></tr>
+        <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${payDateStr}</td></tr>
       </table>
     </div>`;
 }

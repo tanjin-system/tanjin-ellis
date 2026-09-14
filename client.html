@@ -40,6 +40,10 @@
   .lightbox img{ max-width:100%; max-height:100%; border-radius:4px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
   .upcoming-badge{ font-size:11px; color:var(--teal); background:rgba(63,110,108,.12); border-radius:10px; padding:2px 9px; flex-shrink:0; }
+  .shift-label{ padding:9px 14px 3px; font-size:11.5px; font-weight:600; color:var(--ink-soft); }
+  .search-wrap{ margin-bottom:14px; }
+  .search-wrap input{ width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); font-family:inherit; font-size:13.5px; background:var(--panel); color:var(--ink); }
+  .search-wrap input:focus{ outline:2px solid var(--teal); outline-offset:-1px; }
 </style>
 </head>
 <body>
@@ -48,6 +52,7 @@
   <p id="channelSub">載入中...</p>
 </header>
 <main>
+  <div class="search-wrap" id="searchWrap" style="display:none;"><input id="storeSearch" placeholder="搜尋門市名稱或代號"></div>
   <div id="content"></div>
 </main>
 <div class="lightbox" id="lightbox"><img id="lightboxImg" src=""></div>
@@ -72,6 +77,64 @@ function dateKeyCompare(a, b, todayKey){
   return aFuture ? a.localeCompare(b) : b.localeCompare(a);
 }
 
+function shiftLabel(shift){ return shift==='AM' ? '上午' : shift==='PM' ? '下午' : ''; }
+function rowHtml(it){
+  return it.delivered ? `<div class="delivery-row">
+    ${it.photoUrl ? `<img src="${it.photoUrl}" data-full="${it.photoUrl}">` : '<div style="width:52px;height:52px;background:#EFEEE9;border-radius:4px;flex-shrink:0;"></div>'}
+    <div class="delivery-info">
+      <div class="delivery-name">${it.name}</div>
+      <div class="delivery-time">送達時間 ${formatTime(it.dt)}</div>
+    </div>
+  </div>` : `<div class="delivery-row">
+    <div class="delivery-info">
+      <div class="delivery-name">${it.name}</div>
+    </div>
+    <span class="upcoming-badge">尚未送達</span>
+  </div>`;
+}
+let allItems = [];
+function renderList(filterText){
+  const content = document.getElementById('content');
+  const kw = (filterText||'').trim().toLowerCase();
+  const items = kw ? allItems.filter(it=> it.name.toLowerCase().includes(kw)) : allItems;
+  if(!items.length){
+    content.innerHTML = `<div class="state-msg">${kw ? '找不到符合的門店。' : '目前沒有可顯示的配送記錄。'}</div>`;
+    return;
+  }
+  const groups = {};
+  items.forEach(it=>{ if(!groups[it.key]) groups[it.key] = []; groups[it.key].push(it); });
+  const todayKey = todayKeyTaipei();
+  const dateKeys = Object.keys(groups).sort((a,b)=> dateKeyCompare(a, b, todayKey));
+  content.innerHTML = dateKeys.map((key)=>{
+    const rows = groups[key];
+    const sample = new Date(key + 'T00:00:00');
+    const amRows = rows.filter(it=>it.shift==='AM');
+    const pmRows = rows.filter(it=>it.shift==='PM');
+    const otherRows = rows.filter(it=>it.shift!=='AM' && it.shift!=='PM');
+    return `<div class="date-group ${kw?'open':''}" data-key="${key}">
+      <div class="date-head">
+        <span>${key}（星期${weekdayZh(sample)}）</span>
+        <span><span class="count">${rows.length} 筆</span> <span class="chevron">▸</span></span>
+      </div>
+      <div class="date-body">
+        ${amRows.length ? `<div class="shift-label">上午</div>${amRows.map(rowHtml).join('')}` : ''}
+        ${pmRows.length ? `<div class="shift-label">下午</div>${pmRows.map(rowHtml).join('')}` : ''}
+        ${otherRows.map(rowHtml).join('')}
+      </div>
+    </div>`;
+  }).join('') + '<div class="footer-note">照片與送達時間僅供核對配送紀錄使用。</div>';
+
+  content.querySelectorAll('.date-head').forEach(head=>{
+    head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
+  });
+  content.querySelectorAll('img[data-full]').forEach(img=>{
+    img.onclick = ()=>{
+      document.getElementById('lightboxImg').src = img.dataset.full;
+      document.getElementById('lightbox').classList.add('open');
+    };
+  });
+  document.getElementById('lightbox').onclick = ()=> document.getElementById('lightbox').classList.remove('open');
+}
 async function main(){
   const params = new URLSearchParams(location.search);
   const token = params.get('token');
@@ -101,49 +164,12 @@ async function main(){
     (body.upcoming || []).forEach(d=>{
       items.push({ ...d, key: d.tripDate, delivered:false });
     });
-    if(!items.length){
-      content.innerHTML = '<div class="state-msg">目前沒有可顯示的配送記錄。</div>';
-      return;
+    allItems = items;
+    if(items.length){
+      document.getElementById('searchWrap').style.display = 'block';
+      document.getElementById('storeSearch').oninput = (e)=> renderList(e.target.value);
     }
-    const groups = {};
-    items.forEach(it=>{ if(!groups[it.key]) groups[it.key] = []; groups[it.key].push(it); });
-    const todayKey = todayKeyTaipei();
-    const dateKeys = Object.keys(groups).sort((a,b)=> dateKeyCompare(a, b, todayKey));
-    content.innerHTML = dateKeys.map((key)=>{
-      const rows = groups[key];
-      const sample = new Date(key + 'T00:00:00');
-      return `<div class="date-group" data-key="${key}">
-        <div class="date-head">
-          <span>${key}（星期${weekdayZh(sample)}）</span>
-          <span><span class="count">${rows.length} 筆</span> <span class="chevron">▸</span></span>
-        </div>
-        <div class="date-body">
-          ${rows.map(it=> it.delivered ? `<div class="delivery-row">
-            ${it.photoUrl ? `<img src="${it.photoUrl}" data-full="${it.photoUrl}">` : '<div style="width:52px;height:52px;background:#EFEEE9;border-radius:4px;flex-shrink:0;"></div>'}
-            <div class="delivery-info">
-              <div class="delivery-name">${it.name}</div>
-              <div class="delivery-time">送達時間 ${formatTime(it.dt)}</div>
-            </div>
-          </div>` : `<div class="delivery-row">
-            <div class="delivery-info">
-              <div class="delivery-name">${it.name}</div>
-            </div>
-            <span class="upcoming-badge">尚未送達</span>
-          </div>`).join('')}
-        </div>
-      </div>`;
-    }).join('') + '<div class="footer-note">照片與送達時間僅供核對配送紀錄使用。</div>';
-
-    content.querySelectorAll('.date-head').forEach(head=>{
-      head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
-    });
-    content.querySelectorAll('img[data-full]').forEach(img=>{
-      img.onclick = ()=>{
-        document.getElementById('lightboxImg').src = img.dataset.full;
-        document.getElementById('lightbox').classList.add('open');
-      };
-    });
-    document.getElementById('lightbox').onclick = ()=> document.getElementById('lightbox').classList.remove('open');
+    renderList('');
   }catch(e){
     content.innerHTML = '<div class="state-msg">網路連線發生問題，請稍後再試。</div>';
     sub.textContent = '';

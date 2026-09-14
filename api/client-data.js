@@ -28,12 +28,14 @@ module.exports = async (req, res) => {
   const since = new Date();
   since.setDate(since.getDate() - 60);
 
+  // 這裡故意不加「photo_url is not null」的條件——司機完成車趟時如果沒有全部拍照
+  // 回報（例如手機臨時沒電、趕時間），該筆下貨點一樣會標記 completed，只是沒有照片；
+  // 這種情況客戶還是應該看到「已送達」的紀錄，只是沒有照片可看，不能整筆消失不見。
   const { data: points, error: dpErr } = await supabase
     .from('assignment_drop_points')
-    .select('id, address, code, completed_at, photo_url')
+    .select('id, address, code, completed_at, photo_url, assignments!inner(routes!inner(shift))')
     .eq('channel_id', channel.id)
     .eq('status', 'completed')
-    .not('photo_url', 'is', null)
     .gte('completed_at', since.toISOString())
     .order('completed_at', { ascending: false })
     .limit(500);
@@ -59,6 +61,7 @@ module.exports = async (req, res) => {
     id: p.id,
     name: p.code || p.address,
     completedAt: p.completed_at,
+    shift: p.assignments?.routes?.shift || null,
     photoUrl: p.photo_url ? (signedUrls[p.photo_url] || null) : null
   }));
 
@@ -71,7 +74,7 @@ module.exports = async (req, res) => {
   today.setHours(0, 0, 0, 0);
   const { data: upcomingRows, error: upErr } = await supabase
     .from('assignment_drop_points')
-    .select('id, address, code, sequence_no, assignments!inner(trip_date, status)')
+    .select('id, address, code, sequence_no, assignments!inner(trip_date, status, routes!inner(shift))')
     .eq('channel_id', channel.id)
     .eq('status', 'pending')
     .gte('assignments.trip_date', today.toISOString().slice(0, 10))
@@ -87,7 +90,8 @@ module.exports = async (req, res) => {
     .map(p => ({
       id: p.id,
       name: p.code || p.address,
-      tripDate: p.assignments.trip_date
+      tripDate: p.assignments.trip_date,
+      shift: p.assignments?.routes?.shift || null
     }))
     .sort((a, b) => a.tripDate.localeCompare(b.tripDate));
 
