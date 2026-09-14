@@ -36,11 +36,6 @@ demo 的 `tripBilling()` 是純前端 JS 函式。正式版裡，如果讓前端
 claude code/
 ├── supabase/schema.sql       單一權威 schema：表格＋RBAC角色＋RLS policies＋
 │                              請款計算觸發器＋Storage bucket policies
-├── migration/
-│   ├── migrate.js             一次性腳本：把 real_data.json 匯入 Supabase
-│   │                           （已用真實資料驗證過所有欄位對應，包含真實的
-│   │                           5個通路、3位司機、6條路線、22筆車趟、21張照片）
-│   └── .env.example           需要 SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 ├── api/
 │   ├── auth-driver.js         Vercel Serverless Function，驗證4碼代碼
 │   └── auth-admin.js          Vercel Serverless Function，驗證PIN
@@ -57,11 +52,10 @@ claude code/
 ## 部署步驟（Supabase / GitHub / Vercel 帳號都已建好）
 
 1. Supabase SQL Editor 執行 `supabase/schema.sql`（一次全部跑完）
-2. 照 `migration/` 的說明跑 `migrate.js`，把 `real_data.json` 匯入
-3. `js/supabase-client.js` 填入該專案的 `SUPABASE_URL` / `SUPABASE_ANON_KEY`（這兩個是公開值，可以直接寫進程式碼提交）
-4. push 到 GitHub，Vercel 匯入這個 repo（Framework Preset 選 "Other"，不需要 build command，會自動辨識 `/api` 資料夾）
-5. Vercel 專案的 Environment Variables 填：`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`SUPABASE_JWT_SECRET`（這三個是機密值，只給後端用，不要出現在前端程式碼）
-6. 部署後用真實司機代碼、主控PIN實際登入測試一次，確認 RLS 權限沒有擋錯地方
+2. `js/supabase-client.js` 填入該專案的 `SUPABASE_URL` / `SUPABASE_ANON_KEY`（這兩個是公開值，可以直接寫進程式碼提交）
+3. push 到 GitHub，Vercel 匯入這個 repo（Framework Preset 選 "Other"，不需要 build command，會自動辨識 `/api` 資料夾）
+4. Vercel 專案的 Environment Variables 填：`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`SUPABASE_JWT_SECRET`（這三個是機密值，只給後端用，不要出現在前端程式碼）
+5. 部署後用真實司機代碼、主控PIN實際登入測試一次，確認 RLS 權限沒有擋錯地方
 
 ## 已知、故意擱置的缺口
 
@@ -70,5 +64,6 @@ claude code/
 ## 交接時建議提醒接手者的事
 
 - `supabase/schema.sql` 是「單一權威版本」，裡面已經整合了所有討論過程中的修正（例如 `channels` 表補上 `formula_type`/`rate_km`/`rate_point`/`flat_amount` 這幾個必要欄位；一開始使用者提供的手寫schema漏了這幾個，若沒有這些欄位整套請款拆分邏輯無法還原）
-- `migration/schema_patch.sql` 已經標記停用（內容併入 schema.sql 了），不需要理它
 - 不要重新加回 demo 原本的「匯入JSON覆蓋全系統」功能——這個決定是跟業主討論過的，理由是 Supabase 本身有資料庫層級備份機制，這種土法煉鋼的覆蓋式匯入在關聯式資料庫上風險較高
+- Supabase 免費方案沒有自動備份（Dashboard 首頁「Last Backup: No backups」），正式上線後有真實司機/薪資/客戶資料，建議上線前決定是否升級方案或另外排一個定期手動匯出的備份習慣
+- `login_attempts` 表沒有保留期限設定，會無限累積下去；車隊規模小的話短期內不是問題，之後可以考慮排程清掉過舊的紀錄
