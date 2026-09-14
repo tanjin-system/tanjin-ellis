@@ -4,16 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
-<title>信興-碳金車隊</title>
+<title>信興｜碳金車隊</title>
+<link rel="shortcut icon" href="favicon.ico">
 <link rel="icon" type="image/svg+xml" href="assets/icons/icon.svg">
 <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png">
 <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon-180.png">
-<meta name="apple-mobile-web-app-title" content="信興-碳金車隊">
+<meta name="apple-mobile-web-app-title" content="信興｜碳金車隊">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap');
   :root{
     --navy:#1B2A41; --navy-dim:#2A3B54; --amber:#E0902E; --teal:#3F6E6C;
     --paper:#F5F5F2; --panel:#FFFFFF; --border:#D9DCE1; --ink:#1B2129; --ink-soft:#5B6472;
@@ -23,8 +24,10 @@
   body{ margin:0; background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans TC',-apple-system,sans-serif; font-size:14px; line-height:1.55; }
   .mono{ font-family:'IBM Plex Mono',monospace; }
   header{ background:var(--navy); color:#fff; padding:14px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
-  header h1{ font-size:17px; font-weight:600; margin:0; }
-  header h1 span{ color:var(--amber); font-family:'IBM Plex Mono'; }
+  header h1{ font-size:17px; margin:0; font-family:'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif; letter-spacing:0.04em; }
+  header h1 .title-xin{ font-weight:800; color:#F5F2EA; }
+  header h1 .title-sep{ font-weight:500; color:#8F98A6; }
+  header h1 .title-tan{ font-weight:800; color:#D4AF37; }
   .role-switch{ display:flex; gap:6px; align-items:center; font-size:13px; }
   .role-switch select{ background:var(--navy-dim); color:#fff; border:1px solid #445067; border-radius:var(--radius); padding:6px 8px; font-family:inherit; font-size:13px; }
   .layout{ display:flex; min-height:calc(100vh - 54px); }
@@ -129,7 +132,7 @@
 </head>
 <body>
 <header>
-  <h1 id="appTitle">信興-碳金車隊</h1>
+  <h1 id="appTitle"><span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span></h1>
   <div class="role-switch">
     <span id="whoAmI" style="font-size:12.5px;"></span>
     <button class="btn ghost" id="logoutBtn" style="display:none; padding:5px 10px; font-size:12px;">登出／切換身份</button>
@@ -1440,9 +1443,9 @@ function renderRouteDetail(rid){
       <div class="grid3">
         <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
         <div class="field"><label>司機費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
-        <div class="field"><label>請款總額（元）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
+        <div class="field"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
-      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋）</label>
+      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與司機結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
       <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
@@ -1570,11 +1573,16 @@ function renderRouteDetail(rid){
       const ids = routeDraft[rid2].order;
       if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個下貨點'); return; }
       try{
+        // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
+        // 目前打的數字，避免兩者不小心存成不一致（實際請款/司機結算只認拆賬金額，
+        // 見 effectiveByChannelForAssignment()，總額欄位只是給人看跟給自動建議拆賬用）。
+        const billingByChannel = routeDraft[rid2].billingByChannel || {};
+        const billingTotal = Object.values(billingByChannel).reduce((s,v)=> s+(Number(v)||0), 0);
         await saveRouteVersion(rid2, effDate, ids, {
           distanceKm: document.getElementById('rvDistance').value,
           driverFare: document.getElementById('rvFare').value,
-          billingTotal: document.getElementById('rvBilling').value,
-          billingByChannel: routeDraft[rid2].billingByChannel || {}
+          billingTotal,
+          billingByChannel
         });
         delete routeDraft[rid2];
         renderContent();
@@ -2859,7 +2867,9 @@ function renderMyStatement(c){
 // JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
 function updateTitle(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
-  document.getElementById('appTitle').textContent = inDriverView ? '碳金車隊' : '信興-碳金車隊';
+  document.getElementById('appTitle').innerHTML = inDriverView
+    ? '<span class="title-tan">碳金車隊</span>'
+    : '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span>';
 }
 function updateHeaderBar(){
   const who = document.getElementById('whoAmI');
