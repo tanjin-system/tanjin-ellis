@@ -115,17 +115,12 @@
   table.route-grid{ table-layout:auto; }
   table.route-grid th, table.route-grid td{ text-align:center; padding:7px 10px; font-size:13px; border:1px solid #B9BEC6; white-space:nowrap; min-width:52px; }
   table.route-grid td.grid-cell{ font-weight:700; font-size:13.5px; }
-  table.route-grid th.weekend, table.route-grid td.weekend-head{ color:var(--amber); }
+  table.route-grid th.weekend{ color:var(--amber); }
   table.route-grid td.grid-black{ background:#15181D; }
   table.route-grid td.grid-cell{ cursor:pointer; background:#fff; }
   table.route-grid td.grid-cell:hover{ background:#FAF2E3; }
   table.route-grid td.row-label{ background:#E7E9EC; font-weight:600; text-align:left; padding-left:8px; }
   .origin-title{ background:#EFEEE9; font-weight:600; padding:8px 10px; margin:14px 0 6px; border-radius:var(--radius); }
-  table.overview-grid th, table.overview-grid td{ text-align:center; padding:10px 12px; font-size:15px; border:1px solid #B9BEC6; white-space:nowrap; }
-  table.overview-grid td.grid-cell{ font-weight:700; font-size:16px; }
-  table.overview-grid th.weekend{ color:var(--amber); }
-  table.overview-grid td.grid-black{ background:#15181D; }
-  table.overview-grid td.row-label{ background:#E7E9EC; font-weight:700; text-align:left; padding-left:10px; font-size:14px; }
   @media print{ nav.tabs,header,.no-print{ display:none !important; } main{ max-width:100%; padding:0; } body{ background:#fff; } }
 </style>
 </head>
@@ -150,7 +145,6 @@
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
-function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function todayStr(){ return ymd(new Date()); }
 function money(n){ return (Number(n)||0).toLocaleString('zh-Hant-TW'); }
 function pad(n){ return String(n).padStart(2,'0'); }
@@ -165,7 +159,6 @@ function escapeHtml(s){
 
 // ---------- 通用查找 ----------
 function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d?d.name:'未指派'; }
-function driverVehicle(id){ const d=state.data.drivers.find(x=>x.id===id); return d && d.vehicle ? d.vehicle.plate : '—'; }
 function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
 function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?r.name:'—'; }
 function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(addr); }
@@ -1065,7 +1058,6 @@ function renderDrivers(c){
   };
   document.getElementById('viewAllDriversBtn').onclick = openAllDriversModal;
 }
-function isDriverReferenced(id){ return state.data.assignments.some(a=>a.driverId===id); }
 function openAllDriversModal(){
   const host = document.getElementById('allDriversModal');
   host.innerHTML = `
@@ -1242,10 +1234,6 @@ function renderChannelList(){
     };
   });
 }
-function isChannelReferenced(id){
-  return state.data.dropPoints.some(dp=>dp.channelId===id) ||
-    state.data.assignments.some(a=>(a.dropPoints||[]).some(dp=>dp.channelId===id));
-}
 
 // ---------- 下貨點資料庫 ----------
 let editingDpId = null;
@@ -1344,10 +1332,6 @@ function renderDpListBody(){
     };
   });
 }
-function isDropPointReferenced(id){
-  return state.data.routes.some(r=>(r.versions||[]).some(v=>(v.dropPointIds||[]).includes(id))) ||
-    state.data.assignments.some(a=>(a.dropPoints||[]).some(dp=>dp.sourceDpId===id));
-}
 
 // ---------- 出發點資料庫 ----------
 let editingOgId = null;
@@ -1420,11 +1404,6 @@ function renderOgList(){
       }catch(err){ alert(err.message); }
     };
   });
-}
-function isOriginReferenced(id){
-  const og = state.data.origins.find(o=>o.id===id);
-  if(!og) return false;
-  return state.data.routes.some(r=>r.originAddr===og.address) || state.data.assignments.some(a=>a.origin===og.address);
 }
 
 // ---------- 路線管理（版本化，不綁司機） ----------
