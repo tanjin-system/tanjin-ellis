@@ -2688,16 +2688,42 @@ function renderToday(c){
     <p class="section-sub">Hi~${driverName(dId)}，這是您今天的出車行程。</p>
     <div id="todayDetail"></div>
     <h3 style="margin-top:20px;">本週行程總覽</h3>
+    <p class="section-sub" style="margin-top:-6px;">點擊「待出發」的車次可預覽當天行程與司機費用。</p>
     <div class="schedule-grid">
       ${weekDates.map(d=>{
         const items = state.data.assignments.filter(a=>a.driverId===dId && a.date===d);
         return `<div class="day-card"><div class="day-label">${d.slice(5)}${d===today?'・今天':''}</div>
-          ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}"><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待出發</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
+          ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待出發</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
         </div>`;
       }).join('')}
     </div>
+    <div id="weekTripModal"></div>
   `;
+  c.querySelectorAll('[data-previewtrip]').forEach(chip=>{
+    chip.onclick = ()=> openWeekTripPreview(chip.dataset.previewtrip);
+  });
   renderTodayDetail(todays);
+}
+// 本週行程總覽裡「待出發」的車次點擊後預覽當天行程與司機費用——單純預覽，
+// 車趟還沒開始，不提供拍照/完成等操作（那些要等到當天在「今日行程」才會出現）。
+function openWeekTripPreview(assignmentId){
+  const host = document.getElementById('weekTripModal');
+  const a = state.data.assignments.find(x=>x.id===assignmentId);
+  if(!a) return;
+  host.innerHTML = `
+    <div class="modal-backdrop" id="weekTripBackdrop">
+      <div class="modal-box" style="max-width:480px;">
+        <div class="toolbar"><h3 style="margin:0;">${routeName(a.routeId)}</h3><button class="btn ghost" id="closeWeekTrip">關閉</button></div>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 8px;">${a.date}（星期${['日','一','二','三','四','五','六'][new Date(a.date+'T00:00:00').getDay()]}）</p>
+        <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
+        <p style="font-size:12.5px;">里程：${a.distanceKm??'—'} km ・ <strong>司機費用：$${money(a.fare)}</strong></p>
+        <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">下貨點（${a.dropPoints.length}）</label>
+        ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排下貨點</div>'}
+      </div>
+    </div>
+  `;
+  document.getElementById('closeWeekTrip').onclick = ()=>{ host.innerHTML=''; };
+  document.getElementById('weekTripBackdrop').onclick = (e)=>{ if(e.target.id==='weekTripBackdrop') host.innerHTML=''; };
 }
 function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
