@@ -767,7 +767,6 @@ async function markAssignmentDeparted(assignmentId) {
   if (error) throw new Error('更新狀態失敗：' + error.message);
   const a = state.data.assignments.find(x => x.id === assignmentId);
   if (a) a.status = 'in_progress';
-  await createNotification('depart', `${driverName(a?.driverId)} 已出發 － ${routeName(a?.routeId)}（${a?.date || ''}）`);
 }
 
 // issueNote 有值代表「尚有下貨點未拍照回報」時司機填寫的原因說明，跟 demo 的
@@ -785,7 +784,6 @@ async function markAssignmentComplete(assignmentId, issueNote) {
   const full = await fetchAssignment(assignmentId);
   const idx = state.data.assignments.findIndex(x => x.id === assignmentId);
   if (idx >= 0) state.data.assignments[idx] = full;
-  await createNotification('complete', `${driverName(full.driverId)} 已完成 ${routeName(full.routeId)}（${full.date}）${full.hasIssue ? ' ⚠️ 有異常備註' : ''}`);
   return full;
 }
 
@@ -822,7 +820,6 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
 
   const assignment = state.data.assignments.find(a => a.id === assignmentId);
   const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
-  const wasAlreadyCompleted = dp?.status === 'completed';
 
   const completedAt = new Date().toISOString();
   // 補拍照片代表這個下貨點其實送達了，之前選的未配達原因（如果有）就不成立，
@@ -833,13 +830,6 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   if (updErr) throw new Error('更新下貨點狀態失敗：' + updErr.message);
 
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; }
-  // 重新拍照（本來就已經是 completed）不用再發一次通知，避免主控端被同一個
-  // 下貨點的重複通知洗版；只有第一次真正完成拍照才通知。
-  if (!wasAlreadyCompleted) {
-    // 通知訊息只顯示代號本身（有代號就不再附完整地址，維持通知列表簡潔），
-    // 沒設代號的下貨點才退回顯示地址；跟司機行程頁「代號+地址都顯示」的 dpLabel() 不一樣。
-    await createNotification('photo', `${driverName(assignment?.driverId)} 於「${dp?.code || dp?.address || ''}」完成拍照回報`);
-  }
 }
 
 // 未配達原因：司機在單一下貨點旁邊直接選填，不用等到整趟結束才填一個籠統的

@@ -651,7 +651,7 @@ function renderNav(){
     !isDriverProfileRequiredComplete(state.data.drivers.find(d=>d.id===state.activeDriverId));
   if(lockToProfile) state.tab = 'profile';
   else if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
-  const unread = (state.data.notifications||[]).filter(n=>!n.read).length;
+  const unread = visibleNotifications().filter(n=>!n.read).length;
   const nav = document.getElementById('tabsNav');
   nav.innerHTML = tabs.map(t=>{
     const disabled = lockToProfile && t.id!=='profile';
@@ -677,12 +677,19 @@ function renderContent(){
 }
 function goTab(id){ state.tab = id; renderNav(); renderContent(); }
 // ---------- 即時通知 ----------
-const NOTIF_LABEL = { depart:'🚚 出發', photo:'📷 拍照回報', complete:'✅ 完成', profile:'✏️ 資料修改', statement:'🖊️ 回簽' };
+const NOTIF_LABEL = { profile:'✏️ 資料修改', statement:'🖊️ 回簽' };
+// 出發/拍照/完成這幾種動態太頻繁、對主控端來說是噪音，已經拿掉不再產生
+// （見 data-layer.js 的 markAssignmentDeparted/markAssignmentComplete/
+// uploadDropPointPhoto），這裡額外過濾掉是為了保險：萬一資料庫裡還留著
+// 拿掉之前產生的舊紀錄，也不會再顯示出來。
+function visibleNotifications(){
+  return (state.data.notifications||[]).filter(n=> n.type==='profile' || n.type==='statement');
+}
 function renderNotifications(c){
-  const list = state.data.notifications || [];
+  const list = visibleNotifications();
   c.innerHTML = `
     <h2 class="section-title">即時通知</h2>
-    <p class="section-sub">各車出發、拍照回報、完成行程等動態都會顯示在這裡；打開系統重新整理即可看到最新狀況。</p>
+    <p class="section-sub">司機資料修改、對帳單回簽等動態都會顯示在這裡；打開系統重新整理即可看到最新狀況。</p>
     <div class="toolbar no-print">
       <span></span>
       <button class="btn ghost" id="markAllRead">全部標記已讀</button>
@@ -699,13 +706,19 @@ function renderNotifications(c){
   };
 }
 
-// 今天還沒配送完成的車次/下貨點，給主控每天上午11:00過後（含下午）掌握即時進度用。
-// 每次開系統/重新整理都是重新算一次「現在」的狀態，下貨點一旦被司機標記完成，
-// 下次渲染這個清單就會自動不見，不需要另外做「清除」動作。
-function undeliveredTodayGroups(){
+// 今天還沒配送完成的車次/下貨點，給主控每天上午11:00過後掌握即時進度用。
+// 14:00前只看上午車次，14:00起只看下午車次（早上車次到了下午已經過了
+// 該處理的時間，混在一起看只會是噪音）。每次開系統/重新整理都是重新算
+// 一次「現在」的狀態，下貨點一旦被司機標記完成，下次渲染這個清單就會
+// 自動不見，不需要另外做「清除」動作。
+function undeliveredTodayGroups(shift){
   const today = todayStr();
   return state.data.assignments
-    .filter(a=> a.date===today && a.status!=='cancelled')
+    // 車次本身一旦完成（司機按了「完成本趟」），剩下沒送達的下貨點一定
+    // 已經有原因了（不論是逐店選的原因，還是結束時補填的整趟備註），
+    // 不該再留在即時監控清單裡。
+    .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
+    .filter(a=> !shift || (state.data.routes.find(r=>r.id===a.routeId)||{}).shift===shift)
     .map(a=>({
       routeLabel: routeName(a.routeId),
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
@@ -716,7 +729,7 @@ function undeliveredTodayGroups(){
 }
 function renderHomeAdmin(c){
   const tiles = [
-    {id:'notifications', label:'即時通知', sub:'各車出發/拍照/完成動態'},
+    {id:'notifications', label:'即時通知', sub:'資料修改/對帳單回簽動態'},
     {id:'schedule', label:'週班表', sub:'指派司機與路線'},
     {id:'drivers', label:'司機資料', sub:'含車輛與銀行資訊'},
     {id:'channels', label:'通路管理', sub:'請款週期設定'},
@@ -729,9 +742,11 @@ function renderHomeAdmin(c){
     {id:'settings', label:'系統設定', sub:'管理PIN碼'}
   ];
   const p = computeProfitSnapshot();
-  const recent = (state.data.notifications||[]).slice(0,6);
-  const showProgress = new Date().getHours() >= 11; // 每天上午11:00後才開始顯示（早上多數車次都還沒出發，顯示了也只是噪音）
-  const progressGroups = showProgress ? undeliveredTodayGroups() : [];
+  const recent = visibleNotifications().slice(0,6);
+  const nowHour = new Date().getHours();
+  const showProgress = nowHour >= 11; // 每天上午11:00後才開始顯示（早上多數車次都還沒出發，顯示了也只是噪音）
+  const progressShift = nowHour < 14 ? 'AM' : 'PM'; // 14:00前只看上午車次，14:00起只看下午車次
+  const progressGroups = showProgress ? undeliveredTodayGroups(progressShift) : [];
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。</p>

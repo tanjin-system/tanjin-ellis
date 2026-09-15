@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
-<title>配送記錄查詢</title>
+<title>配送紀錄查詢</title>
 <link rel="shortcut icon" href="favicon.ico">
 <link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png">
 <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon-180.png">
@@ -54,7 +54,7 @@
 </head>
 <body>
 <header>
-  <h1 id="channelTitle">配送記錄查詢</h1>
+  <h1 id="channelTitle">配送紀錄查詢</h1>
   <p id="channelSub">載入中...</p>
 </header>
 <main>
@@ -167,7 +167,8 @@ async function main(){
       sub.textContent = '';
       return;
     }
-    document.getElementById('channelTitle').textContent = body.channelName + ' 配送記錄';
+    document.getElementById('channelTitle').textContent = body.channelName + '配送紀錄查詢';
+    document.title = body.channelName + '配送紀錄查詢';
     const items = body.items || [];
     const deliveredCount = items.filter(it=>it.delivered).length;
     sub.textContent = `最近60天，共 ${deliveredCount} 筆送達紀錄`;
