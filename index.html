@@ -708,7 +708,9 @@ function undeliveredTodayGroups(){
     .filter(a=> a.date===today && a.status!=='cancelled')
     .map(a=>({
       routeLabel: routeName(a.routeId),
-      points: a.dropPoints.filter(dp=>dp.status!=='completed').map(dp=>`${channelName(dp.channelId)}${dpLabel(dp)}`)
+      // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
+      // 監控清單裡，避免主控一直看到其實司機已經回報過原因的店。
+      points: a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.issueReason).map(dp=>`${channelName(dp.channelId)}${dpLabel(dp)}`)
     }))
     .filter(g=>g.points.length);
 }
@@ -1925,7 +1927,7 @@ function renderAssignmentDetail(id){
         <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換司機</button>
       </div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。</p>
-      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}</div>`).join('')}
+      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':dp.issueReason?`<span class="badge pending">未配達：${dp.issueReason}</span>`:'<span class="badge pending">待送達</span>'}</div>`).join('')}
       <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
       <div id="afOverrideBox"></div>
     </div>
@@ -2626,7 +2628,7 @@ function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
   if(!todays.length){ box.innerHTML = '<div class="empty">今天沒有排定行程</div>'; return; }
   box.innerHTML = todays.map(a=>{
-    const allDone = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed');
+    const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
     return `<div class="panel">
       <div class="toolbar">
         <strong>${routeName(a.routeId)}</strong>
@@ -2637,20 +2639,32 @@ function renderTodayDetail(todays){
       </div>
       <p style="font-size:12.5px;">出發點：${a.origin||'—'} <a class="link" href="${mapLink(a.origin||'')}" target="_blank">${a.origin?'開啟導航':''}</a></p>
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
-        ${a.dropPoints.map(dp=>`
+        ${a.dropPoints.map(dp=>{
+          const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
+          return `
           <div class="drop-point">
             ${dpLabel(dp)}（${channelName(dp.channelId)}）
             ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
+            ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未配達：${dp.issueReason}</span>` : ''}
             <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
-              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">${dp.status==='completed'?'重新拍照':'拍照上傳'}<input type="file" accept="image/*" data-photo="${a.id}|${dp.id}" style="display:none;"></label>
-              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">新增照片/影片<input type="file" accept="image/*,video/*" multiple data-extra="${dp.id}" style="display:none;"></label>
+              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">${dp.status==='completed'?'重新拍照':'拍照上傳'}<input type="file" accept="image/*" capture="environment" data-photo="${a.id}|${dp.id}" style="display:none;"></label>
+              ${dp.status==='completed' && photoCount<3 ? `<label class="btn ghost" style="flex:1; min-width:110px; margin:0;">新增照片（${photoCount}/3）<input type="file" accept="image/*" capture="environment" data-addphoto="${dp.id}" style="display:none;"></label>` : ''}
+              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">新增影片<input type="file" accept="video/*" capture="environment" data-addvideo="${dp.id}" style="display:none;"></label>
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
             ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
             ${mediaGalleryHtml(dp.media)}
-          </div>`).join('')}
+            ${dp.status!=='completed' ? `<div style="margin-top:8px;">
+              <label style="font-size:12px; color:var(--ink-soft); display:block; margin-bottom:3px;">若無法送達，請選擇原因：</label>
+              <select data-issue="${a.id}|${dp.id}" style="width:100%;">
+                <option value="">－選擇原因－</option>
+                ${['通路未下單','央廚未出貨','便當翻覆','遲到拒收'].map(r=>`<option value="${r}" ${dp.issueReason===r?'selected':''}>${r}</option>`).join('')}
+              </select>
+            </div>` : ''}
+          </div>`;
+        }).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
-        ${!allDone?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有下貨點未完成拍照，結束時需填寫備註說明原因</p>':''}
+        ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有下貨點未完成拍照或未選擇未配達原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;
   }).join('');
@@ -2663,10 +2677,10 @@ function renderTodayDetail(todays){
   box.querySelectorAll('[data-finish]').forEach(btn=>{
     btn.onclick = async ()=>{
       const a = state.data.assignments.find(x=>x.id===btn.dataset.finish);
-      const allDone = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed');
+      const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
       let issueNote;
-      if(!allDone){
-        const note = prompt('尚有下貨點未完成拍照回報，請說明原因（此備註主控端會看到）：');
+      if(!allHandled){
+        const note = prompt('尚有下貨點未完成拍照、也沒有選擇未配達原因，請說明原因（此備註主控端會看到）：');
         if(note===null) return;
         if(!note.trim()){ alert('請填寫備註原因'); return; }
         issueNote = note.trim();
@@ -2675,11 +2689,12 @@ function renderTodayDetail(todays){
       catch(err){ alert(err.message); }
     };
   });
-  // 主要送達照片跟附加照片/影片分成兩個獨立的input：拿掉multiple是關鍵——
-  // OPPO/三星/小米等Android系統的檔案選擇器，只要input同時有multiple屬性，
-  // 就會直接跳過「拍照」這個選項、只給「上傳／瀏覽」，導致司機點了按鈕卻
-  // 完全看不到相機功能。拆成兩顆按鈕後，主要照片這顆維持單選（沒有multiple），
-  // 相機選項才會正常出現；多選/影片另外走「新增照片/影片」那顆。
+  // 主要送達照片用單獨的input且不能multiple——OPPO/三星/小米等Android系統的
+  // 檔案選擇器，只要input同時有multiple屬性，就會直接跳過「拍照」這個選項、
+  // 只給「上傳／瀏覽」，導致司機點了按鈕卻完全看不到相機功能。這裡額外加上
+  // capture="environment"：明確告訴瀏覽器優先開相機（而不是跳出「相機/相簿/
+  // 檔案」的選擇清單），三顆按鈕（主要照片／新增照片／新增影片）都固定走
+  // 相機，一次一張，符合司機「一次拍一張、可以分好幾次拍」的實際操作習慣。
   box.querySelectorAll('[data-photo]').forEach(input=>{
     input.onchange = (e)=>{
       const [aid, dpid] = input.dataset.photo.split('|');
@@ -2695,14 +2710,36 @@ function renderTodayDetail(todays){
       });
     };
   });
-  box.querySelectorAll('[data-extra]').forEach(input=>{
+  // 「新增照片」：送達證明照最多累計3張（主要照片+這裡新增的），達到3張
+  // 之後按鈕就不會再出現；每次都是額外附加一張，不覆蓋任何既有照片。
+  box.querySelectorAll('[data-addphoto]').forEach(input=>{
     input.onchange = (e)=>{
-      const dpid = input.dataset.extra;
-      const files = [...e.target.files]; if(!files.length) return;
-      handleExtraMediaUpload(dpid, files).then(()=> renderContent()).catch(err=>{
-        console.error('照片/影片處理失敗', err);
-        alert('照片/影片處理失敗，請重新拍攝或選擇檔案再試一次。');
+      const dpid = input.dataset.addphoto;
+      const file = e.target.files[0]; if(!file) return;
+      handleExtraMediaUpload(dpid, [file]).then(()=> renderContent()).catch(err=>{
+        console.error('照片處理失敗', err);
+        alert('照片處理失敗，請重新拍攝再試一次。');
       });
+    };
+  });
+  box.querySelectorAll('[data-addvideo]').forEach(input=>{
+    input.onchange = (e)=>{
+      const dpid = input.dataset.addvideo;
+      const file = e.target.files[0]; if(!file) return;
+      handleExtraMediaUpload(dpid, [file]).then(()=> renderContent()).catch(err=>{
+        console.error('影片處理失敗', err);
+        alert('影片處理失敗，請重新拍攝再試一次。');
+      });
+    };
+  });
+  // 未配達原因：選了代表這個下貨點暫時不會有送達照片，直接存檔，不用等到
+  // 整趟結束才統一填一個籠統的備註；選完之後如果司機還是補拍了照片，
+  // uploadDropPointPhoto() 會自動把這裡的原因清掉（見 data-layer.js）。
+  box.querySelectorAll('[data-issue]').forEach(sel=>{
+    sel.onchange = async ()=>{
+      const [aid, dpid] = sel.dataset.issue.split('|');
+      try{ await setDropPointIssueReason(aid, dpid, sel.value || null); renderContent(); }
+      catch(err){ alert(err.message); }
     };
   });
 }
@@ -2730,7 +2767,7 @@ function renderHistory(c){
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
               <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-              ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}${mediaGalleryHtml(dp.media)}</div>`).join('')}
+              ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':`<span class="badge pending">未配達${dp.issueReason?'：'+dp.issueReason:''}</span>`}${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}${mediaGalleryHtml(dp.media)}</div>`).join('')}
             </div>
           `).join('')}
         </div>

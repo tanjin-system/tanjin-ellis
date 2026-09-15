@@ -176,7 +176,11 @@ create table assignment_drop_points (
   photo_url text,
   photo_cleared boolean not null default false,
   completed_at timestamptz,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- 未配達原因：司機在單一下貨點旁邊直接選填（不用等到整趟結束才填一個籠統的
+  -- 備註），限定固定選項，讓主控端看報表時分類一致好統計。設定原因不代表這個
+  -- 下貨點「完成」（status 還是 pending，沒有送達證明照），只是有了解釋。
+  issue_reason text check (issue_reason in ('通路未下單','央廚未出貨','便當翻覆','遲到拒收'))
 );
 create index idx_adp_assignment on assignment_drop_points(assignment_id);
 
@@ -398,13 +402,13 @@ create policy driver_update_own on assignments for update to app_driver
 
 -- ------------------------------------------------------------
 -- assignment_drop_points：app_admin 全權限；app_driver 只能看/改
--- 屬於自己車趟的下貨點，只能改 status / photo_url / completed_at
+-- 屬於自己車趟的下貨點，只能改 status / photo_url / completed_at / issue_reason
 -- （photo_cleared 是系統housekeeping欄位，司機不可碰）。
 -- ------------------------------------------------------------
 alter table assignment_drop_points enable row level security;
 grant select, insert, update, delete on assignment_drop_points to app_admin;
 grant select on assignment_drop_points to app_driver;
-grant update (status, photo_url, completed_at) on assignment_drop_points to app_driver;
+grant update (status, photo_url, completed_at, issue_reason) on assignment_drop_points to app_driver;
 
 create policy admin_all on assignment_drop_points for all to app_admin using (true) with check (true);
 create policy driver_select_own on assignment_drop_points for select to app_driver
@@ -493,7 +497,11 @@ create policy driver_insert on notifications for insert to app_driver with check
 -- 匯入舊資料（INSERT 時就已經是 completed）不會觸發，舊資料的
 -- 金額快照維持匯入時的原始值（凍結快照本來就不該回頭被重算）。
 -- ============================================================
-create or replace function compute_trip_billing() returns trigger
+-- compute_trip_billing_values()：純計算，抽出來給觸發器（車趟轉為completed
+-- 那一刻）跟 recompute_trip_billing_snapshot()（事後補算，見下面）共用同一套
+-- 公式，不會兩邊各寫一份、之後改公式忘記改到另一邊。
+create or replace function compute_trip_billing_values(p_assignment_id uuid, p_distance_km numeric)
+returns table(total_amount numeric, by_channel jsonb)
 language plpgsql as $$
 declare
   pool_points int := 0;
@@ -502,69 +510,87 @@ declare
   remainder int;
   seen int := 0;
   ch record;
-  by_channel jsonb := '{}'::jsonb;
-  total_amount numeric := 0;
+  v_by_channel jsonb := '{}'::jsonb;
+  v_total_amount numeric := 0;
   v_rate_km numeric;
   v_rate_point numeric;
   amt numeric;
   i int;
 begin
-  if new.status = 'completed' and (old.status is distinct from 'completed') then
+  select coalesce(sum(cnt), 0) into pool_points
+  from (
+    select count(*) as cnt
+    from assignment_drop_points adp
+    join channels c on c.id = adp.channel_id
+    where adp.assignment_id = p_assignment_id and c.formula_type <> 'flat_per_trip'
+    group by adp.channel_id
+  ) s;
 
-    select coalesce(sum(cnt), 0) into pool_points
-    from (
-      select count(*) as cnt
-      from assignment_drop_points adp
-      join channels c on c.id = adp.channel_id
-      where adp.assignment_id = new.id and c.formula_type <> 'flat_per_trip'
-      group by adp.channel_id
-    ) s;
+  if pool_points > 0 then
+    select c.rate_km, c.rate_point into v_rate_km, v_rate_point
+    from assignment_drop_points adp
+    join channels c on c.id = adp.channel_id
+    where adp.assignment_id = p_assignment_id and c.formula_type <> 'flat_per_trip'
+    order by adp.sequence_no
+    limit 1;
 
-    if pool_points > 0 then
-      select c.rate_km, c.rate_point into v_rate_km, v_rate_point
-      from assignment_drop_points adp
-      join channels c on c.id = adp.channel_id
-      where adp.assignment_id = new.id and c.formula_type <> 'flat_per_trip'
-      order by adp.sequence_no
-      limit 1;
-
-      pool_total := round(coalesce(new.distance_km, 0) * v_rate_km + pool_points * v_rate_point);
-      base_amt := floor(pool_total / pool_points);
-      remainder := pool_total - base_amt * pool_points;
-      seen := 0;
-
-      for ch in
-        select adp.channel_id as channel_id, count(*) as cnt
-        from assignment_drop_points adp
-        join channels c on c.id = adp.channel_id
-        where adp.assignment_id = new.id and c.formula_type <> 'flat_per_trip'
-        group by adp.channel_id
-        order by min(adp.sequence_no)
-      loop
-        amt := base_amt * ch.cnt;
-        for i in 1..ch.cnt loop
-          if seen < remainder then
-            amt := amt + 1;
-          end if;
-          seen := seen + 1;
-        end loop;
-        by_channel := by_channel || jsonb_build_object(ch.channel_id::text, amt);
-        total_amount := total_amount + amt;
-      end loop;
-    end if;
+    pool_total := round(coalesce(p_distance_km, 0) * v_rate_km + pool_points * v_rate_point);
+    base_amt := floor(pool_total / pool_points);
+    remainder := pool_total - base_amt * pool_points;
+    seen := 0;
 
     for ch in
-      select distinct adp.channel_id as channel_id, c.flat_amount as flat_amount
+      select adp.channel_id as channel_id, count(*) as cnt
       from assignment_drop_points adp
       join channels c on c.id = adp.channel_id
-      where adp.assignment_id = new.id and c.formula_type = 'flat_per_trip'
+      where adp.assignment_id = p_assignment_id and c.formula_type <> 'flat_per_trip'
+      group by adp.channel_id
+      order by min(adp.sequence_no)
     loop
-      by_channel := by_channel || jsonb_build_object(ch.channel_id::text, round(ch.flat_amount));
-      total_amount := total_amount + round(ch.flat_amount);
+      amt := base_amt * ch.cnt;
+      for i in 1..ch.cnt loop
+        if seen < remainder then
+          amt := amt + 1;
+        end if;
+        seen := seen + 1;
+      end loop;
+      v_by_channel := v_by_channel || jsonb_build_object(ch.channel_id::text, amt);
+      v_total_amount := v_total_amount + amt;
     end loop;
+  end if;
 
-    new.billing_total_snapshot := total_amount;
-    new.billing_by_channel_snapshot := by_channel;
+  for ch in
+    select distinct adp.channel_id as channel_id, c.flat_amount as flat_amount
+    from assignment_drop_points adp
+    join channels c on c.id = adp.channel_id
+    where adp.assignment_id = p_assignment_id and c.formula_type = 'flat_per_trip'
+  loop
+    v_by_channel := v_by_channel || jsonb_build_object(ch.channel_id::text, round(ch.flat_amount));
+    v_total_amount := v_total_amount + round(ch.flat_amount);
+  end loop;
+
+  total_amount := v_total_amount;
+  by_channel := v_by_channel;
+  return next;
+end;
+$$;
+
+-- 把原本前端 tripBilling() 的邏輯搬到資料庫層，車趟狀態轉為
+-- completed 時自動計算並鎖定金額快照，司機端沒有欄位權限可以竄改。
+-- 注意：這個觸發器只在「狀態轉為 completed 的那一次 UPDATE」執行，
+-- 匯入舊資料（INSERT 時就已經是 completed）不會觸發，舊資料的
+-- 金額快照維持匯入時的原始值（凍結快照本來就不該回頭被重算）——
+-- 例外只有下面 recompute_trip_billing_snapshot()，用於下貨點分類
+-- 事後訂正時主動補算，不是自動重算。
+create or replace function compute_trip_billing() returns trigger
+language plpgsql as $$
+declare
+  r record;
+begin
+  if new.status = 'completed' and (old.status is distinct from 'completed') then
+    select * into r from compute_trip_billing_values(new.id, new.distance_km);
+    new.billing_total_snapshot := r.total_amount;
+    new.billing_by_channel_snapshot := r.by_channel;
     new.payroll_fare_snapshot := new.fare;
     new.completed_at := coalesce(new.completed_at, now());
   end if;
@@ -576,24 +602,53 @@ create trigger trg_compute_trip_billing
 before update on assignments
 for each row execute function compute_trip_billing();
 
+-- 下貨點分類訂正後，已經completed、金額已凍結的車趟主動補算一次請款拆賬
+-- （只有 sync_drop_point_channel() 會呼叫這個，不是自動觸發——一般情況金額
+-- 凍結後不會再變，只有「下貨點資料庫分類打錯字，事後訂正」這種資料修正
+-- 情境才需要）。司機費用（fare/payroll_fare_snapshot）不受影響，這裡完全
+-- 不碰。
+create or replace function recompute_trip_billing_snapshot(p_assignment_id uuid) returns void
+language plpgsql as $$
+declare
+  r record;
+  v_distance_km numeric;
+begin
+  select distance_km into v_distance_km from assignments where id = p_assignment_id and status = 'completed';
+  if not found then return; end if;
+  select * into r from compute_trip_billing_values(p_assignment_id, v_distance_km);
+  update assignments set billing_total_snapshot = r.total_amount, billing_by_channel_snapshot = r.by_channel where id = p_assignment_id;
+end;
+$$;
+grant execute on function recompute_trip_billing_snapshot(uuid) to app_admin;
+
 -- ------------------------------------------------------------
--- 下貨點改分類（所屬通路）時，同步套用到還沒完成的車趟快照。
--- assignment_drop_points.channel_id 是建立車趟當下複製的快照（見
--- createAssignment()），下貨點資料庫事後改掉分類不會自動反映過去；
--- 已經 completed 的車趟金額已經凍結（compute_trip_billing 只在轉為
--- completed 那一瞬間算一次，之後不重算），這裡刻意只更新還沒完成的，
--- 完成過的維持原始凍結金額不動，跟司機費用/請款金額「事後不可回頭
--- 更動」的原則一致。
+-- 下貨點改分類（所屬通路）時，同步套用到「所有」引用這個下貨點的車趟快照
+-- （配送紀錄查詢／請款明細一律依下貨點資料庫目前的分類顯示，不分車趟是否
+-- 已完成）。已經 completed 的車趟，請款金額快照也會跟著補算一次（下貨點
+-- 的通路歸屬會影響共配分攤的店數比例）——這一步刻意繞過「金額凍結後不
+-- 回頭重算」的一般原則，因為這裡要修正的是「下貨點打從一開始就分類錯」
+-- 這個資料錯誤本身，不是路線/費率之後合理變動；已經修正的請款金額如果
+-- 前期已經請款/入帳，請自行核對是否需要跟通路方調整。司機費用完全不受
+-- 影響（recompute_trip_billing_snapshot 不碰 fare）。
 -- ------------------------------------------------------------
 create or replace function sync_drop_point_channel(p_drop_point_id uuid, p_channel_id uuid) returns void
-language sql as $$
-  update assignment_drop_points adp
+language plpgsql as $$
+declare
+  aid uuid;
+begin
+  update assignment_drop_points
   set channel_id = p_channel_id
-  from assignments a
-  where adp.source_drop_point_id = p_drop_point_id
-    and a.id = adp.assignment_id
-    and a.status <> 'completed'
-    and adp.channel_id is distinct from p_channel_id;
+  where source_drop_point_id = p_drop_point_id
+    and channel_id is distinct from p_channel_id;
+
+  for aid in
+    select distinct a.id from assignments a
+    join assignment_drop_points adp on adp.assignment_id = a.id
+    where adp.source_drop_point_id = p_drop_point_id and a.status = 'completed'
+  loop
+    perform recompute_trip_billing_snapshot(aid);
+  end loop;
+end;
 $$;
 grant execute on function sync_drop_point_channel(uuid, uuid) to app_admin;
 

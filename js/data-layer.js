@@ -93,6 +93,7 @@ function mapAssignment(row) {
       photoPath: p.photo_url,
       photo: null,
       photoCleared: p.photo_cleared,
+      issueReason: p.issue_reason || null,
       // 主要送達證明照以外的附加照片/影片（見 assignment_drop_point_media）；
       // url 要另外呼叫 resolvePhotoUrls() 才會補上簽名連結，跟 photo 欄位同一套機制。
       media: (p.assignment_drop_point_media || []).map(m => ({ id: m.id, path: m.media_url, type: m.media_type, url: null }))
@@ -477,16 +478,26 @@ async function updateDropPoint(dpId, input) {
   const idx = state.data.dropPoints.findIndex(x => x.id === dpId);
   if (idx >= 0) state.data.dropPoints[idx] = mapDropPoint(data);
 
-  // 通路（所屬分類）改變時，同步套用到還沒完成的車趟快照（見上面
-  // sync_drop_point_channel()），完成過的車趟維持原始金額不動。
+  // 通路（所屬分類）改變時，同步套用到「所有」引用這個下貨點的車趟快照
+  // （不分完成與否——請款明細/配送紀錄一律依下貨點資料庫目前的分類顯示）。
+  // 已完成的車趟，資料庫那邊（見 sync_drop_point_channel()）也會一併補算
+  // 一次請款拆賬金額，這裡重新抓一次那些車趟同步最新的金額快照；司機費用
+  // 不受影響。
   if (channelChanged) {
     const { error: syncErr } = await supabase.rpc('sync_drop_point_channel', { p_drop_point_id: dpId, p_channel_id: input.channelId });
-    if (syncErr) console.error('同步下貨點通路到未完成車趟失敗', syncErr.message);
+    if (syncErr) console.error('同步下貨點通路失敗', syncErr.message);
     else {
+      const completedIds = [];
       state.data.assignments.forEach(a => {
-        if (a.status === 'completed') return;
+        const touched = a.dropPoints.some(dp => dp.sourceDpId === dpId);
+        if (!touched) return;
         a.dropPoints.forEach(dp => { if (dp.sourceDpId === dpId) dp.channelId = input.channelId; });
+        if (a.status === 'completed') completedIds.push(a.id);
       });
+      for (const aid of completedIds) {
+        const idx = state.data.assignments.findIndex(x => x.id === aid);
+        if (idx >= 0) state.data.assignments[idx] = await fetchAssignment(aid);
+      }
     }
   }
 }
@@ -814,12 +825,14 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const wasAlreadyCompleted = dp?.status === 'completed';
 
   const completedAt = new Date().toISOString();
+  // 補拍照片代表這個下貨點其實送達了，之前選的未配達原因（如果有）就不成立，
+  // 一起清掉，避免畫面同時顯示「已送達」又掛著一個舊的未配達原因標籤。
   const { error: updErr } = await supabase.from('assignment_drop_points')
-    .update({ status: 'completed', photo_url: path, completed_at: completedAt })
+    .update({ status: 'completed', photo_url: path, completed_at: completedAt, issue_reason: null })
     .eq('id', dropPointId);
   if (updErr) throw new Error('更新下貨點狀態失敗：' + updErr.message);
 
-  if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; }
+  if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; }
   // 重新拍照（本來就已經是 completed）不用再發一次通知，避免主控端被同一個
   // 下貨點的重複通知洗版；只有第一次真正完成拍照才通知。
   if (!wasAlreadyCompleted) {
@@ -827,6 +840,19 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
     // 沒設代號的下貨點才退回顯示地址；跟司機行程頁「代號+地址都顯示」的 dpLabel() 不一樣。
     await createNotification('photo', `${driverName(assignment?.driverId)} 於「${dp?.code || dp?.address || ''}」完成拍照回報`);
   }
+}
+
+// 未配達原因：司機在單一下貨點旁邊直接選填，不用等到整趟結束才填一個籠統的
+// 備註。設定原因不代表這個下貨點「完成」（status 還是 pending，沒有送達
+// 證明照），只是有了解釋；主控端在「完成本趟」的判斷跟畫面顯示都會把它
+// 當作「已處理」看待。
+async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignment_drop_points').update({ issue_reason: reason }).eq('id', dropPointId);
+  if (error) throw new Error('儲存未配達原因失敗：' + error.message);
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  const dp = a?.dropPoints.find(x => x.id === dropPointId);
+  if (dp) dp.issueReason = reason;
 }
 
 // 附加媒體（多張照片／影片）：跟主要送達證明照是分開的一張表，一個下貨點可以有
