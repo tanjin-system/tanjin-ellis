@@ -195,6 +195,37 @@ function compressImageFile(file, maxDim=1000, quality=0.6){
     reader.readAsDataURL(file);
   });
 }
+// 司機拍照/影片上傳統一入口：一次選取的檔案裡，第一張「圖片」當作主要送達
+// 證明照（沿用 uploadDropPointPhoto，會設狀態＝已完成；同一路徑upsert，
+// 這也是「重新拍照」直接覆蓋掉舊照片的機制），其餘的圖片跟所有影片都送進
+// assignment_drop_point_media 附加媒體表，不影響完成狀態。純影片（沒有選圖片）
+// 只會是附加媒體，不會觸發「完成」——完成送達還是要有一張主要照片。
+async function handleDropPointMediaUpload(assignmentId, dropPointId, files){
+  const images = files.filter(f=>f.type.startsWith('image/'));
+  const videos = files.filter(f=>f.type.startsWith('video/'));
+  if(images.length){
+    const firstDataUrl = await compressImageFile(images[0]);
+    await uploadDropPointPhoto(assignmentId, dropPointId, firstDataUrl);
+  }
+  const extraItems = [];
+  for(const f of images.slice(1)){
+    const dataUrl = await compressImageFile(f);
+    extraItems.push({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' });
+  }
+  for(const f of videos){
+    extraItems.push({ bytes: new Uint8Array(await f.arrayBuffer()), contentType: f.type||'video/mp4', mediaType:'video' });
+  }
+  if(extraItems.length) await uploadDropPointMedia(dropPointId, extraItems);
+}
+function mediaGalleryHtml(media){
+  if(!media || !media.length) return '';
+  return `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+    ${media.map(m=> m.type==='video'
+      ? `<video src="${m.url||''}" controls style="width:70px; height:70px; border-radius:4px; background:#000;"></video>`
+      : `<img src="${m.url||''}" style="width:70px; height:70px; object-fit:cover; border-radius:4px; border:1px solid var(--border);">`
+    ).join('')}
+  </div>`;
+}
 // 直接產生真正的PDF檔案（不再是HTML檔案要求使用者自己用瀏覽器列印另存），
 // 用 html2pdf.js（內部是 html2canvas 把畫面截成圖＋jsPDF 排版成PDF）。
 // PDF 實際做好是非同步的（要等畫面渲染成圖片），很多瀏覽器（尤其手機版）會擋掉
@@ -675,6 +706,19 @@ function renderNotifications(c){
   };
 }
 
+// 今天還沒配送完成的車次/下貨點，給主控每天上午11:00過後（含下午）掌握即時進度用。
+// 每次開系統/重新整理都是重新算一次「現在」的狀態，下貨點一旦被司機標記完成，
+// 下次渲染這個清單就會自動不見，不需要另外做「清除」動作。
+function undeliveredTodayGroups(){
+  const today = todayStr();
+  return state.data.assignments
+    .filter(a=> a.date===today && a.status!=='cancelled')
+    .map(a=>({
+      routeLabel: routeName(a.routeId),
+      points: a.dropPoints.filter(dp=>dp.status!=='completed').map(dp=>`${channelName(dp.channelId)}${dpLabel(dp)}`)
+    }))
+    .filter(g=>g.points.length);
+}
 function renderHomeAdmin(c){
   const tiles = [
     {id:'notifications', label:'即時通知', sub:'各車出發/拍照/完成動態'},
@@ -691,6 +735,8 @@ function renderHomeAdmin(c){
   ];
   const p = computeProfitSnapshot();
   const recent = (state.data.notifications||[]).slice(0,6);
+  const showProgress = new Date().getHours() >= 11; // 每天上午11:00後才開始顯示（早上多數車次都還沒出發，顯示了也只是噪音）
+  const progressGroups = showProgress ? undeliveredTodayGroups() : [];
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。</p>
@@ -709,6 +755,10 @@ function renderHomeAdmin(c){
       </table>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">依各通路目前的請款週期規則，估算本月至今（未到週期結束日者以今天為止）；支出為司機當月已完成車趟的應付淨額。</p>
     </div>
+    ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3><span style="font-size:11px; color:var(--ink-soft);">即時更新，配送完成後自動消失</span></div>
+      ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);"><strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
+    </div>` : ''}
     ${recent.length ? `<div class="panel">
       <div class="toolbar"><h3 style="margin:0;">最新動態</h3><button class="btn ghost" data-goto="notifications">查看全部</button></div>
       ${recent.map(n=>`<div style="font-size:12.5px; padding:5px 0; border-bottom:1px solid var(--border);">${NOTIF_LABEL[n.type]||''} ${n.message} <span style="color:var(--ink-soft); font-size:11px;">－ ${new Date(n.createdAt).toLocaleString('zh-Hant-TW')}</span></div>`).join('')}
@@ -2572,10 +2622,11 @@ function renderTodayDetail(todays){
             ${dpLabel(dp)}（${channelName(dp.channelId)}）
             ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
             <div style="display:flex; gap:8px; margin-top:8px;">
-              ${dp.status!=='completed' ? `<label class="btn ghost" style="flex:1; margin:0;">拍照上傳<input type="file" accept="image/*" data-photo="${a.id}|${dp.id}" style="display:none;"></label>` : ''}
+              <label class="btn ghost" style="flex:1; margin:0;">${dp.status==='completed'?'重新拍照':'拍照/影片上傳'}<input type="file" accept="image/*,video/*" multiple data-media="${a.id}|${dp.id}" style="display:none;"></label>
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1;">Google導航</a>
             </div>
             ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
+            ${mediaGalleryHtml(dp.media)}
           </div>`).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
         ${!allDone?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有下貨點未完成拍照，結束時需填寫備註說明原因</p>':''}
@@ -2603,16 +2654,18 @@ function renderTodayDetail(todays){
       catch(err){ alert(err.message); }
     };
   });
-  box.querySelectorAll('[data-photo]').forEach(input=>{
+  box.querySelectorAll('[data-media]').forEach(input=>{
     input.onchange = (e)=>{
-      const [aid, dpid] = input.dataset.photo.split('|');
-      const file = e.target.files[0]; if(!file) return;
-      compressImageFile(file).then(async (dataUrl)=>{
-        await uploadDropPointPhoto(aid, dpid, dataUrl);
-        renderContent();
-      }).catch(err=>{
-        console.error('照片處理失敗', err);
-        alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
+      const [aid, dpid] = input.dataset.media.split('|');
+      const files = [...e.target.files]; if(!files.length) return;
+      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+      if(dp && dp.status==='completed' && !confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？')){
+        input.value = '';
+        return;
+      }
+      handleDropPointMediaUpload(aid, dpid, files).then(()=> renderContent()).catch(err=>{
+        console.error('照片/影片處理失敗', err);
+        alert('照片/影片處理失敗，請重新拍攝或選擇檔案再試一次。');
       });
     };
   });
@@ -2641,7 +2694,7 @@ function renderHistory(c){
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
               <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-              ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`).join('')}
+              ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） <span class="badge completed">已送達</span>${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}${mediaGalleryHtml(dp.media)}</div>`).join('')}
             </div>
           `).join('')}
         </div>

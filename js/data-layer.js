@@ -92,7 +92,10 @@ function mapAssignment(row) {
       status: p.status,
       photoPath: p.photo_url,
       photo: null,
-      photoCleared: p.photo_cleared
+      photoCleared: p.photo_cleared,
+      // 主要送達證明照以外的附加照片/影片（見 assignment_drop_point_media）；
+      // url 要另外呼叫 resolvePhotoUrls() 才會補上簽名連結，跟 photo 欄位同一套機制。
+      media: (p.assignment_drop_point_media || []).map(m => ({ id: m.id, path: m.media_url, type: m.media_type, url: null }))
     }))
   };
 }
@@ -144,6 +147,15 @@ async function resolvePhotoUrls(assignments) {
   const supabase = getSupabase();
   const targets = [];
   assignments.forEach(a => a.dropPoints.forEach(dp => { if (dp.photoPath) targets.push(dp); }));
+  const mediaTargets = [];
+  assignments.forEach(a => a.dropPoints.forEach(dp => (dp.media || []).forEach(m => mediaTargets.push(m))));
+  if (mediaTargets.length) {
+    const { data: mediaSigned, error: mediaErr } = await supabase.storage
+      .from('assignment-photos')
+      .createSignedUrls(mediaTargets.map(m => m.path), 60 * 60 * 24 * 7);
+    if (mediaErr) console.error('取得附加媒體連結失敗', mediaErr.message);
+    else mediaSigned.forEach((item, i) => { mediaTargets[i].url = item?.signedUrl || null; });
+  }
   if (!targets.length) return;
   const { data, error } = await supabase.storage
     .from('assignment-photos')
@@ -188,7 +200,7 @@ async function loadAllData() {
     originsRes: supabase.from('origins').select('*').order('created_at'),
     dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
     routesRes: supabase.from('routes').select('*, origins(address), route_versions(*, route_version_points(*))'),
-    assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*)').order('trip_date'),
+    assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').order('trip_date'),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
     // 同樣的道理：schema.sql 只 grant app_driver 對 notifications 的 insert 權限
@@ -227,7 +239,7 @@ async function loadAllData() {
 
 async function fetchAssignment(id) {
   const supabase = getSupabase();
-  const { data, error } = await supabase.from('assignments').select('*, assignment_drop_points(*)').eq('id', id).single();
+  const { data, error } = await supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').eq('id', id).single();
   if (error) throw new Error('讀取車趟失敗：' + error.message);
   const assignment = mapAssignment(data);
   await resolvePhotoUrls([assignment]);
@@ -732,8 +744,15 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const { bytes, contentType } = dataUrlToBytesAndType(dataUrl);
   const path = `${assignmentId}/${dropPointId}.jpg`;
   const supabase = getSupabase();
+  // upsert:true 讓同一個下貨點重複呼叫這個函式時（司機「重新拍照」）直接覆蓋掉
+  // 同一個路徑的舊照片，不需要另外處理刪除舊檔——這也是「重新拍照」能重用這支
+  // 既有函式、不用另外寫一支的原因。
   const { error: upErr } = await supabase.storage.from('assignment-photos').upload(path, bytes, { contentType, upsert: true });
   if (upErr) throw new Error('照片上傳失敗：' + upErr.message);
+
+  const assignment = state.data.assignments.find(a => a.id === assignmentId);
+  const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
+  const wasAlreadyCompleted = dp?.status === 'completed';
 
   const completedAt = new Date().toISOString();
   const { error: updErr } = await supabase.from('assignment_drop_points')
@@ -741,12 +760,45 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
     .eq('id', dropPointId);
   if (updErr) throw new Error('更新下貨點狀態失敗：' + updErr.message);
 
-  const assignment = state.data.assignments.find(a => a.id === assignmentId);
-  const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; }
-  // 通知訊息只顯示代號本身（有代號就不再附完整地址，維持通知列表簡潔），
-  // 沒設代號的下貨點才退回顯示地址；跟司機行程頁「代號+地址都顯示」的 dpLabel() 不一樣。
-  await createNotification('photo', `${driverName(assignment?.driverId)} 於「${dp?.code || dp?.address || ''}」完成拍照回報`);
+  // 重新拍照（本來就已經是 completed）不用再發一次通知，避免主控端被同一個
+  // 下貨點的重複通知洗版；只有第一次真正完成拍照才通知。
+  if (!wasAlreadyCompleted) {
+    // 通知訊息只顯示代號本身（有代號就不再附完整地址，維持通知列表簡潔），
+    // 沒設代號的下貨點才退回顯示地址；跟司機行程頁「代號+地址都顯示」的 dpLabel() 不一樣。
+    await createNotification('photo', `${driverName(assignment?.driverId)} 於「${dp?.code || dp?.address || ''}」完成拍照回報`);
+  }
+}
+
+// 附加媒體（多張照片／影片）：跟主要送達證明照是分開的一張表，一個下貨點可以有
+// 很多筆，不會互相覆蓋。items 是呼叫端（index.html）已經處理好的
+// [{bytes, contentType, mediaType}, ...]，圖片已經過 compressImageFile 壓縮、
+// 影片則是原始檔案位元組（不做壓縮）。
+async function uploadDropPointMedia(dropPointId, items) {
+  if (!items || !items.length) return [];
+  const supabase = getSupabase();
+  const uploaded = [];
+  for (const item of items) {
+    const ext = item.mediaType === 'video' ? 'mp4' : 'jpg';
+    const path = `extra/${dropPointId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error: upErr } = await supabase.storage.from('assignment-photos').upload(path, item.bytes, { contentType: item.contentType, upsert: false });
+    if (upErr) throw new Error('附加媒體上傳失敗：' + upErr.message);
+    const { data, error: insErr } = await supabase.from('assignment_drop_point_media')
+      .insert({ assignment_drop_point_id: dropPointId, media_url: path, media_type: item.mediaType })
+      .select().single();
+    if (insErr) throw new Error('附加媒體紀錄失敗：' + insErr.message);
+    uploaded.push({ id: data.id, path, type: item.mediaType, url: null });
+  }
+  for (const a of state.data.assignments) {
+    const dp = a.dropPoints.find(x => x.id === dropPointId);
+    if (dp) { if (!dp.media) dp.media = []; dp.media.push(...uploaded); break; }
+  }
+  const { data: signed, error: signErr } = await supabase.storage
+    .from('assignment-photos')
+    .createSignedUrls(uploaded.map(u => u.path), 60 * 60 * 24 * 7);
+  if (signErr) console.error('取得附加媒體連結失敗', signErr.message);
+  else signed.forEach((s, i) => { uploaded[i].url = s?.signedUrl || null; });
+  return uploaded;
 }
 
 async function bulkDeleteAssignments(ids) {

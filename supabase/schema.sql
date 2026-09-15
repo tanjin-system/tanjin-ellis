@@ -181,6 +181,19 @@ create table assignment_drop_points (
 create index idx_adp_assignment on assignment_drop_points(assignment_id);
 
 -- ------------------------------------------------------------
+-- 8b. 車趟下貨點附加媒體（多張照片／影片，photo_url 那一張是主要送達證明照，
+-- 這裡是額外補充的附件，一個下貨點可以有很多筆）
+-- ------------------------------------------------------------
+create table assignment_drop_point_media (
+  id uuid primary key default gen_random_uuid(),
+  assignment_drop_point_id uuid not null references assignment_drop_points(id) on delete cascade,
+  media_url text not null,
+  media_type text not null check (media_type in ('image','video')),
+  created_at timestamptz not null default now()
+);
+create index idx_adp_media_point on assignment_drop_point_media(assignment_drop_point_id);
+
+-- ------------------------------------------------------------
 -- 9. 司機薪資調整項
 -- ------------------------------------------------------------
 create table adjustments (
@@ -399,6 +412,27 @@ create policy driver_select_own on assignment_drop_points for select to app_driv
 create policy driver_update_own on assignment_drop_points for update to app_driver
   using (exists (select 1 from assignments a where a.id = assignment_drop_points.assignment_id and a.driver_id = auth_driver_id()))
   with check (exists (select 1 from assignments a where a.id = assignment_drop_points.assignment_id and a.driver_id = auth_driver_id()));
+
+-- ------------------------------------------------------------
+-- assignment_drop_point_media：app_admin 全權限；app_driver 只能新增/查看
+-- 自己車趟下貨點的附加媒體，不開放刪除或修改——上傳後的照片/影片不能自己
+-- 偷偷改掉或刪掉，保留完整送達證明紀錄。
+-- ------------------------------------------------------------
+alter table assignment_drop_point_media enable row level security;
+grant select, insert, update, delete on assignment_drop_point_media to app_admin;
+grant select, insert on assignment_drop_point_media to app_driver;
+
+create policy admin_all on assignment_drop_point_media for all to app_admin using (true) with check (true);
+create policy driver_select_own on assignment_drop_point_media for select to app_driver
+  using (exists (
+    select 1 from assignment_drop_points adp join assignments a on a.id = adp.assignment_id
+    where adp.id = assignment_drop_point_media.assignment_drop_point_id and a.driver_id = auth_driver_id()
+  ));
+create policy driver_insert_own on assignment_drop_point_media for insert to app_driver
+  with check (exists (
+    select 1 from assignment_drop_points adp join assignments a on a.id = adp.assignment_id
+    where adp.id = assignment_drop_point_media.assignment_drop_point_id and a.driver_id = auth_driver_id()
+  ));
 
 -- ------------------------------------------------------------
 -- adjustments：app_admin 全權限（司機薪資調整項由主控輸入）；
