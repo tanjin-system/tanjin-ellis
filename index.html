@@ -877,7 +877,7 @@ function renderDrivers(c){
           <div class="field"><label>LINE User ID</label><input id="dLine"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>身分證／居留證號</label><input id="dIdNumber"></div>
+          <div class="field"><label>身分證／居留證號（可提供勞報人員）</label><input id="dIdNumber"></div>
         </div>
         <div class="grid3">
           <div class="field"><label>車牌</label><input id="dPlate"></div>
@@ -923,7 +923,7 @@ function renderDrivers(c){
           <div class="field"><label>LINE User ID</label><input id="eLine" value="${d.lineId||''}"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>身分證／居留證號</label><input id="eIdNumber" value="${d.idNumber||''}"></div>
+          <div class="field"><label>身分證／居留證號（可提供勞報人員）</label><input id="eIdNumber" value="${d.idNumber||''}"></div>
         </div>
         <div class="grid3">
           <div class="field"><label>車牌</label><input id="ePlate" value="${d.vehicle.plate||''}"></div>
@@ -2932,7 +2932,7 @@ function renderMyProfile(c){
     <div class="panel">
       <div class="grid4">
         <div class="field"><label>電話 <span class="required-mark">*</span></label><input id="mpPhone" value="${d.phone||''}"></div>
-        <div class="field"><label>身分證／居留證號 <span class="required-mark">*</span></label><input id="mpIdNumber" value="${d.idNumber||''}"></div>
+        <div class="field"><label>身分證／居留證號（可提供勞報人員） <span class="required-mark">*</span></label><input id="mpIdNumber" value="${d.idNumber||''}"></div>
         <div class="field"><label>車牌（選填）</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
         <div class="field"><label>車型（選填）</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
       </div>
