@@ -605,6 +605,27 @@ create policy driver_upload_own_photos on storage.objects for insert to app_driv
     )
   );
 
+-- 重新拍照會用 upsert:true 覆蓋同一路徑的既有檔案，Storage 底層是把它當UPDATE
+-- 處理（物件已存在），光有上面的 insert policy 涵蓋不到，沒有這條的話重新拍照
+-- 選檔案時會顯示成功但實際upload被RLS擋下、整個流程失敗。
+create policy driver_update_own_photos on storage.objects for update to app_driver
+  using (
+    bucket_id = 'assignment-photos'
+    and exists (
+      select 1 from assignments a
+      where a.id::text = (storage.foldername(name))[1]
+        and a.driver_id = auth_driver_id()
+    )
+  )
+  with check (
+    bucket_id = 'assignment-photos'
+    and exists (
+      select 1 from assignments a
+      where a.id::text = (storage.foldername(name))[1]
+        and a.driver_id = auth_driver_id()
+    )
+  );
+
 -- 司機回簽簽名圖檔也走 Storage（bucket: signatures），不直接塞base64進資料庫欄位。
 -- 路徑格式固定為 {statement_id}.png
 create policy admin_all_signatures on storage.objects for all to app_admin
