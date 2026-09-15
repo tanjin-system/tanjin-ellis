@@ -375,7 +375,7 @@ alter table drivers enable row level security;
 grant select, insert, update, delete on drivers to app_admin;
 grant select on drivers to app_driver;
 grant update (phone, line_user_id, vehicle_plate, vehicle_type, vehicle_load,
-              bank_name, bank_branch, bank_account, bank_holder,
+              bank_name, bank_branch, bank_account, bank_holder, id_number,
               access_code, force_code_reset) on drivers to app_driver;
 
 create policy admin_all on drivers for all to app_admin using (true) with check (true);

@@ -698,11 +698,13 @@ const DRIVER_TABS = [
   {id:'my-statement', label:'對帳單'},
   {id:'profile', label:'我的資料'}
 ];
-// 電話、銀行資訊為必填(車牌/車型選填)——司機本人（非主控檢視）資料未填妥前，
-// 鎖定在「我的資料」頁，其他分頁停用，直到補齊必填欄位並儲存為止。
+// 電話、銀行資訊、身分證／居留證號為必填(車牌/車型選填)——身分證字號是
+// 勞報單「所得人」欄位要用的，沒有這個勞報單資料不完整。司機本人（非主控
+// 檢視）資料未填妥前，鎖定在「我的資料」頁，其他分頁停用，直到補齊必填
+// 欄位並儲存為止。
 function isDriverProfileRequiredComplete(d){
   if(!d) return true;
-  return !!(d.phone && d.bank && d.bank.bankName && d.bank.branch && d.bank.account && d.bank.holder);
+  return !!(d.phone && d.idNumber && d.bank && d.bank.bankName && d.bank.branch && d.bank.account && d.bank.holder);
 }
 function renderNav(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
@@ -2678,10 +2680,17 @@ function renderExport(c){
 }
 
 // ---------- 司機端：今日行程（預設畫面） ----------
+// 上午永遠排在下午前面——不管實際建立車趟的順序（週班表怎麼異動、
+// 哪個先建立），同一天同時有上午跟下午的車次時，畫面上一律上午在上。
+function assignmentShiftKey(a){
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  return route?.shift==='PM' ? 1 : 0;
+}
 function renderToday(c){
   const dId = state.activeDriverId;
   const today = todayStr();
-  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.date===today && a.status!=='completed');
+  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.date===today && a.status!=='completed')
+    .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
   const weekDates = [...getWeekDates(0), ...getWeekDates(1)];
   c.innerHTML = `
     <h2 class="section-title">今日行程</h2>
@@ -2691,7 +2700,8 @@ function renderToday(c){
     <p class="section-sub" style="margin-top:-6px;">點擊「待出發」的車次可預覽當天行程與司機費用。</p>
     <div class="schedule-grid">
       ${weekDates.map(d=>{
-        const items = state.data.assignments.filter(a=>a.driverId===dId && a.date===d);
+        const items = state.data.assignments.filter(a=>a.driverId===dId && a.date===d)
+          .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
         return `<div class="day-card"><div class="day-label">${d.slice(5)}${d===today?'・今天':''}</div>
           ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待出發</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
         </div>`;
@@ -2918,10 +2928,11 @@ function renderMyProfile(c){
   c.innerHTML = `
     <h2 class="section-title">我的資料</h2>
     <p class="section-sub">修改後主控端會收到通知。姓名與狀態如需變更請聯絡主控。</p>
-    ${incomplete ? `<div class="note" style="border-color:var(--amber); color:#8A5A17;">電話、銀行帳戶資訊為必填，請補齊並儲存後才能使用其他功能。</div>` : ''}
+    ${incomplete ? `<div class="note" style="border-color:var(--amber); color:#8A5A17;">電話、身分證／居留證號、銀行帳戶資訊為必填，請補齊並儲存後才能使用其他功能。</div>` : ''}
     <div class="panel">
-      <div class="grid3">
+      <div class="grid4">
         <div class="field"><label>電話 <span class="required-mark">*</span></label><input id="mpPhone" value="${d.phone||''}"></div>
+        <div class="field"><label>身分證／居留證號 <span class="required-mark">*</span></label><input id="mpIdNumber" value="${d.idNumber||''}"></div>
         <div class="field"><label>車牌（選填）</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
         <div class="field"><label>車型（選填）</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
       </div>
@@ -2938,6 +2949,7 @@ function renderMyProfile(c){
     const changes = [];
     const checks = [
       ['phone', d.phone, document.getElementById('mpPhone').value.trim(), '電話'],
+      ['idNumber', d.idNumber, document.getElementById('mpIdNumber').value.trim(), '身分證／居留證號'],
       ['vehicle.plate', d.vehicle.plate, document.getElementById('mpPlate').value.trim(), '車牌'],
       ['vehicle.type', d.vehicle.type, document.getElementById('mpVType').value.trim(), '車型'],
       ['bank.bankName', d.bank.bankName, document.getElementById('mpBankName').value.trim(), '銀行'],
@@ -2950,6 +2962,7 @@ function renderMyProfile(c){
     try{
       await updateDriverProfile(dId, {
         phone: document.getElementById('mpPhone').value.trim(),
+        idNumber: document.getElementById('mpIdNumber').value.trim(),
         plate: document.getElementById('mpPlate').value.trim(),
         vtype: document.getElementById('mpVType').value.trim(),
         bankName: document.getElementById('mpBankName').value.trim(),
