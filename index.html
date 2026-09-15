@@ -1247,7 +1247,7 @@ function isChannelReferenced(id){
 
 // ---------- 下貨點資料庫 ----------
 let editingDpId = null;
-const dpCollapsedChannels = new Set(); // 收合中的通路id，預設全部展開
+const dpExpandedChannels = new Set(); // 使用者手動展開過的通路id，預設全部收合
 function renderDropPoints(c){
   const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
   c.innerHTML = `
@@ -1283,7 +1283,7 @@ function renderDpListBody(){
     let rows = state.data.dropPoints.filter(dp=>dp.channelId===ch.id);
     if(keyword){ rows = rows.filter(dp=> dp.address.toLowerCase().includes(keyword) || (dp.code||'').toLowerCase().includes(keyword)); }
     if(keyword && !rows.length) return '';
-    const collapsed = dpCollapsedChannels.has(ch.id) && !keyword;
+    const collapsed = !dpExpandedChannels.has(ch.id) && !keyword;
     return `<div class="panel">
       <h3 data-dptoggle="${ch.id}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
         <span>${ch.name}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
@@ -1315,7 +1315,7 @@ function renderDpListBody(){
   wrap.querySelectorAll('[data-dptoggle]').forEach(h=>{
     h.onclick = ()=>{
       const id = h.dataset.dptoggle;
-      if(dpCollapsedChannels.has(id)) dpCollapsedChannels.delete(id); else dpCollapsedChannels.add(id);
+      if(dpExpandedChannels.has(id)) dpExpandedChannels.delete(id); else dpExpandedChannels.add(id);
       renderDpListBody();
     };
   });
@@ -1465,7 +1465,7 @@ function renderRoutes(c){
 let routeDraft = {};
 let expandedRouteId = null;
 let routeListSearch = '';
-let regionCollapsedSet = new Set();
+let regionExpandedSet = new Set(); // 使用者手動展開過的地區名稱，預設全部收合
 function ensureDraft(route){
   if(!routeDraft[route.id]){
     const open = (route.versions||[]).find(v=>!v.end);
@@ -1529,7 +1529,7 @@ function renderRouteTable(){
   if(byRegion['未分類']) regionKeys.push('未分類');
   wrap.innerHTML = regionKeys.map(region=>{
     const rows = byRegion[region];
-    const collapsed = regionCollapsedSet.has(region) && !kw;
+    const collapsed = !regionExpandedSet.has(region) && !kw;
     return `<div class="panel" style="overflow-x:auto;">
       <h3 data-regiontoggle="${region}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
         <span>${region}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
@@ -1545,7 +1545,7 @@ function renderRouteTable(){
   wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
     h.onclick = ()=>{
       const key = h.dataset.regiontoggle;
-      if(regionCollapsedSet.has(key)) regionCollapsedSet.delete(key); else regionCollapsedSet.add(key);
+      if(regionExpandedSet.has(key)) regionExpandedSet.delete(key); else regionExpandedSet.add(key);
       renderRouteTable();
     };
   });
