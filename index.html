@@ -195,19 +195,79 @@ function compressImageFile(file, maxDim=1000, quality=0.6){
     reader.readAsDataURL(file);
   });
 }
-// 附加照片/影片（「新增照片/影片」按鈕，跟主要送達照片是分開的兩件事，見
-// uploadDropPointPhoto）：全部進 assignment_drop_point_media，不影響下貨點
-// 的完成狀態，可以多選、也可以是影片。
-async function handleExtraMediaUpload(dropPointId, files){
-  const items = [];
-  for(const f of files){
-    if(f.type.startsWith('image/')){
-      const dataUrl = await compressImageFile(f);
-      items.push({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' });
-    } else if(f.type.startsWith('video/')){
-      items.push({ bytes: new Uint8Array(await f.arrayBuffer()), contentType: f.type||'video/mp4', mediaType:'video' });
+// input[capture]屬性在Android上非常不可靠——很多系統版本/瀏覽器（尤其是
+// Android 13+內建的「相片選擇器」）即使有 capture="environment" 還是會
+// 直接跳相簿，不會真的開相機，這是瀏覽器/系統本身的行為，不是屬性寫錯。
+// 唯一能100%保證「一定開相機、不會跳相簿」的做法是自己用 getUserMedia
+// 拉即時影像流、畫面上疊一顆「拍照」鍵，使用者按了才用canvas擷取當前
+// 畫面那一格，整個過程完全不經過系統的檔案/相片選擇器。
+// 回傳 {dataUrl} 表示拍到照片；{cancelled:true} 表示使用者自己按取消；
+// {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
+// 相機權限），呼叫端應該退回原本 <input capture> 的方式讓使用者至少還能
+// 選一張既有的照片，不會整個功能卡死。
+function openCameraCapture(){
+  return new Promise((resolve)=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      resolve({ fallback:true });
+      return;
     }
-  }
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <video autoplay playsinline muted style="flex:1; width:100%; height:100%; object-fit:cover; background:#000;"></video>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-camcancel style="flex:1; max-width:160px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-camshoot style="flex:1; max-width:160px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">拍照</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const video = overlay.querySelector('video');
+    let stream = null;
+    let settled = false;
+    function cleanup(){
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+      if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function settle(result){
+      if(settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
+      stream = s;
+      video.srcObject = s;
+    }).catch(()=>{ settle({ fallback:true }); });
+    overlay.querySelector('[data-camcancel]').onclick = ()=> settle({ cancelled:true });
+    overlay.querySelector('[data-camshoot]').onclick = ()=>{
+      const maxDim = 1000;
+      let width = video.videoWidth || 1000, height = video.videoHeight || 1000;
+      if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
+      else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+      let dataUrl;
+      try{ dataUrl = canvas.toDataURL('image/jpeg', 0.7); }
+      catch(e){ settle({ fallback:true }); return; }
+      settle({ dataUrl });
+    };
+  });
+}
+// 拍照按鈕的統一入口：先試自建相機（一定是相機，不會跳相簿），拿不到
+// 鏡頭權限或裝置不支援時才退回原本的 <input capture> 檔案選擇（fallbackInput）。
+async function capturePhoto(fallbackInput, onDataUrl){
+  const result = await openCameraCapture();
+  if(result.dataUrl){ onDataUrl(result.dataUrl); }
+  else if(result.fallback){ fallbackInput.click(); }
+  // cancelled：使用者自己取消，什麼都不做。
+}
+// 附加照片（「新增照片」按鈕，跟主要送達照片是分開的兩件事，見
+// uploadDropPointPhoto）：全部進 assignment_drop_point_media，不影響
+// 下貨點的完成狀態。dataUrls 是呼叫端已經處理好（相機直接擷取或
+// compressImageFile壓縮過）的圖片dataURL陣列——影片拍攝功能已關閉。
+async function handleExtraMediaUpload(dropPointId, dataUrls){
+  const items = dataUrls.map(dataUrl => ({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' }));
   if(items.length) await uploadDropPointMedia(dropPointId, items);
 }
 function mediaGalleryHtml(media){
@@ -2662,9 +2722,9 @@ function renderTodayDetail(todays){
             ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未配達：${dp.issueReason}</span>` : ''}
             <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
-              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">${dp.status==='completed'?'重新拍照':'拍照上傳'}<input type="file" accept="image/*" capture="environment" data-photo="${a.id}|${dp.id}" style="display:none;"></label>
-              ${dp.status==='completed' && photoCount<3 ? `<label class="btn ghost" style="flex:1; min-width:110px; margin:0;">新增照片（${photoCount}/3）<input type="file" accept="image/*" capture="environment" data-addphoto="${dp.id}" style="display:none;"></label>` : ''}
-              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">新增影片<input type="file" accept="video/*" capture="environment" data-addvideo="${dp.id}" style="display:none;"></label>
+              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">${dp.status==='completed'?'重新拍照':'拍照上傳'}</button>
+              <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${dp.id}" style="display:none;">
+              ${dp.status==='completed' && photoCount<3 ? `<button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-addphoto="${dp.id}">新增照片（${photoCount}/3）</button><input type="file" accept="image/*" capture="environment" data-addphotofallback="${dp.id}" style="display:none;">` : ''}
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
             ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
@@ -2704,22 +2764,27 @@ function renderTodayDetail(todays){
       catch(err){ alert(err.message); }
     };
   });
-  // 主要送達照片用單獨的input且不能multiple——OPPO/三星/小米等Android系統的
-  // 檔案選擇器，只要input同時有multiple屬性，就會直接跳過「拍照」這個選項、
-  // 只給「上傳／瀏覽」，導致司機點了按鈕卻完全看不到相機功能。這裡額外加上
-  // capture="environment"：明確告訴瀏覽器優先開相機（而不是跳出「相機/相簿/
-  // 檔案」的選擇清單），三顆按鈕（主要照片／新增照片／新增影片）都固定走
-  // 相機，一次一張，符合司機「一次拍一張、可以分好幾次拍」的實際操作習慣。
-  box.querySelectorAll('[data-photo]').forEach(input=>{
-    input.onchange = (e)=>{
-      const [aid, dpid] = input.dataset.photo.split('|');
+  // 拍照按鈕改成自己拉相機串流（openCameraCapture/capturePhoto，見上面
+  // compressImageFile旁邊的說明），不再依賴 input[capture] ——那個屬性在
+  // Android上很不可靠，很多系統/瀏覽器版本即使寫了 capture="environment"
+  // 還是會跳系統相簿選擇器，不是我們程式碼的問題，是瀏覽器不理它。真的
+  // 拿不到相機權限或裝置不支援時，才退回旁邊那顆隱藏的 input[capture]
+  // 讓司機至少還能選一張既有照片，不會整個卡住。
+  box.querySelectorAll('[data-photo]').forEach(btn=>{
+    const [aid, dpid] = btn.dataset.photo.split('|');
+    const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
+    const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+    async function go(dataUrl){
+      try{ await uploadDropPointPhoto(aid, dpid, dataUrl); renderContent(); }
+      catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
+    }
+    btn.onclick = ()=>{
+      if(dp && dp.status==='completed' && !confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？')) return;
+      capturePhoto(fallbackInput, go);
+    };
+    fallbackInput.onchange = (e)=>{
       const file = e.target.files[0]; if(!file) return;
-      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-      if(dp && dp.status==='completed' && !confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？')){
-        input.value = '';
-        return;
-      }
-      compressImageFile(file).then(dataUrl=> uploadDropPointPhoto(aid, dpid, dataUrl)).then(()=> renderContent()).catch(err=>{
+      compressImageFile(file).then(go).catch(err=>{
         console.error('照片處理失敗', err);
         alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
       });
@@ -2727,23 +2792,19 @@ function renderTodayDetail(todays){
   });
   // 「新增照片」：送達證明照最多累計3張（主要照片+這裡新增的），達到3張
   // 之後按鈕就不會再出現；每次都是額外附加一張，不覆蓋任何既有照片。
-  box.querySelectorAll('[data-addphoto]').forEach(input=>{
-    input.onchange = (e)=>{
-      const dpid = input.dataset.addphoto;
+  box.querySelectorAll('[data-addphoto]').forEach(btn=>{
+    const dpid = btn.dataset.addphoto;
+    const fallbackInput = box.querySelector(`[data-addphotofallback="${dpid}"]`);
+    async function go(dataUrl){
+      try{ await handleExtraMediaUpload(dpid, [dataUrl]); renderContent(); }
+      catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
+    }
+    btn.onclick = ()=> capturePhoto(fallbackInput, go);
+    fallbackInput.onchange = (e)=>{
       const file = e.target.files[0]; if(!file) return;
-      handleExtraMediaUpload(dpid, [file]).then(()=> renderContent()).catch(err=>{
+      compressImageFile(file).then(go).catch(err=>{
         console.error('照片處理失敗', err);
         alert('照片處理失敗，請重新拍攝再試一次。');
-      });
-    };
-  });
-  box.querySelectorAll('[data-addvideo]').forEach(input=>{
-    input.onchange = (e)=>{
-      const dpid = input.dataset.addvideo;
-      const file = e.target.files[0]; if(!file) return;
-      handleExtraMediaUpload(dpid, [file]).then(()=> renderContent()).catch(err=>{
-        console.error('影片處理失敗', err);
-        alert('影片處理失敗，請重新拍攝再試一次。');
       });
     };
   });
