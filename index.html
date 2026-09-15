@@ -877,7 +877,7 @@ function renderDrivers(c){
           <div class="field"><label>LINE User ID</label><input id="dLine"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>身分證／居留證號（可提供勞報人員）</label><input id="dIdNumber"></div>
+          <div class="field"><label>身分證字號（可提供勞報人員）</label><input id="dIdNumber"></div>
         </div>
         <div class="grid3">
           <div class="field"><label>車牌</label><input id="dPlate"></div>
@@ -923,7 +923,7 @@ function renderDrivers(c){
           <div class="field"><label>LINE User ID</label><input id="eLine" value="${d.lineId||''}"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>身分證／居留證號（可提供勞報人員）</label><input id="eIdNumber" value="${d.idNumber||''}"></div>
+          <div class="field"><label>身分證字號（可提供勞報人員）</label><input id="eIdNumber" value="${d.idNumber||''}"></div>
         </div>
         <div class="grid3">
           <div class="field"><label>車牌</label><input id="ePlate" value="${d.vehicle.plate||''}"></div>
@@ -2571,6 +2571,28 @@ function renderBilling(c){
 
 // ---------- 資料匯出與封存 ----------
 // ---------- 系統設定 ----------
+function usageBarHtml(label, usedBytes, limitBytes, note){
+  if(usedBytes==null){
+    return `<div style="margin-bottom:12px;"><div style="display:flex; justify-content:space-between; font-size:12.5px;"><strong>${label}</strong><span style="color:var(--ink-soft);">無法取得</span></div></div>`;
+  }
+  const pct = Math.min(100, usedBytes/limitBytes*100);
+  const barColor = pct>=90 ? 'var(--danger)' : pct>=70 ? 'var(--amber)' : 'var(--teal)';
+  return `<div style="margin-bottom:12px;">
+    <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+      <strong>${label}</strong>
+      <span>${formatBytes(usedBytes)} / ${formatBytes(limitBytes)}（${pct.toFixed(1)}%）</span>
+    </div>
+    <div style="background:var(--border); border-radius:4px; height:8px; margin-top:4px; overflow:hidden;">
+      <div style="background:${barColor}; height:100%; width:${pct}%;"></div>
+    </div>
+    ${note?`<p style="font-size:11px; color:var(--ink-soft); margin:4px 0 0;">${note}</p>`:''}
+  </div>`;
+}
+function formatBytes(bytes){
+  if(bytes==null) return '無法取得';
+  const mb = bytes/1024/1024;
+  return mb<1024 ? `${mb.toFixed(1)} MB` : `${(mb/1024).toFixed(2)} GB`;
+}
 function renderSettings(c){
   c.innerHTML = `
     <h2 class="section-title">系統設定</h2>
@@ -2580,8 +2602,13 @@ function renderSettings(c){
       <button class="btn amber" id="savePin">儲存</button>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0;">Supabase 免費方案用量</h3>
+      <p class="section-sub">免費方案上限：資料庫 500MB・檔案儲存 1GB・每月流量 5GB（流量無法從系統內查詢，請自行到 <a class="link" href="https://supabase.com/dashboard/project/rcdvclfvqnrvffxkseqh/settings/billing/usage" target="_blank">Supabase 後台 Usage 頁面</a>查看）。免費方案沒有自動備份機制，接近上限時請用下方「資料匯出與封存」處理，或考慮升級付費方案。</p>
+      <div id="usageStatsBody"><div class="empty">載入中...</div></div>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0;">資料備份</h3>
-      <p class="section-sub">Supabase 專案本身有資料庫層級備份機制，這裡的匯出只是方便你自己留一份離線快照查閱。</p>
+      <p class="section-sub">Supabase 免費方案沒有自動備份機制，建議定期用下面的方式手動備份一份。</p>
       <button class="btn ghost" id="exportAllData">下載目前資料快照（JSON）</button>
       <div style="margin-top:10px;">
         <label>或直接顯示備份文字，手動全選複製貼到記事本保存</label>
@@ -2590,6 +2617,18 @@ function renderSettings(c){
       </div>
     </div>
   `;
+  fetchUsageStats().then(({dbSizeBytes, storageBuckets, storageTotalBytes})=>{
+    const body = document.getElementById('usageStatsBody');
+    if(!body) return; // 使用者可能已經切走這一頁
+    const bucketLines = storageBuckets ? storageBuckets.map(b=>`<span style="font-size:11px; color:var(--ink-soft);">${b.bucket_id}：${formatBytes(Number(b.total_bytes))}（${b.file_count}個檔案）</span>`).join('　') : '';
+    body.innerHTML = `
+      ${usageBarHtml('資料庫大小', dbSizeBytes, 500*1024*1024)}
+      ${usageBarHtml('檔案儲存空間', storageTotalBytes, 1024*1024*1024, bucketLines)}
+    `;
+  }).catch(err=>{
+    const body = document.getElementById('usageStatsBody');
+    if(body) body.innerHTML = `<div class="empty">用量資料載入失敗：${err.message}</div>`;
+  });
   document.getElementById('savePin').onclick = async ()=>{
     const pin = document.getElementById('setPin').value.trim();
     if(!pin){ alert('PIN碼不能空白'); return; }
@@ -2928,11 +2967,11 @@ function renderMyProfile(c){
   c.innerHTML = `
     <h2 class="section-title">我的資料</h2>
     <p class="section-sub">修改後主控端會收到通知。姓名與狀態如需變更請聯絡主控。</p>
-    ${incomplete ? `<div class="note" style="border-color:var(--amber); color:#8A5A17;">電話、身分證／居留證號、銀行帳戶資訊為必填，請補齊並儲存後才能使用其他功能。</div>` : ''}
+    ${incomplete ? `<div class="note" style="border-color:var(--amber); color:#8A5A17;">電話、身分證字號、銀行帳戶資訊為必填，請補齊並儲存後才能使用其他功能。</div>` : ''}
     <div class="panel">
       <div class="grid4">
         <div class="field"><label>電話 <span class="required-mark">*</span></label><input id="mpPhone" value="${d.phone||''}"></div>
-        <div class="field"><label>身分證／居留證號（可提供勞報人員） <span class="required-mark">*</span></label><input id="mpIdNumber" value="${d.idNumber||''}"></div>
+        <div class="field"><label>身分證字號（可提供勞報人員） <span class="required-mark">*</span></label><input id="mpIdNumber" value="${d.idNumber||''}"></div>
         <div class="field"><label>車牌（選填）</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
         <div class="field"><label>車型（選填）</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
       </div>
@@ -2949,7 +2988,7 @@ function renderMyProfile(c){
     const changes = [];
     const checks = [
       ['phone', d.phone, document.getElementById('mpPhone').value.trim(), '電話'],
-      ['idNumber', d.idNumber, document.getElementById('mpIdNumber').value.trim(), '身分證／居留證號'],
+      ['idNumber', d.idNumber, document.getElementById('mpIdNumber').value.trim(), '身分證字號'],
       ['vehicle.plate', d.vehicle.plate, document.getElementById('mpPlate').value.trim(), '車牌'],
       ['vehicle.type', d.vehicle.type, document.getElementById('mpVType').value.trim(), '車型'],
       ['bank.bankName', d.bank.bankName, document.getElementById('mpBankName').value.trim(), '銀行'],

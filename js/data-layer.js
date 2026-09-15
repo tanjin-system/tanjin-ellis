@@ -1041,5 +1041,22 @@ async function updateAdminPin(pin) {
 }
 
 // 「匯出全部備份」沿用 demo 的 JSON.stringify(state.data)，只是資料來源換成即時查詢結果；
-// 「匯入覆蓋全系統」這個危險操作已依討論結果拿掉，不搬到正式版
-// （Supabase 專案本身有資料庫層級備份機制，不需要靠這種方式防資料遺失）。
+// 「匯入覆蓋全系統」這個危險操作已依討論結果拿掉，不搬到正式版。
+
+// 免費方案用量監控（系統設定頁面）：資料庫大小跟檔案儲存空間都能查到，
+// 每月流量/Egress 沒有公開API可查（Supabase官方本身也只能在後台Usage
+// 頁面手動看），這裡就不假裝能查到。任何一個查詢失敗都不影響其他資料，
+// 個別回傳 null，畫面上顯示「無法取得」而不是整頁壞掉。
+async function fetchUsageStats() {
+  const supabase = getSupabase();
+  const [dbRes, storageRes] = await Promise.all([
+    supabase.rpc('get_database_size'),
+    supabase.rpc('get_storage_usage')
+  ]);
+  const dbSizeBytes = dbRes.error ? null : dbRes.data;
+  if (dbRes.error) console.error('取得資料庫大小失敗', dbRes.error.message);
+  const storageBuckets = storageRes.error ? null : (storageRes.data || []);
+  if (storageRes.error) console.error('取得檔案儲存用量失敗', storageRes.error.message);
+  const storageTotalBytes = storageBuckets ? storageBuckets.reduce((s, b) => s + Number(b.total_bytes || 0), 0) : null;
+  return { dbSizeBytes, storageBuckets, storageTotalBytes };
+}

@@ -745,3 +745,25 @@ create policy driver_update_own_signature on storage.objects for update to app_d
         and s.driver_id = auth_driver_id()
     )
   );
+
+-- ============================================================
+-- PART 5：免費方案用量監控（系統設定頁面用）
+-- Supabase 沒有公開 API 可以查每月流量/Egress（那個只能到官方後台
+-- Usage頁面手動看），但資料庫大小、檔案儲存空間都可以直接用SQL算出來。
+-- app_admin本身沒有storage schema的權限（那是Storage API走的，不是一般
+-- 資料表權限），這兩個function用 security definer 用擁有者權限繞過這個
+-- 限制，只回傳彙總數字（純數字，不會洩漏任何檔案內容或路徑明細）。
+-- ============================================================
+create or replace function get_database_size() returns bigint
+language sql security definer as $$
+  select pg_database_size(current_database());
+$$;
+grant execute on function get_database_size() to app_admin;
+
+create or replace function get_storage_usage() returns table(bucket_id text, total_bytes bigint, file_count bigint)
+language sql security definer set search_path = storage, public as $$
+  select bucket_id, coalesce(sum((metadata->>'size')::bigint), 0) as total_bytes, count(*) as file_count
+  from storage.objects
+  group by bucket_id;
+$$;
+grant execute on function get_storage_usage() to app_admin;
