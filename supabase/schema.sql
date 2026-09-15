@@ -576,6 +576,27 @@ create trigger trg_compute_trip_billing
 before update on assignments
 for each row execute function compute_trip_billing();
 
+-- ------------------------------------------------------------
+-- 下貨點改分類（所屬通路）時，同步套用到還沒完成的車趟快照。
+-- assignment_drop_points.channel_id 是建立車趟當下複製的快照（見
+-- createAssignment()），下貨點資料庫事後改掉分類不會自動反映過去；
+-- 已經 completed 的車趟金額已經凍結（compute_trip_billing 只在轉為
+-- completed 那一瞬間算一次，之後不重算），這裡刻意只更新還沒完成的，
+-- 完成過的維持原始凍結金額不動，跟司機費用/請款金額「事後不可回頭
+-- 更動」的原則一致。
+-- ------------------------------------------------------------
+create or replace function sync_drop_point_channel(p_drop_point_id uuid, p_channel_id uuid) returns void
+language sql as $$
+  update assignment_drop_points adp
+  set channel_id = p_channel_id
+  from assignments a
+  where adp.source_drop_point_id = p_drop_point_id
+    and a.id = adp.assignment_id
+    and a.status <> 'completed'
+    and adp.channel_id is distinct from p_channel_id;
+$$;
+grant execute on function sync_drop_point_channel(uuid, uuid) to app_admin;
+
 
 -- ============================================================
 -- PART 4：Storage bucket 權限（bucket 本身由 migrate.js / 應用程式

@@ -468,12 +468,27 @@ async function updateDropPoint(dpId, input) {
     if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的下貨點：「${dupCode.address}」，已取消儲存。`);
   }
   const supabase = getSupabase();
+  const prev = state.data.dropPoints.find(x => x.id === dpId);
+  const channelChanged = prev && prev.channelId !== input.channelId;
   const { data, error } = await supabase.from('drop_points').update({
     address: input.address, channel_id: input.channelId, code: input.code || null
   }).eq('id', dpId).select().single();
   if (error) throw new Error('更新下貨點失敗：' + error.message);
   const idx = state.data.dropPoints.findIndex(x => x.id === dpId);
   if (idx >= 0) state.data.dropPoints[idx] = mapDropPoint(data);
+
+  // 通路（所屬分類）改變時，同步套用到還沒完成的車趟快照（見上面
+  // sync_drop_point_channel()），完成過的車趟維持原始金額不動。
+  if (channelChanged) {
+    const { error: syncErr } = await supabase.rpc('sync_drop_point_channel', { p_drop_point_id: dpId, p_channel_id: input.channelId });
+    if (syncErr) console.error('同步下貨點通路到未完成車趟失敗', syncErr.message);
+    else {
+      state.data.assignments.forEach(a => {
+        if (a.status === 'completed') return;
+        a.dropPoints.forEach(dp => { if (dp.sourceDpId === dpId) dp.channelId = input.channelId; });
+      });
+    }
+  }
 }
 
 async function deleteOrDeactivateDropPoint(dpId) {
@@ -625,6 +640,50 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
     const { error } = await supabase.from('route_versions').update({ end_date: u.end_date }).eq('id', u.id);
     if (error) throw new Error('更新路線版本區間失敗：' + error.message);
   }
+}
+
+// 路線版本臨時更新（例如訂正下貨點順序、修正拆賬）時，週班表裡已經排好、
+// 但還沒開始/還沒完成的未來車趟，不會自動跟著變——建立車趟當下就把內容複製
+// 成快照了（見 createAssignment）。這裡是選配的「一鍵套用」：找出這條路線
+// 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的車趟，
+// 把下貨點清單、里程、請款拆賬全部重新套用成當時該生效版本的內容，
+// 司機／日期／車次都不動。司機費用（fare）刻意不碰——那是給主控在車趟
+// 管理個別覆寫用的欄位（調整金額），版本更新不應該連同一起洗掉人工調整。
+// 已完成的車趟本來就凍結，不在套用範圍內。
+async function regenerateFutureAssignments(routeId, fromDate) {
+  const route = state.data.routes.find(r => r.id === routeId);
+  if (!route) throw new Error('找不到路線');
+  const supabase = getSupabase();
+  const targets = state.data.assignments.filter(a =>
+    a.routeId === routeId && a.date >= fromDate && (a.status === 'scheduled' || a.status === 'in_progress'));
+  let updated = 0;
+  for (const a of targets) {
+    const version = route.versions.find(v => a.date >= v.start && (!v.end || a.date <= v.end));
+    if (!version) continue;
+    const dropPointIds = version.dropPointIds || [];
+    const { error: delErr } = await supabase.from('assignment_drop_points').delete().eq('assignment_id', a.id);
+    if (delErr) throw new Error('清除舊下貨點失敗：' + delErr.message);
+    if (dropPointIds.length) {
+      const rows = dropPointIds.map((dpId, i) => {
+        const dp = state.data.dropPoints.find(x => x.id === dpId);
+        return { assignment_id: a.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
+      });
+      const { error: insErr } = await supabase.from('assignment_drop_points').insert(rows);
+      if (insErr) throw new Error('寫入新下貨點失敗：' + insErr.message);
+    }
+    const { error: updErr } = await supabase.from('assignments').update({
+      distance_km: version.distanceKm ?? null,
+      billing_total_snapshot: version.billingTotal ?? null,
+      billing_by_channel_snapshot: version.billingByChannel ?? null
+    }).eq('id', a.id);
+    if (updErr) throw new Error('更新車趟資料失敗：' + updErr.message);
+    updated++;
+  }
+  for (const a of targets) {
+    const idx = state.data.assignments.findIndex(x => x.id === a.id);
+    if (idx >= 0) state.data.assignments[idx] = await fetchAssignment(a.id);
+  }
+  return { updated, total: targets.length };
 }
 
 // ---------------- 車趟指派與生命週期 ----------------

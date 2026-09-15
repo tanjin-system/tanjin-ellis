@@ -195,27 +195,20 @@ function compressImageFile(file, maxDim=1000, quality=0.6){
     reader.readAsDataURL(file);
   });
 }
-// 司機拍照/影片上傳統一入口：一次選取的檔案裡，第一張「圖片」當作主要送達
-// 證明照（沿用 uploadDropPointPhoto，會設狀態＝已完成；同一路徑upsert，
-// 這也是「重新拍照」直接覆蓋掉舊照片的機制），其餘的圖片跟所有影片都送進
-// assignment_drop_point_media 附加媒體表，不影響完成狀態。純影片（沒有選圖片）
-// 只會是附加媒體，不會觸發「完成」——完成送達還是要有一張主要照片。
-async function handleDropPointMediaUpload(assignmentId, dropPointId, files){
-  const images = files.filter(f=>f.type.startsWith('image/'));
-  const videos = files.filter(f=>f.type.startsWith('video/'));
-  if(images.length){
-    const firstDataUrl = await compressImageFile(images[0]);
-    await uploadDropPointPhoto(assignmentId, dropPointId, firstDataUrl);
+// 附加照片/影片（「新增照片/影片」按鈕，跟主要送達照片是分開的兩件事，見
+// uploadDropPointPhoto）：全部進 assignment_drop_point_media，不影響下貨點
+// 的完成狀態，可以多選、也可以是影片。
+async function handleExtraMediaUpload(dropPointId, files){
+  const items = [];
+  for(const f of files){
+    if(f.type.startsWith('image/')){
+      const dataUrl = await compressImageFile(f);
+      items.push({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' });
+    } else if(f.type.startsWith('video/')){
+      items.push({ bytes: new Uint8Array(await f.arrayBuffer()), contentType: f.type||'video/mp4', mediaType:'video' });
+    }
   }
-  const extraItems = [];
-  for(const f of images.slice(1)){
-    const dataUrl = await compressImageFile(f);
-    extraItems.push({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' });
-  }
-  for(const f of videos){
-    extraItems.push({ bytes: new Uint8Array(await f.arrayBuffer()), contentType: f.type||'video/mp4', mediaType:'video' });
-  }
-  if(extraItems.length) await uploadDropPointMedia(dropPointId, extraItems);
+  if(items.length) await uploadDropPointMedia(dropPointId, items);
 }
 function mediaGalleryHtml(media){
   if(!media || !media.length) return '';
@@ -1703,6 +1696,16 @@ function renderRouteDetail(rid){
           billingByChannel
         });
         delete routeDraft[rid2];
+        // 週班表裡已經排好、還沒完成的未來車次不會自動跟著新版本走（建立當下就
+        // 複製成快照了），這裡問一次要不要一鍵套用，避免每一趟都要手動重建。
+        const futureCount = state.data.assignments.filter(a=>
+          a.routeId===rid2 && a.date>=effDate && (a.status==='scheduled'||a.status==='in_progress')).length;
+        if(futureCount>0 && confirm(`週班表中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、請款拆賬）套用到這些車次嗎？司機與日期不會改變，司機費用（調整金額）也不會被覆蓋。`)){
+          try{
+            const { updated } = await regenerateFutureAssignments(rid2, effDate);
+            alert(`已套用到 ${updated} 趟未來車次。`);
+          }catch(err){ alert('套用到未來車次時發生錯誤：' + err.message); }
+        }
         renderContent();
       }catch(err){ alert(err.message); }
     };
@@ -2202,19 +2205,36 @@ function mergedRunRows(channelIds, start, end){
     const route = state.data.routes.find(r=>r.id===a.routeId);
     if(!route) return;
     const fullByChannel = effectiveByChannelForAssignment(a);
+
+    // 有星期一報價版本的路線家族：金額（fullByChannel，上面 effectiveByChannelForAssignment
+    // 已經處理）跟「配送路線」內容（下貨點清單／店數／公里）在請款單上一律顯示星期一版本
+    // 當天生效的內容，不用當天車趟實際跑的下貨點——平日實際停靠站難免天天略有出入，
+    // 沒有這步的話，同一個車次會因為內容細節不同被拆成好幾筆看起來不一樣的請款明細，
+    // 即使金額其實已經是同一個數字。
+    const mondayRoute = findMondayQuoteRoute(route);
+    const displayRoute = (mondayRoute && mondayRoute.id !== route.id) ? mondayRoute : route;
+    let displayDropPoints = a.dropPoints, displayKm = a.distanceKm;
+    if(displayRoute.id !== route.id){
+      const mv = getActiveVersion(displayRoute, a.date) || [...(displayRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
+      if(mv){
+        displayDropPoints = (mv.dropPointIds||[]).map(id=> state.data.dropPoints.find(dp=>dp.id===id)).filter(Boolean);
+        displayKm = mv.distanceKm;
+      }
+    }
+
     const byChannel = {}; const storeCounts = {}; let dailyTotal = 0; let relevant = false;
     channelIds.forEach(cid=>{
       const amt = Math.round(fullByChannel[cid]||0);
-      const cnt = (a.dropPoints||[]).filter(dp=>dp.channelId===cid).length;
+      const cnt = (displayDropPoints||[]).filter(dp=>dp.channelId===cid).length;
       byChannel[cid] = amt; storeCounts[cid] = cnt; dailyTotal += amt;
       if(amt>0 || cnt>0) relevant = true;
     });
     if(!relevant) return; // 這趟車跟已選通路完全無關，略過
-    const addr = route.originAddr || '';
+    const addr = displayRoute.originAddr || '';
     if(!byOriginRoute[addr]) byOriginRoute[addr] = {};
-    if(!byOriginRoute[addr][route.id]) byOriginRoute[addr][route.id] = { route, items: [] };
-    const dropLabel = (a.dropPoints||[]).filter(dp=>channelIds.includes(dp.channelId)).map(dpLabel).join('➔')||'—';
-    byOriginRoute[addr][route.id].items.push({ date:a.date, dropLabel, km:a.distanceKm, storeCounts, byChannel, dailyTotal });
+    if(!byOriginRoute[addr][displayRoute.id]) byOriginRoute[addr][displayRoute.id] = { route: displayRoute, items: [] };
+    const dropLabel = (displayDropPoints||[]).filter(dp=>channelIds.includes(dp.channelId)).map(dpLabel).join('➔')||'—';
+    byOriginRoute[addr][displayRoute.id].items.push({ date:a.date, dropLabel, km:displayKm, storeCounts, byChannel, dailyTotal });
   });
   const byOrigin = {};
   Object.keys(byOriginRoute).forEach(addr=>{
@@ -2621,9 +2641,10 @@ function renderTodayDetail(todays){
           <div class="drop-point">
             ${dpLabel(dp)}（${channelName(dp.channelId)}）
             ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
-            <div style="display:flex; gap:8px; margin-top:8px;">
-              <label class="btn ghost" style="flex:1; margin:0;">${dp.status==='completed'?'重新拍照':'拍照/影片上傳'}<input type="file" accept="image/*,video/*" multiple data-media="${a.id}|${dp.id}" style="display:none;"></label>
-              <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1;">Google導航</a>
+            <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">${dp.status==='completed'?'重新拍照':'拍照上傳'}<input type="file" accept="image/*" data-photo="${a.id}|${dp.id}" style="display:none;"></label>
+              <label class="btn ghost" style="flex:1; min-width:110px; margin:0;">新增照片/影片<input type="file" accept="image/*,video/*" multiple data-extra="${dp.id}" style="display:none;"></label>
+              <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
             ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
             ${mediaGalleryHtml(dp.media)}
@@ -2654,16 +2675,31 @@ function renderTodayDetail(todays){
       catch(err){ alert(err.message); }
     };
   });
-  box.querySelectorAll('[data-media]').forEach(input=>{
+  // 主要送達照片跟附加照片/影片分成兩個獨立的input：拿掉multiple是關鍵——
+  // OPPO/三星/小米等Android系統的檔案選擇器，只要input同時有multiple屬性，
+  // 就會直接跳過「拍照」這個選項、只給「上傳／瀏覽」，導致司機點了按鈕卻
+  // 完全看不到相機功能。拆成兩顆按鈕後，主要照片這顆維持單選（沒有multiple），
+  // 相機選項才會正常出現；多選/影片另外走「新增照片/影片」那顆。
+  box.querySelectorAll('[data-photo]').forEach(input=>{
     input.onchange = (e)=>{
-      const [aid, dpid] = input.dataset.media.split('|');
-      const files = [...e.target.files]; if(!files.length) return;
+      const [aid, dpid] = input.dataset.photo.split('|');
+      const file = e.target.files[0]; if(!file) return;
       const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
       if(dp && dp.status==='completed' && !confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？')){
         input.value = '';
         return;
       }
-      handleDropPointMediaUpload(aid, dpid, files).then(()=> renderContent()).catch(err=>{
+      compressImageFile(file).then(dataUrl=> uploadDropPointPhoto(aid, dpid, dataUrl)).then(()=> renderContent()).catch(err=>{
+        console.error('照片處理失敗', err);
+        alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
+      });
+    };
+  });
+  box.querySelectorAll('[data-extra]').forEach(input=>{
+    input.onchange = (e)=>{
+      const dpid = input.dataset.extra;
+      const files = [...e.target.files]; if(!files.length) return;
+      handleExtraMediaUpload(dpid, files).then(()=> renderContent()).catch(err=>{
         console.error('照片/影片處理失敗', err);
         alert('照片/影片處理失敗，請重新拍攝或選擇檔案再試一次。');
       });
