@@ -35,11 +35,25 @@ function mapChannel(row) {
 }
 
 function mapOrigin(row) {
-  return { id: row.id, address: row.address, label: row.label || '', status: row.status };
+  return { id: row.id, address: row.address, label: row.label || '', status: row.status, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null };
 }
 
 function mapDropPoint(row) {
-  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status };
+  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null };
+}
+
+// 免費地址轉經緯度（OpenStreetMap Nominatim，透過 api/geocode.js 代打，見該檔案註解）。
+// 查不到座標時回傳 null，呼叫端自己決定要不要提示使用者，不丟例外中斷流程。
+async function geocodeAddress(address) {
+  try {
+    const res = await fetch('/api/geocode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address }) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { lat: data.lat, lng: data.lng };
+  } catch (err) {
+    console.error('geocodeAddress failed:', err.message);
+    return null;
+  }
 }
 
 function mapRoute(row) {
@@ -455,6 +469,23 @@ async function deleteOrDeactivateOrigin(originId) {
   if (error) throw new Error('刪除出發點失敗：' + error.message);
   state.data.origins = state.data.origins.filter(o => o.id !== originId);
   return 'deleted';
+}
+
+// 只存經緯度，不動其他欄位——派車模擬工具批次回填座標用，跟 updateOrigin/
+// updateDropPoint（會做代號重複檢查等）分開，避免無關的副作用。
+async function saveOriginCoord(originId, lat, lng) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('origins').update({ lat, lng }).eq('id', originId);
+  if (error) throw new Error('儲存出發點座標失敗：' + error.message);
+  const origin = state.data.origins.find(o => o.id === originId);
+  if (origin) { origin.lat = lat; origin.lng = lng; }
+}
+async function saveDropPointCoord(dpId, lat, lng) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('drop_points').update({ lat, lng }).eq('id', dpId);
+  if (error) throw new Error('儲存下貨點座標失敗：' + error.message);
+  const dp = state.data.dropPoints.find(x => x.id === dpId);
+  if (dp) { dp.lat = lat; dp.lng = lng; }
 }
 
 // ---------------- 下貨點 ----------------
