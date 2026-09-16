@@ -3340,6 +3340,58 @@ document.getElementById('logoutBtn').onclick = ()=>{
 // 是目前已知、故意先擱置的缺口，上線前請評估是否要先做這個，或先接受
 // 舊照片會持續留在 Storage 裡（多花一點儲存空間，但不影響功能正確性）。
 
+// 「加入主畫面」的網頁App在不少手機上會被系統背景凍結、放很久都沒有
+// 真正重新載入過（不是瀏覽器分頁那種無痕快取問題，是整個JS執行環境
+// 一直沒有重啟），導致上線的新功能、跟即時性的資料（今日尚未配送完成、
+// 最新動態等）長時間卡住不動、看起來「無法同步」。這裡用兩個機制補救：
+// 1. 切回前景/每隔幾分鐘，比對目前執行中的頁面內容跟伺服器上最新的
+//    是否不同，不同就跳出一條提示，讓使用者自己決定要不要點擊重新
+//    整理（不強制自動reload，避免打斷正在填寫的表單）。
+// 2. 切回前景時，如果人在「首頁」（這個分頁沒有任何表單欄位，不會有
+//    填到一半被清掉的風險），就悄悄重新抓一次資料並重繪，讓「今日
+//    尚未配送完成」「最新動態」這類即時面板自動跟上最新狀態；其他
+//    分頁刻意不自動重繪，使用者切換分頁時自然就會拿到最新資料。
+let __bootPageSignature = null;
+async function computePageSignature(){
+  try{
+    const res = await fetch(location.pathname || '/', { cache: 'no-store' });
+    if(!res.ok) return null;
+    const text = await res.text();
+    let hash = 0;
+    for(let i=0;i<text.length;i++){ hash = (hash*31 + text.charCodeAt(i)) | 0; }
+    return hash;
+  }catch(e){ return null; }
+}
+function showUpdateBanner(){
+  if(document.getElementById('updateBanner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBanner';
+  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; background:var(--amber); color:#fff; padding:10px 14px; text-align:center; font-size:13px; z-index:99999; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.2);';
+  bar.textContent = '📢 系統已推出新版本，點此重新整理套用最新功能 ↻';
+  bar.onclick = ()=> location.reload();
+  document.body.appendChild(bar);
+}
+async function checkForUpdate(){
+  const sig = await computePageSignature();
+  if(sig===null) return;
+  if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
+  if(sig !== __bootPageSignature) showUpdateBanner();
+}
+async function refreshHomeDataIfIdle(){
+  if(!state.data || state.tab!=='home') return;
+  try{
+    state.data = await loadAllData();
+    renderNav();
+    renderContent();
+  }catch(e){ console.error('背景重新整理資料失敗', e); }
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden){ checkForUpdate(); refreshHomeDataIfIdle(); }
+});
+window.addEventListener('focus', ()=>{ checkForUpdate(); refreshHomeDataIfIdle(); });
+setInterval(checkForUpdate, 5*60*1000);
+setInterval(refreshHomeDataIfIdle, 3*60*1000);
+
 async function bootApp(){
   const auth = getStoredAuth();
   if(!auth){ renderLoginGate(); return; }
@@ -3361,6 +3413,7 @@ async function bootApp(){
 }
 
 (async function init(){
+  computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
   await bootApp();
 })();
 </script>

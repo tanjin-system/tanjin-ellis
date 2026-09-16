@@ -184,6 +184,58 @@ async function main(){
     sub.textContent = '';
   }
 }
+// 這個頁面常被客戶「加入主畫面」使用，跟主系統一樣會被手機背景凍結、
+// 放很久沒有真正重新整理過，看起來像「配送紀錄無法同步」。切回前景/
+// 每隔幾分鐘悄悄重新抓一次資料（失敗就維持原畫面，不跳錯誤訊息打擾
+// 使用者），並比對頁面內容有沒有更新過，有的話跳提示讓使用者自己
+// 決定要不要重新整理。
+async function refreshData(){
+  const token = new URLSearchParams(location.search).get('token');
+  if(!token) return;
+  const searchEl = document.getElementById('storeSearch');
+  const currentSearch = searchEl ? searchEl.value : '';
+  try{
+    const res = await fetch('/api/client-data?token=' + encodeURIComponent(token));
+    const body = await res.json();
+    if(!res.ok) return;
+    const items = body.items || [];
+    const deliveredCount = items.filter(it=>it.delivered).length;
+    document.getElementById('channelSub').textContent = `最近60天，共 ${deliveredCount} 筆送達紀錄`;
+    allItems = items;
+    renderList(currentSearch);
+  }catch(e){ /* 背景刷新失敗就靜默維持原本畫面 */ }
+}
+let __bootPageSignature = null;
+async function computePageSignature(){
+  try{
+    const res = await fetch(location.pathname + location.search, { cache: 'no-store' });
+    if(!res.ok) return null;
+    const text = await res.text();
+    let hash = 0;
+    for(let i=0;i<text.length;i++){ hash = (hash*31 + text.charCodeAt(i)) | 0; }
+    return hash;
+  }catch(e){ return null; }
+}
+function showUpdateBanner(){
+  if(document.getElementById('updateBanner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBanner';
+  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; background:var(--amber); color:#fff; padding:10px 14px; text-align:center; font-size:13px; z-index:99999; cursor:pointer;';
+  bar.textContent = '📢 頁面已更新，點此重新整理 ↻';
+  bar.onclick = ()=> location.reload();
+  document.body.appendChild(bar);
+}
+async function checkForUpdate(){
+  const sig = await computePageSignature();
+  if(sig===null) return;
+  if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
+  if(sig !== __bootPageSignature) showUpdateBanner();
+}
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ checkForUpdate(); refreshData(); } });
+window.addEventListener('focus', ()=>{ checkForUpdate(); refreshData(); });
+setInterval(checkForUpdate, 5*60*1000);
+setInterval(refreshData, 3*60*1000);
+computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
 main();
 </script>
 </body>
