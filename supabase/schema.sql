@@ -13,6 +13,9 @@ create extension if not exists "pgcrypto";
 create table settings (
   id int primary key default 1,
   admin_pin text not null default '0000',
+  -- 最近一次手動備份（下載JSON快照／顯示備份文字）的時間，只用來在首頁提醒
+  -- 「超過7天沒備份」，免費方案沒有自動備份，全靠這個提醒手動記得備份。
+  last_backup_at timestamptz,
   constraint singleton check (id = 1)
 );
 insert into settings (id, admin_pin) values (1, '0000');

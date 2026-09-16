@@ -232,7 +232,7 @@ async function loadAllData() {
   }
 
   const data = {
-    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '' },
+    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null },
     drivers: (byKey.driversRes.data || []).map(mapDriver),
     channels: (byKey.channelsRes.data || []).map(mapChannel),
     origins: (byKey.originsRes.data || []).map(mapOrigin),
@@ -1113,6 +1113,19 @@ async function updateAdminPin(pin) {
   const { error } = await supabase.from('settings').update({ admin_pin: pin }).eq('id', 1);
   if (error) throw new Error('更新PIN碼失敗：' + error.message);
   state.data.settings.adminPin = pin;
+}
+
+// 記錄「剛剛做過一次手動備份」，只用來在首頁顯示「超過7天沒備份」提醒，
+// 不影響備份內容本身；失敗就靜默忽略（備份這個動作本身已經完成，記錄時間
+// 失敗不該讓使用者以為備份失敗）。
+async function recordBackupDone() {
+  try {
+    const supabase = getSupabase();
+    const now = new Date().toISOString();
+    const { error } = await supabase.from('settings').update({ last_backup_at: now }).eq('id', 1);
+    if (error) { console.error('記錄備份時間失敗:', error.message); return; }
+    state.data.settings.lastBackupAt = now;
+  } catch (err) { console.error('記錄備份時間失敗:', err.message); }
 }
 
 // 「匯出全部備份」沿用 demo 的 JSON.stringify(state.data)，只是資料來源換成即時查詢結果；

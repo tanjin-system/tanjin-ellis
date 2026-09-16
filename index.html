@@ -551,6 +551,20 @@ function defaultPeriod(channel, monthStr){
   }
   return { start:`${y}-${pad(m)}-01`, end: ymd(new Date(y,m,0)) };
 }
+// 首頁「通路請款週期即將結束」提醒用：抓出「今天」落在哪個通路的哪一期
+// 週期裡，回傳那一期的結束日。試算當月跟下個月兩個monthStr、看今天落在
+// 哪一個算出來的區間內就用那個——自訂區間(custom)跨月，單看「今天的月份」
+// 去算不一定準（例如每月26日~次月25日這種，今天是9/20時，應該對到
+// 「9/26結束」那一期，不是「8/26~9/25」已經過去的那一期）。
+function currentChannelPeriodEnd(channel, todayStr){
+  const [y,m] = todayStr.split('-').map(Number);
+  for(let delta=0; delta<=1; delta++){
+    let mm=m+delta, yy=y; if(mm>12){ mm=1; yy++; }
+    const period = defaultPeriod(channel, `${yy}-${pad(mm)}`);
+    if(todayStr>=period.start && todayStr<=period.end) return period.end;
+  }
+  return null;
+}
 // 同一個出發點／車次／班次如果因為停靠站不同拆成好幾條路線（例如「第八車
 // （週二到週五）」是給司機跑的實際版本，「第八車(星期一)」是對客戶報價的
 // 版本），這裡把它們視為同一家族：找出家族裡標「星期一／週一」的那條路線。
@@ -935,9 +949,29 @@ function renderHomeAdmin(c){
   const showProgress = inAmWindow || inPmWindow;
   const progressShifts = inAmWindow ? ['AM'] : ['PM'];
   const progressGroups = showProgress ? undeliveredTodayGroups(progressShifts) : [];
+  // 備份提醒：超過7天沒按過「下載快照」或「顯示備份文字」就提醒——免費方案
+  // 沒有自動備份，全靠這個提醒讓人記得手動備份一次。
+  const lastBackupAt = state.data.settings.lastBackupAt;
+  const daysSinceBackup = lastBackupAt ? Math.floor((Date.now()-new Date(lastBackupAt).getTime())/86400000) : null;
+  const backupReminder = (daysSinceBackup===null || daysSinceBackup>=7) ? (daysSinceBackup===null?'系統上線以來還沒有備份紀錄':`已經 ${daysSinceBackup} 天沒有備份`) : null;
+  // 通路請款週期即將結束提醒：結束日前3天～結束日後1天這個範圍內都提醒，
+  // 免得剛好卡在週末忘記結算。
+  const today = todayStr();
+  const periodReminders = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>{
+    const end = currentChannelPeriodEnd(ch, today);
+    if(!end) return null;
+    const daysLeft = Math.round((new Date(end)-new Date(today))/86400000);
+    if(daysLeft>3 || daysLeft<-1) return null;
+    return { name: ch.name, end, daysLeft };
+  }).filter(Boolean);
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。</p>
+    ${backupReminder || periodReminders.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+      <h3 style="margin-top:0;">⏰ 提醒</h3>
+      ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
+      ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
+    </div>` : ''}
     <div class="panel" style="border-color:var(--amber); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">請款－薪資即時利潤（${p.monthStr} 至今）</h3><button class="btn ghost" data-goto="billing">查看請款明細</button></div>
       <table>
@@ -1859,18 +1893,32 @@ function renderRouteDetail(rid){
       <div class="field" style="display:inline-block; max-width:160px; margin-right:10px;">
         <label>${channelName(cid)}</label>
         <input type="number" data-splitch="${cid}" value="${draft.billingByChannel?.[cid] ?? 0}">
-      </div>`).join('');
-    const sum = cids.reduce((s,cid)=> s + (Number(draft.billingByChannel?.[cid])||0), 0);
-    const billingTotal = Number(draft.billingTotal)||0;
-    el.innerHTML += `<div style="font-size:11.5px; color:${sum!==billingTotal?'#B5493A':'var(--ink-soft)'}; margin-top:4px;">拆賬合計 $${money(sum)}　${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}</div>`;
+      </div>`).join('') + `<div id="rvSplitSum" style="font-size:11.5px; margin-top:4px;"></div>`;
+    updateSplitSum();
+    // 拆賬金額輸入框故意用 onchange（欄位失焦才觸發）去重繪整組輸入框，不是 oninput——
+    // oninput 每打一個字就整組input重新產生一次，會讓輸入框失去焦點/游標位置，
+    // 手動輸入多位數金額時打到一半就被打斷（例如打"500"，打完"5"整組就重繪一次，
+    // 游標跑掉，後面"0""0"打不連續）。輸入中只更新合計那一行文字（updateSplitSum），
+    // 不動到 input 本身，欄位失焦後才用 onchange 做一次完整重繪（例如切換到別的畫面
+    // 元素時）。
     el.querySelectorAll('[data-splitch]').forEach(input=>{
       input.oninput = ()=>{
         draft.splitManuallyEdited = true;
         if(!draft.billingByChannel) draft.billingByChannel = {};
         draft.billingByChannel[input.dataset.splitch] = Number(input.value)||0;
-        renderSplitInputs();
+        updateSplitSum();
       };
+      input.onchange = ()=>{ renderSplitInputs(); };
     });
+  }
+  function updateSplitSum(){
+    const sumEl = document.getElementById('rvSplitSum');
+    if(!sumEl) return;
+    const cids = channelsInDraft();
+    const sum = cids.reduce((s,cid)=> s + (Number(draft.billingByChannel?.[cid])||0), 0);
+    const billingTotal = Number(draft.billingTotal)||0;
+    sumEl.style.color = sum!==billingTotal ? '#B5493A' : 'var(--ink-soft)';
+    sumEl.textContent = `拆賬合計 $${money(sum)}${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}`;
   }
   ['rvDistance','rvFare','rvBilling'].forEach(id=>{
     const el = document.getElementById(id);
@@ -2032,7 +2080,14 @@ function renderWeekGrid(containerId, dates){
     if(!route) return `<td class="grid-black"></td>`;
     const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
     if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
-    const issue = a.hasIssue ? ' ⚠️' : '';
+    // 驚嘆號的判斷改成「這趟只要有任何一個下貨點沒有status=completed」就顯示，
+    // 不管是還沒處理、還是司機已經填了未配達原因（通路未下單/央廚未出貨等）——
+    // 只要沒送達，不論理由，主控在週班表就該一眼看到要留意；原本只看 a.hasIssue
+    // 會漏掉「司機把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
+    // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的車趟明細顯示，
+    // 這裡週班表格子維持簡單，不重複塞理由文字）。
+    const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
+    const issue = (a.hasIssue || anyUndelivered) ? ' ⚠️' : '';
     const tag = a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '';
     const feeLine = (a.fare || a.distanceKm) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(a.fare)}・${a.distanceKm||0}km</span>` : '';
     return `<td class="grid-cell" data-viewassign="${a.id}">${driverName(a.driverId)}${tag}${issue}${feeLine}</td>`;
@@ -2766,6 +2821,7 @@ function renderSettings(c){
     ta.value = JSON.stringify(state.data);
     ta.style.display = 'block';
     ta.focus(); ta.select();
+    recordBackupDone();
     alert('已顯示備份文字並自動選取，請用手機的「複製」功能（長按選取範圍會出現複製選項）複製後貼到記事本或LINE保存。');
   };
   document.getElementById('exportAllData').onclick = ()=>{
@@ -2779,6 +2835,7 @@ function renderSettings(c){
     a.click();
     document.body.removeChild(a);
     setTimeout(()=> URL.revokeObjectURL(url), 3000);
+    recordBackupDone();
     alert('備份檔已下載，請妥善保存這個檔案。');
   };
 }
