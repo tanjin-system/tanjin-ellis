@@ -671,6 +671,7 @@ function getWeekDates(offset){
 // ---------- Tabs ----------
 const ADMIN_TABS = [
   {id:'home', label:'首頁'},
+  {id:'announcements', label:'公告管理'},
   {id:'notifications', label:'即時通知'},
   {id:'schedule', label:'週班表'},
   {id:'drivers', label:'司機資料'},
@@ -723,7 +724,7 @@ function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
   if(!inDriverView){
-    ({home:renderHomeAdmin, notifications:renderNotifications, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+    ({home:renderHomeAdmin, announcements:renderAnnouncements, notifications:renderNotifications, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
@@ -740,6 +741,86 @@ const NOTIF_LABEL = { profile:'✏️ 資料修改', statement:'🖊️ 回簽' 
 function visibleNotifications(){
   return (state.data.notifications||[]).filter(n=> n.type==='profile' || n.type==='statement');
 }
+// ---------- 公告管理（主控發布，全體司機首頁看得到） ----------
+let editingAnnouncementId = null;
+function renderAnnouncements(c){
+  c.innerHTML = `
+    <h2 class="section-title">公告管理</h2>
+    <p class="section-sub">發布的公告會顯示在全體司機的「首頁」。下架是暫時收回、不是刪除，可以隨時重新上架；真的不需要了才用「刪除」。</p>
+    <div class="panel">
+      <div class="field"><label>標題</label><input id="anTitle" placeholder="例：中秋節出車異動通知"></div>
+      <div class="field"><label>內容</label><textarea id="anContent" style="min-height:80px;" placeholder="請輸入公告內容"></textarea></div>
+      <button class="btn amber" id="addAnnouncement">發布公告</button>
+    </div>
+    <div id="announcementListBody"></div>
+  `;
+  document.getElementById('addAnnouncement').onclick = async ()=>{
+    const title = document.getElementById('anTitle').value.trim();
+    const content = document.getElementById('anContent').value.trim();
+    if(!title || !content){ alert('請填寫標題與內容'); return; }
+    try{
+      await createAnnouncement({ title, content });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  renderAnnouncementListBody();
+}
+function renderAnnouncementListBody(){
+  const wrap = document.getElementById('announcementListBody');
+  const list = state.data.announcements;
+  wrap.innerHTML = `<div class="panel">
+    <h3 style="margin-top:0;">已發布公告（${list.length}）</h3>
+    ${list.map(a=>{
+      if(editingAnnouncementId === a.id){
+        return `<div class="drop-point">
+          <div class="field"><label>標題</label><input id="eanTitle" value="${escapeHtml(a.title)}"></div>
+          <div class="field"><label>內容</label><textarea id="eanContent" style="min-height:80px;">${escapeHtml(a.content)}</textarea></div>
+          <button class="btn amber" data-saveedit="${a.id}">儲存</button>
+          <button class="btn ghost" data-canceledit="${a.id}">取消</button>
+        </div>`;
+      }
+      return `<div class="drop-point" style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+        <div style="flex:1;">
+          <strong>${escapeHtml(a.title)}</strong>
+          ${a.active?'<span class="badge completed">上架中</span>':'<span class="badge pending">已下架</span>'}
+          <p style="font-size:12.5px; white-space:pre-wrap; margin:4px 0;">${escapeHtml(a.content)}</p>
+          <span style="font-size:11px; color:var(--ink-soft);">${new Date(a.createdAt).toLocaleString('zh-Hant-TW')}</span>
+        </div>
+        <span style="flex-shrink:0; white-space:nowrap;">
+          <button class="btn ghost" data-editan="${a.id}">編輯</button>
+          <button class="btn ghost" data-toggleactive="${a.id}">${a.active?'下架':'重新上架'}</button>
+          <button class="btn danger" data-delan="${a.id}">刪除</button>
+        </span>
+      </div>`;
+    }).join('') || '<div class="empty">尚未發布任何公告</div>'}
+  </div>`;
+  wrap.querySelectorAll('[data-editan]').forEach(btn=>{ btn.onclick=()=>{ editingAnnouncementId = btn.dataset.editan; renderAnnouncementListBody(); }; });
+  wrap.querySelectorAll('[data-canceledit]').forEach(btn=>{ btn.onclick=()=>{ editingAnnouncementId = null; renderAnnouncementListBody(); }; });
+  wrap.querySelectorAll('[data-saveedit]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const title = document.getElementById('eanTitle').value.trim();
+      const content = document.getElementById('eanContent').value.trim();
+      if(!title || !content){ alert('請填寫標題與內容'); return; }
+      try{ await updateAnnouncement(btn.dataset.saveedit, { title, content }); editingAnnouncementId = null; renderAnnouncementListBody(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-toggleactive]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const a = state.data.announcements.find(x=>x.id===btn.dataset.toggleactive);
+      try{ await setAnnouncementActive(a.id, !a.active); renderAnnouncementListBody(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-delan]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('確定要刪除這則公告嗎？刪除後無法復原。')) return;
+      try{ await deleteAnnouncement(btn.dataset.delan); renderAnnouncementListBody(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+}
+
 function renderNotifications(c){
   const list = visibleNotifications();
   c.innerHTML = `
@@ -788,6 +869,7 @@ function undeliveredTodayGroups(shifts){
 }
 function renderHomeAdmin(c){
   const tiles = [
+    {id:'announcements', label:'公告管理', sub:'發布訊息給全體司機'},
     {id:'notifications', label:'即時通知', sub:'資料修改/對帳單回簽動態'},
     {id:'schedule', label:'週班表', sub:'指派司機與路線'},
     {id:'drivers', label:'司機資料', sub:'含車輛與銀行資訊'},
@@ -851,9 +933,21 @@ function renderHomeDriver(c){
     {id:'my-statement', label:'對帳單', sub:'月結與回簽'},
     {id:'profile', label:'我的資料', sub:'車輛/銀行資訊'}
   ];
+  // 主控在「主控檢視中」模式下也是叫這支函式，這時 state.data.announcements
+  // 是用admin身份撈的（含已下架），這裡一律用 .active 再篩一次，確保跟真的
+  // 司機登入看到的內容完全一樣，不會不小心把已下架的公告也顯示出來預覽。
+  const activeAnnouncements = (state.data.announcements||[]).filter(a=>a.active);
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
+    ${activeAnnouncements.length ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <h3 style="margin-top:0;">📢 公告</h3>
+      ${activeAnnouncements.map(a=>`<div style="padding:8px 0; border-bottom:1px solid var(--border);">
+        <strong>${escapeHtml(a.title)}</strong>
+        <p style="font-size:13px; white-space:pre-wrap; margin:4px 0 0;">${escapeHtml(a.content)}</p>
+        <span style="font-size:11px; color:var(--ink-soft);">${new Date(a.createdAt).toLocaleString('zh-Hant-TW')}</span>
+      </div>`).join('')}
+    </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });

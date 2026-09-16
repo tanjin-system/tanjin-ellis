@@ -767,3 +767,26 @@ language sql security definer set search_path = storage, public as $$
   group by bucket_id;
 $$;
 grant execute on function get_storage_usage() to app_admin;
+
+-- ============================================================
+-- PART 6：公告（主控發布給全體司機看的訊息，例如放假通知、規則異動）
+-- ============================================================
+create table announcements (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  content text not null,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create index idx_announcements_active on announcements(active, created_at desc);
+
+-- app_admin 全權限（新增/編輯/下架/刪除）；app_driver 只能看目前上架中
+-- （active=true）的公告，下架的公告司機端完全看不到，不需要另外做已讀/
+-- 未讀追蹤，就是簡單的「現在有效的公告都顯示」。
+alter table announcements enable row level security;
+grant select, insert, update, delete on announcements to app_admin;
+grant select on announcements to app_driver;
+
+create policy admin_all on announcements for all to app_admin using (true) with check (true);
+create policy driver_select_active on announcements for select to app_driver
+  using (active = true);

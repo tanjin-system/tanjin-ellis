@@ -140,6 +140,10 @@ function mapBillingAdjustment(row) {
   };
 }
 
+function mapAnnouncement(row) {
+  return { id: row.id, title: row.title, content: row.content, active: row.active, createdAt: row.created_at };
+}
+
 // ---------------- 照片／簽名：Storage 路徑 → 短期有效的可存取連結 ----------------
 // 沿用 demo 原本欄位名稱（dp.photo / statement.signatureDataUrl），
 // 這樣 index.html 裡 <img src="${dp.photo}"> 這類渲染程式碼完全不用改。
@@ -209,7 +213,10 @@ async function loadAllData() {
     // 查這個表一定 permission denied，只有 admin 才查。
     ...(isAdmin ? { notificationsRes: supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200) } : {}),
     // billing_adjustments 只 grant app_admin，司機身份查會 permission denied，只有 admin 才查。
-    ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {})
+    ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
+    // 公告：admin/driver 都能查，driver 只查得到 active=true 的（RLS擋掉下架的），
+    // 不需要另外分身份寫兩個查詢。
+    announcementsRes: supabase.from('announcements').select('*').order('created_at', { ascending: false })
   };
   const keys = Object.keys(queries);
   const results = await Promise.all(Object.values(queries));
@@ -230,7 +237,8 @@ async function loadAllData() {
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
     statements: (byKey.statementsRes.data || []).map(mapStatement),
     notifications: (byKey.notificationsRes?.data || []).map(mapNotification),
-    billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment)
+    billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment),
+    announcements: (byKey.announcementsRes.data || []).map(mapAnnouncement)
   };
 
   await resolvePhotoUrls(data.assignments);
@@ -934,6 +942,47 @@ async function deleteBillingAdjustment(id) {
   const { error } = await supabase.from('billing_adjustments').delete().eq('id', id);
   if (error) throw new Error('刪除請款調整項失敗：' + error.message);
   state.data.billingAdjustments = state.data.billingAdjustments.filter(a => a.id !== id);
+}
+
+// ---------------- 公告（主控發布給全體司機看的訊息） ----------------
+
+async function createAnnouncement(input) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('announcements').insert({
+    title: input.title, content: input.content
+  }).select().single();
+  if (error) throw new Error('發布公告失敗：' + error.message);
+  const a = mapAnnouncement(data);
+  state.data.announcements.unshift(a);
+  return a;
+}
+
+async function updateAnnouncement(id, input) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('announcements').update({
+    title: input.title, content: input.content
+  }).eq('id', id).select().single();
+  if (error) throw new Error('更新公告失敗：' + error.message);
+  const idx = state.data.announcements.findIndex(a => a.id === id);
+  if (idx >= 0) state.data.announcements[idx] = mapAnnouncement(data);
+}
+
+// 下架用軟刪除（active=false）而不是直接刪除列——司機那邊 RLS 只擋掉
+// active=false 的，不代表歷史上發過這則公告的紀錄要一起消失，主控自己
+// 這邊（不受 active 篩選）還是看得到、可以重新上架。
+async function setAnnouncementActive(id, active) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('announcements').update({ active }).eq('id', id);
+  if (error) throw new Error('更新公告狀態失敗：' + error.message);
+  const a = state.data.announcements.find(x => x.id === id);
+  if (a) a.active = active;
+}
+
+async function deleteAnnouncement(id) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('announcements').delete().eq('id', id);
+  if (error) throw new Error('刪除公告失敗：' + error.message);
+  state.data.announcements = state.data.announcements.filter(a => a.id !== id);
 }
 
 // 全體司機固定套用同一個所得類別；如果貴公司實際適用的所得類別不是這個，
