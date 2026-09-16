@@ -769,24 +769,57 @@ $$;
 grant execute on function get_storage_usage() to app_admin;
 
 -- ============================================================
--- PART 6：公告（主控發布給全體司機看的訊息，例如放假通知、規則異動）
+-- PART 6：公告（主控發布給全體司機或指定司機看的訊息，例如放假通知、
+-- 規則異動、或只給某幾位司機的個別提醒）
 -- ============================================================
 create table announcements (
   id uuid primary key default gen_random_uuid(),
   title text not null,
   content text not null,
   active boolean not null default true,
+  -- 'all'：全體司機都看得到；'selected'：只有 announcement_recipients
+  -- 裡指定的那幾位司機看得到。
+  audience text not null default 'all' check (audience in ('all','selected')),
   created_at timestamptz not null default now()
 );
 create index idx_announcements_active on announcements(active, created_at desc);
 
+-- 公告指定對象（audience='selected' 時才會有資料；audience='all' 時這裡
+-- 一律不用填，全體司機都看得到，不需要一筆一筆列出來）。
+create table announcement_recipients (
+  announcement_id uuid not null references announcements(id) on delete cascade,
+  driver_id uuid not null references drivers(id) on delete cascade,
+  primary key (announcement_id, driver_id)
+);
+
 -- app_admin 全權限（新增/編輯/下架/刪除）；app_driver 只能看目前上架中
--- （active=true）的公告，下架的公告司機端完全看不到，不需要另外做已讀/
--- 未讀追蹤，就是簡單的「現在有效的公告都顯示」。
+-- （active=true）、而且是發給全體（audience='all'）或有把自己列在
+-- announcement_recipients 裡的公告。不需要另外做已讀/未讀追蹤，就是
+-- 簡單的「現在有效、而且是發給我的都顯示」。
 alter table announcements enable row level security;
 grant select, insert, update, delete on announcements to app_admin;
 grant select on announcements to app_driver;
 
 create policy admin_all on announcements for all to app_admin using (true) with check (true);
 create policy driver_select_active on announcements for select to app_driver
-  using (active = true);
+  using (
+    active = true
+    and (
+      audience = 'all'
+      or exists (
+        select 1 from announcement_recipients ar
+        where ar.announcement_id = announcements.id and ar.driver_id = auth_driver_id()
+      )
+    )
+  );
+
+-- announcement_recipients：app_admin 全權限；app_driver 只能看自己被
+-- 指定到的那幾筆（給上面 announcements 的 policy 子查詢用，司機端本身
+-- 不會直接查這張表）。
+alter table announcement_recipients enable row level security;
+grant select, insert, delete on announcement_recipients to app_admin;
+grant select on announcement_recipients to app_driver;
+
+create policy admin_all on announcement_recipients for all to app_admin using (true) with check (true);
+create policy driver_select_own on announcement_recipients for select to app_driver
+  using (driver_id = auth_driver_id());

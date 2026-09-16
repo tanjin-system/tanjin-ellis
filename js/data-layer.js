@@ -141,7 +141,12 @@ function mapBillingAdjustment(row) {
 }
 
 function mapAnnouncement(row) {
-  return { id: row.id, title: row.title, content: row.content, active: row.active, createdAt: row.created_at };
+  return {
+    id: row.id, title: row.title, content: row.content, active: row.active,
+    audience: row.audience || 'all',
+    driverIds: (row.announcement_recipients || []).map(r => r.driver_id),
+    createdAt: row.created_at
+  };
 }
 
 // ---------------- 照片／簽名：Storage 路徑 → 短期有效的可存取連結 ----------------
@@ -216,7 +221,7 @@ async function loadAllData() {
     ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
     // 公告：admin/driver 都能查，driver 只查得到 active=true 的（RLS擋掉下架的），
     // 不需要另外分身份寫兩個查詢。
-    announcementsRes: supabase.from('announcements').select('*').order('created_at', { ascending: false })
+    announcementsRes: supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false })
   };
   const keys = Object.keys(queries);
   const results = await Promise.all(Object.values(queries));
@@ -946,25 +951,46 @@ async function deleteBillingAdjustment(id) {
 
 // ---------------- 公告（主控發布給全體司機看的訊息） ----------------
 
+// audience 'all'：全體司機；'selected'：只有 driverIds 列出的那幾位看得到。
 async function createAnnouncement(input) {
   const supabase = getSupabase();
+  const audience = input.audience === 'selected' ? 'selected' : 'all';
   const { data, error } = await supabase.from('announcements').insert({
-    title: input.title, content: input.content
+    title: input.title, content: input.content, audience
   }).select().single();
   if (error) throw new Error('發布公告失敗：' + error.message);
-  const a = mapAnnouncement(data);
+  let driverIds = [];
+  if (audience === 'selected' && input.driverIds && input.driverIds.length) {
+    const rows = input.driverIds.map(driverId => ({ announcement_id: data.id, driver_id: driverId }));
+    const { error: recErr } = await supabase.from('announcement_recipients').insert(rows);
+    if (recErr) throw new Error('設定公告發送對象失敗：' + recErr.message);
+    driverIds = input.driverIds;
+  }
+  const a = { ...mapAnnouncement(data), driverIds };
   state.data.announcements.unshift(a);
   return a;
 }
 
 async function updateAnnouncement(id, input) {
   const supabase = getSupabase();
+  const audience = input.audience === 'selected' ? 'selected' : 'all';
   const { data, error } = await supabase.from('announcements').update({
-    title: input.title, content: input.content
+    title: input.title, content: input.content, audience
   }).eq('id', id).select().single();
   if (error) throw new Error('更新公告失敗：' + error.message);
+  // 對象名單整批重建最簡單、最不容易漏改：全部刪掉再依目前選的重新插入，
+  // 不用另外算「加了誰、少了誰」的差異。
+  const { error: delErr } = await supabase.from('announcement_recipients').delete().eq('announcement_id', id);
+  if (delErr) throw new Error('更新公告發送對象失敗：' + delErr.message);
+  let driverIds = [];
+  if (audience === 'selected' && input.driverIds && input.driverIds.length) {
+    const rows = input.driverIds.map(driverId => ({ announcement_id: id, driver_id: driverId }));
+    const { error: recErr } = await supabase.from('announcement_recipients').insert(rows);
+    if (recErr) throw new Error('設定公告發送對象失敗：' + recErr.message);
+    driverIds = input.driverIds;
+  }
   const idx = state.data.announcements.findIndex(a => a.id === id);
-  if (idx >= 0) state.data.announcements[idx] = mapAnnouncement(data);
+  if (idx >= 0) state.data.announcements[idx] = { ...mapAnnouncement(data), driverIds };
 }
 
 // 下架用軟刪除（active=false）而不是直接刪除列——司機那邊 RLS 只擋掉

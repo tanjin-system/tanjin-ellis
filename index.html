@@ -743,23 +743,48 @@ function visibleNotifications(){
 }
 // ---------- 公告管理（主控發布，全體司機首頁看得到） ----------
 let editingAnnouncementId = null;
+// 發送對象的司機勾選清單（只列在職司機，停用司機沒有登入系統的可能，
+// 挑他們沒有意義）；prefix 用來讓「新增」跟「編輯中」的checkbox各自有
+// 不衝突的class名稱。
+function driverPickerHtml(prefix, selectedIds){
+  return state.data.drivers.filter(d=>d.status==='active').map(d=>
+    `<label style="display:inline-flex; align-items:center; gap:4px; margin:0 12px 6px 0; font-weight:400;"><input type="checkbox" value="${d.id}" class="${prefix}DriverCheck" ${selectedIds.includes(d.id)?'checked':''} style="width:auto;">${escapeHtml(d.name)}</label>`
+  ).join('') || '<span style="font-size:12.5px; color:var(--ink-soft);">目前沒有在職司機</span>';
+}
+function audienceSummary(a){
+  if(a.audience!=='selected') return '全體司機';
+  return a.driverIds.length ? a.driverIds.map(driverName).join('、') : '（尚未指定司機）';
+}
 function renderAnnouncements(c){
   c.innerHTML = `
     <h2 class="section-title">公告管理</h2>
-    <p class="section-sub">發布的公告會顯示在全體司機的「首頁」。下架是暫時收回、不是刪除，可以隨時重新上架；真的不需要了才用「刪除」。</p>
+    <p class="section-sub">發布的公告會顯示在司機的「首頁」，可以發給全體司機、或只發給指定的一位/幾位司機。下架是暫時收回、不是刪除，可以隨時重新上架；真的不需要了才用「刪除」。</p>
     <div class="panel">
       <div class="field"><label>標題</label><input id="anTitle" placeholder="例：中秋節出車異動通知"></div>
       <div class="field"><label>內容</label><textarea id="anContent" style="min-height:80px;" placeholder="請輸入公告內容"></textarea></div>
+      <div class="field" style="max-width:200px;"><label>發送對象</label>
+        <select id="anAudience">
+          <option value="all">全體司機</option>
+          <option value="selected">指定司機</option>
+        </select>
+      </div>
+      <div id="anDriverPicker" style="display:none; margin-bottom:10px;">${driverPickerHtml('an', [])}</div>
       <button class="btn amber" id="addAnnouncement">發布公告</button>
     </div>
     <div id="announcementListBody"></div>
   `;
+  document.getElementById('anAudience').onchange = (e)=>{
+    document.getElementById('anDriverPicker').style.display = e.target.value==='selected' ? 'block' : 'none';
+  };
   document.getElementById('addAnnouncement').onclick = async ()=>{
     const title = document.getElementById('anTitle').value.trim();
     const content = document.getElementById('anContent').value.trim();
+    const audience = document.getElementById('anAudience').value;
+    const driverIds = [...document.querySelectorAll('.anDriverCheck:checked')].map(cb=>cb.value);
     if(!title || !content){ alert('請填寫標題與內容'); return; }
+    if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位司機，或改選「全體司機」'); return; }
     try{
-      await createAnnouncement({ title, content });
+      await createAnnouncement({ title, content, audience, driverIds });
       renderContent();
     }catch(err){ alert(err.message); }
   };
@@ -775,6 +800,13 @@ function renderAnnouncementListBody(){
         return `<div class="drop-point">
           <div class="field"><label>標題</label><input id="eanTitle" value="${escapeHtml(a.title)}"></div>
           <div class="field"><label>內容</label><textarea id="eanContent" style="min-height:80px;">${escapeHtml(a.content)}</textarea></div>
+          <div class="field" style="max-width:200px;"><label>發送對象</label>
+            <select id="eanAudience">
+              <option value="all" ${a.audience!=='selected'?'selected':''}>全體司機</option>
+              <option value="selected" ${a.audience==='selected'?'selected':''}>指定司機</option>
+            </select>
+          </div>
+          <div id="eanDriverPicker" style="${a.audience==='selected'?'':'display:none;'} margin-bottom:10px;">${driverPickerHtml('ean', a.driverIds)}</div>
           <button class="btn amber" data-saveedit="${a.id}">儲存</button>
           <button class="btn ghost" data-canceledit="${a.id}">取消</button>
         </div>`;
@@ -784,6 +816,7 @@ function renderAnnouncementListBody(){
           <strong>${escapeHtml(a.title)}</strong>
           ${a.active?'<span class="badge completed">上架中</span>':'<span class="badge pending">已下架</span>'}
           <p style="font-size:12.5px; white-space:pre-wrap; margin:4px 0;">${escapeHtml(a.content)}</p>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0;">發送對象：${escapeHtml(audienceSummary(a))}</p>
           <span style="font-size:11px; color:var(--ink-soft);">${new Date(a.createdAt).toLocaleString('zh-Hant-TW')}</span>
         </div>
         <span style="flex-shrink:0; white-space:nowrap;">
@@ -796,12 +829,21 @@ function renderAnnouncementListBody(){
   </div>`;
   wrap.querySelectorAll('[data-editan]').forEach(btn=>{ btn.onclick=()=>{ editingAnnouncementId = btn.dataset.editan; renderAnnouncementListBody(); }; });
   wrap.querySelectorAll('[data-canceledit]').forEach(btn=>{ btn.onclick=()=>{ editingAnnouncementId = null; renderAnnouncementListBody(); }; });
+  const eanAudienceSel = document.getElementById('eanAudience');
+  if(eanAudienceSel){
+    eanAudienceSel.onchange = (e)=>{
+      document.getElementById('eanDriverPicker').style.display = e.target.value==='selected' ? 'block' : 'none';
+    };
+  }
   wrap.querySelectorAll('[data-saveedit]').forEach(btn=>{
     btn.onclick = async ()=>{
       const title = document.getElementById('eanTitle').value.trim();
       const content = document.getElementById('eanContent').value.trim();
+      const audience = document.getElementById('eanAudience').value;
+      const driverIds = [...document.querySelectorAll('.eanDriverCheck:checked')].map(cb=>cb.value);
       if(!title || !content){ alert('請填寫標題與內容'); return; }
-      try{ await updateAnnouncement(btn.dataset.saveedit, { title, content }); editingAnnouncementId = null; renderAnnouncementListBody(); }
+      if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位司機，或改選「全體司機」'); return; }
+      try{ await updateAnnouncement(btn.dataset.saveedit, { title, content, audience, driverIds }); editingAnnouncementId = null; renderAnnouncementListBody(); }
       catch(err){ alert(err.message); }
     };
   });
@@ -934,9 +976,11 @@ function renderHomeDriver(c){
     {id:'profile', label:'我的資料', sub:'車輛/銀行資訊'}
   ];
   // 主控在「主控檢視中」模式下也是叫這支函式，這時 state.data.announcements
-  // 是用admin身份撈的（含已下架），這裡一律用 .active 再篩一次，確保跟真的
-  // 司機登入看到的內容完全一樣，不會不小心把已下架的公告也顯示出來預覽。
-  const activeAnnouncements = (state.data.announcements||[]).filter(a=>a.active);
+  // 是用admin身份撈的（含已下架、含所有對象的公告），這裡一律再篩一次
+  // active跟發送對象，確保跟真的司機登入看到的內容完全一樣：全體公告
+  // 都看得到，指定對象的公告只有被指定到的司機（dId在driverIds裡）才看得到。
+  const activeAnnouncements = (state.data.announcements||[]).filter(a=>
+    a.active && (a.audience!=='selected' || a.driverIds.includes(dId)));
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
