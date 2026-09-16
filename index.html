@@ -776,10 +776,13 @@ function undeliveredTodayGroups(shifts){
     .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
     .filter(a=> !shifts || shifts.includes((state.data.routes.find(r=>r.id===a.routeId)||{}).shift))
     .map(a=>({
-      routeLabel: routeName(a.routeId),
+      // 車次名稱後面直接帶出當班司機名字，不用另外切到週班表查是誰在跑。
+      routeLabel: `${routeName(a.routeId)} ${driverName(a.driverId)}`,
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
       // 監控清單裡，避免主控一直看到其實司機已經回報過原因的店。
-      points: a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.issueReason).map(dp=>`${channelName(dp.channelId)}${dpLabel(dp)}`)
+      // 店名不再加通路名稱前綴（畫面上已經夠擠了，通路名稱對主控來說不是
+      // 必要資訊）。
+      points: a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.issueReason).map(dp=>dpLabel(dp))
     }))
     .filter(g=>g.points.length);
 }
