@@ -761,15 +761,12 @@ function renderNotifications(c){
   };
 }
 
-// 今天還沒配送完成的車次/下貨點，給主控每天上午11:00過後掌握即時進度用。
-// 14:00前只看上午車次（下午車次通常還沒出發，顯示了只是噪音）；14:00起
-// 「加上」下午車次一起看，但上午車次不會因為時間到了就被強制隱藏——
-// 只有真的處理完（完成、或所有下貨點都有解釋）才會消失，不然還在執行中
-// 的上午車次會在下午突然從監控清單裡消失，反而看不到真正卡住的問題
-// （這是實際上線後發現的問題：早上出的車拖到下午還沒完成，畫面卻因為
-// 時間切換到只看下午而整批消失）。每次開系統/重新整理都是重新算一次
-// 「現在」的狀態，下貨點一旦被司機標記完成，下次渲染這個清單就會自動
-// 不見，不需要另外做「清除」動作。
+// 今天還沒配送完成的車次/下貨點，給主控掌握即時進度用。上午車次只在
+// 06:00–14:00這個區間顯示，下午車次只在14:00–18:30這個區間顯示（主控
+// 明確指定的兩個時段，不是「還沒處理完就一直留著」）；呼叫端（見
+// renderHomeAdmin）依現在時間決定要傳哪個班次進來。每次開系統/重新
+// 整理都是重新算一次「現在」的狀態，下貨點一旦被司機標記完成，下次
+// 渲染這個清單就會自動不見，不需要另外做「清除」動作。
 function undeliveredTodayGroups(shifts){
   const today = todayStr();
   return state.data.assignments
@@ -802,9 +799,14 @@ function renderHomeAdmin(c){
   ];
   const p = computeProfitSnapshot();
   const recent = visibleNotifications().slice(0,6);
-  const nowHour = new Date().getHours();
-  const showProgress = nowHour >= 11; // 每天上午11:00後才開始顯示（早上多數車次都還沒出發，顯示了也只是噪音）
-  const progressShifts = nowHour < 14 ? ['AM'] : null; // 14:00前只看上午車次，14:00起上午下午都看（不會因為換時段就把還沒處理完的上午車次藏起來）
+  // 上午車次只在06:00–14:00區間顯示，下午車次只在14:00–18:30區間顯示，
+  // 區間外（太早或太晚）整個面板不顯示——這是主控明確指定的兩個時間段，
+  // 不是「累加、只看有沒有處理完」，是單純的時段切換。
+  const nowMinutes = (()=>{ const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
+  const inAmWindow = nowMinutes >= 6*60 && nowMinutes < 14*60;
+  const inPmWindow = nowMinutes >= 14*60 && nowMinutes < 18*60+30;
+  const showProgress = inAmWindow || inPmWindow;
+  const progressShifts = inAmWindow ? ['AM'] : ['PM'];
   const progressGroups = showProgress ? undeliveredTodayGroups(progressShifts) : [];
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
