@@ -762,18 +762,22 @@ function renderNotifications(c){
 }
 
 // 今天還沒配送完成的車次/下貨點，給主控每天上午11:00過後掌握即時進度用。
-// 14:00前只看上午車次，14:00起只看下午車次（早上車次到了下午已經過了
-// 該處理的時間，混在一起看只會是噪音）。每次開系統/重新整理都是重新算
-// 一次「現在」的狀態，下貨點一旦被司機標記完成，下次渲染這個清單就會
-// 自動不見，不需要另外做「清除」動作。
-function undeliveredTodayGroups(shift){
+// 14:00前只看上午車次（下午車次通常還沒出發，顯示了只是噪音）；14:00起
+// 「加上」下午車次一起看，但上午車次不會因為時間到了就被強制隱藏——
+// 只有真的處理完（完成、或所有下貨點都有解釋）才會消失，不然還在執行中
+// 的上午車次會在下午突然從監控清單裡消失，反而看不到真正卡住的問題
+// （這是實際上線後發現的問題：早上出的車拖到下午還沒完成，畫面卻因為
+// 時間切換到只看下午而整批消失）。每次開系統/重新整理都是重新算一次
+// 「現在」的狀態，下貨點一旦被司機標記完成，下次渲染這個清單就會自動
+// 不見，不需要另外做「清除」動作。
+function undeliveredTodayGroups(shifts){
   const today = todayStr();
   return state.data.assignments
     // 車次本身一旦完成（司機按了「完成本趟」），剩下沒送達的下貨點一定
     // 已經有原因了（不論是逐店選的原因，還是結束時補填的整趟備註），
     // 不該再留在即時監控清單裡。
     .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
-    .filter(a=> !shift || (state.data.routes.find(r=>r.id===a.routeId)||{}).shift===shift)
+    .filter(a=> !shifts || shifts.includes((state.data.routes.find(r=>r.id===a.routeId)||{}).shift))
     .map(a=>({
       routeLabel: routeName(a.routeId),
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
@@ -800,8 +804,8 @@ function renderHomeAdmin(c){
   const recent = visibleNotifications().slice(0,6);
   const nowHour = new Date().getHours();
   const showProgress = nowHour >= 11; // 每天上午11:00後才開始顯示（早上多數車次都還沒出發，顯示了也只是噪音）
-  const progressShift = nowHour < 14 ? 'AM' : 'PM'; // 14:00前只看上午車次，14:00起只看下午車次
-  const progressGroups = showProgress ? undeliveredTodayGroups(progressShift) : [];
+  const progressShifts = nowHour < 14 ? ['AM'] : null; // 14:00前只看上午車次，14:00起上午下午都看（不會因為換時段就把還沒處理完的上午車次藏起來）
+  const progressGroups = showProgress ? undeliveredTodayGroups(progressShifts) : [];
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。</p>
