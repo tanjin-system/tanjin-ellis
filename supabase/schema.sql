@@ -72,11 +72,6 @@ create table origins (
   address text not null,
   label text,
   status text not null default 'active' check (status in ('active','inactive')),
-  -- lat/lng：地址的經緯度，透過免費的OpenStreetMap Nominatim服務查詢後存下來
-  -- （見 api/geocode.js），給派車模擬工具算距離/自動分群用，不是必填，
-  -- 舊資料預設是 null，第一次用到時再回填。
-  lat numeric,
-  lng numeric,
   created_at timestamptz not null default now()
 );
 
@@ -89,9 +84,6 @@ create table drop_points (
   channel_id uuid not null references channels(id),
   code text,
   status text not null default 'active' check (status in ('active','inactive')),
-  -- lat/lng：同 origins.lat/lng，經緯度查詢後存下來給派車模擬工具用，選填。
-  lat numeric,
-  lng numeric,
   created_at timestamptz not null default now(),
   -- 同一通路下代號不可重複（代號是給司機/通知辨識用的簡短標籤，重複會讓人分不清是哪一站）。
   -- 前端 createDropPoint()/updateDropPoint() 已經有更友善的重複檢查，這裡是資料庫層的最後防線。
