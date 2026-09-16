@@ -1076,14 +1076,14 @@ function openAllDriversModal(){
           <span><button class="btn ghost" id="printAllDrivers">列印</button> <button class="btn ghost" id="closeAllDrivers">關閉</button></span>
         </div>
         <table>
-          <thead><tr><th>姓名</th><th>電話</th><th>LINE</th><th>狀態</th><th>車牌</th><th>車型</th><th>載重</th><th>銀行</th><th>分行</th><th>帳號</th><th>戶名</th></tr></thead>
+          <thead><tr><th>姓名</th><th>身分證字號</th><th>電話</th><th>LINE</th><th>狀態</th><th>車牌</th><th>車型</th><th>載重</th><th>銀行</th><th>分行</th><th>帳號</th><th>戶名</th></tr></thead>
           <tbody>
             ${state.data.drivers.map(d=>`<tr>
-              <td>${d.name}</td><td>${d.phone||'—'}</td><td>${d.lineId||'—'}</td>
+              <td>${d.name}</td><td class="mono">${d.idNumber||'—'}</td><td>${d.phone||'—'}</td><td>${d.lineId||'—'}</td>
               <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
               <td class="mono">${d.vehicle.plate||'—'}</td><td>${d.vehicle.type||'—'}</td><td>${d.vehicle.load||'—'}</td>
               <td>${d.bank.bankName||'—'}</td><td>${d.bank.branch||'—'}</td><td class="mono">${d.bank.account||'—'}</td><td>${d.bank.holder||'—'}</td>
-            </tr>`).join('') || `<tr><td colspan="11"><div class="empty">尚無司機資料</div></td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="12"><div class="empty">尚無司機資料</div></td></tr>`}
           </tbody>
         </table>
       </div>
