@@ -3175,14 +3175,23 @@ function renderTodayDetail(todays){
       const budget = Math.max(0, 3 - photoCount);
       const acceptFiles = files.slice(0, budget);
       const droppedCount = files.length - acceptFiles.length;
-      Promise.all(acceptFiles.map(compressImageFile)).then(async dataUrls=>{
-        for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
-        if(droppedCount>0) alert(`一個下貨點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
-        renderContent();
-      }).catch(err=>{
-        console.error('照片處理失敗', err);
-        alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
-      });
+      // 一次多選時故意「一張一張依序」處理（不是Promise.all同時平行處理）：
+      // heic2any底層是WASM解碼器，同時平行轉好幾張HEIC會搶同一份共用
+      // 記憶體，轉出來的圖片會互相干擾、變成整張黑屏——這正是實測回報的
+      // 「照片可以傳但黑屏」的原因，改成依序等每一張處理完才處理下一張
+      // 就不會有這個問題，代價是多選幾張時處理時間會拉長一點。
+      (async ()=>{
+        try{
+          const dataUrls = [];
+          for(const f of acceptFiles) dataUrls.push(await compressImageFile(f));
+          for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
+          if(droppedCount>0) alert(`一個下貨點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
+          renderContent();
+        }catch(err){
+          console.error('照片處理失敗', err);
+          alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
+        }
+      })();
     };
   });
   // 未配達原因：選了代表這個下貨點暫時不會有送達照片，直接存檔，不用等到
