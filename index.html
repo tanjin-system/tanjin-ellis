@@ -247,15 +247,29 @@ function openCameraCapture(){
       cleanup();
       resolve(result);
     }
-    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+    // 部分手機（回報主要是iOS）連續兩次呼叫getUserMedia時，第一次拍完
+    // 停止串流後立刻再開第二次會失敗——鏡頭硬體/系統似乎需要一點時間
+    // 才會真的釋放上一次的串流。這裡加一個很短的延遲當緩解措施，不保證
+    // 一定解決（我們沒有能重現問題的實機可以驗證），真的還是不行的話
+    // 旁邊新增的「上傳照片」讓司機可以直接從手機相簿選現成的照片，不用
+    // 依賴這個相機鏡頭串流。
+    new Promise(r=>setTimeout(r,300)).then(()=>{
+      if(settled) return;
+      return navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
+    }).then(s=>{
+      if(!s) return;
       if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
       stream = s;
       video.srcObject = s;
     }).catch(()=>{ settle({ fallback:true }); });
     overlay.querySelector('[data-camcancel]').onclick = ()=> settle({ cancelled:true });
     overlay.querySelector('[data-camshoot]').onclick = ()=>{
+      // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
+      // 是黑的），這種情況直接當作失敗退回檔案選擇，不要硬拍出一張空白
+      // 照片讓司機以為拍成功了。
+      if(!video.videoWidth || !video.videoHeight){ settle({ fallback:true }); return; }
       const maxDim = 1000;
-      let width = video.videoWidth || 1000, height = video.videoHeight || 1000;
+      let width = video.videoWidth, height = video.videoHeight;
       if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
       else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
       const canvas = document.createElement('canvas');
@@ -3044,7 +3058,9 @@ function renderTodayDetail(todays){
             <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
               <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">${dp.status==='completed'?'重新拍照':'拍照上傳'}</button>
               <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${dp.id}" style="display:none;">
-              ${dp.status==='completed' && photoCount<3 ? `<button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-addphoto="${dp.id}">新增照片（${photoCount}/3）</button><input type="file" accept="image/*" capture="environment" data-addphotofallback="${dp.id}" style="display:none;">` : ''}
+              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photolib="${a.id}|${dp.id}">上傳照片（從相簿選）</button>
+              <input type="file" accept="image/*" data-photolibinput="${a.id}|${dp.id}" style="display:none;">
+              ${dp.status==='completed' && photoCount<3 ? `<button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-addphoto="${dp.id}">新增照片（${photoCount}/3）</button><input type="file" accept="image/*" capture="environment" data-addphotofallback="${dp.id}" style="display:none;"><button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-addphotolib="${dp.id}">上傳照片（從相簿選）</button><input type="file" accept="image/*" data-addphotolibinput="${dp.id}" style="display:none;">` : ''}
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
             ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
@@ -3093,13 +3109,17 @@ function renderTodayDetail(todays){
   box.querySelectorAll('[data-photo]').forEach(btn=>{
     const [aid, dpid] = btn.dataset.photo.split('|');
     const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
+    const libInput = box.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
     const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
     async function go(dataUrl){
       try{ await uploadDropPointPhoto(aid, dpid, dataUrl); renderContent(); }
       catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
     }
+    function confirmOverwriteIfNeeded(){
+      return !(dp && dp.status==='completed') || confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？');
+    }
     btn.onclick = ()=>{
-      if(dp && dp.status==='completed' && !confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？')) return;
+      if(!confirmOverwriteIfNeeded()) return;
       capturePhoto(fallbackInput, go);
     };
     fallbackInput.onchange = (e)=>{
@@ -3109,12 +3129,25 @@ function renderTodayDetail(todays){
         alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
       });
     };
+    // 「上傳照片」：不開相機，直接跳手機相簿/檔案選擇——鏡頭串流在部分
+    // 手機上不穩定時，讓司機可以直接用手機原生相機APP先拍好，再從相簿
+    // 選那張照片上傳，不用依賴我們這個自建相機。
+    const libBtn = box.querySelector(`[data-photolib="${aid}|${dpid}"]`);
+    if(libBtn) libBtn.onclick = ()=>{ if(confirmOverwriteIfNeeded()) libInput.click(); };
+    if(libInput) libInput.onchange = (e)=>{
+      const file = e.target.files[0]; if(!file) return;
+      compressImageFile(file).then(go).catch(err=>{
+        console.error('照片處理失敗', err);
+        alert('照片處理失敗，請重新選擇一張照片再試一次。');
+      });
+    };
   });
   // 「新增照片」：送達證明照最多累計3張（主要照片+這裡新增的），達到3張
   // 之後按鈕就不會再出現；每次都是額外附加一張，不覆蓋任何既有照片。
   box.querySelectorAll('[data-addphoto]').forEach(btn=>{
     const dpid = btn.dataset.addphoto;
     const fallbackInput = box.querySelector(`[data-addphotofallback="${dpid}"]`);
+    const libInput = box.querySelector(`[data-addphotolibinput="${dpid}"]`);
     async function go(dataUrl){
       try{ await handleExtraMediaUpload(dpid, [dataUrl]); renderContent(); }
       catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
@@ -3125,6 +3158,15 @@ function renderTodayDetail(todays){
       compressImageFile(file).then(go).catch(err=>{
         console.error('照片處理失敗', err);
         alert('照片處理失敗，請重新拍攝再試一次。');
+      });
+    };
+    const libBtn = box.querySelector(`[data-addphotolib="${dpid}"]`);
+    if(libBtn) libBtn.onclick = ()=> libInput.click();
+    if(libInput) libInput.onchange = (e)=>{
+      const file = e.target.files[0]; if(!file) return;
+      compressImageFile(file).then(go).catch(err=>{
+        console.error('照片處理失敗', err);
+        alert('照片處理失敗，請重新選擇一張照片再試一次。');
       });
     };
   });
