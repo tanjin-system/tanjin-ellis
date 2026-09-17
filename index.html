@@ -3071,7 +3071,7 @@ function renderTodayDetail(todays){
           <a class="btn ghost" href="${lineShareLink(`【出車提醒】${a.date} ${routeName(a.routeId)}\n出發點：${a.origin||'—'}\n下貨點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
         </span>
       </div>
-      <p style="font-size:12.5px;">出發點：${a.origin||'—'} <a class="link" href="${mapLink(a.origin||'')}" target="_blank">${a.origin?'開啟導航':''}</a> ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+      <p style="font-size:12.5px;">出發點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
         ${a.dropPoints.map(dp=>{
           const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
