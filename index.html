@@ -187,23 +187,33 @@ function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURICom
 // pushNotification()（純記憶體 unshift）已由 js/data-layer.js 的 createNotification()
 // 取代——正式版通知要讓其他人（主控／司機）在別的裝置上也看得到，必須真的寫進資料庫，
 // 不能只是塞進當下這個瀏覽器分頁的記憶體陣列。
+// 從相簿選的照片格式五花八門（尤其手機拍的HEIC，或某些選擇器回傳
+// file.type是空字串），瀏覽器的<img>不一定解得開，解不開就會整個
+// reject、擋掉上傳，讓司機的照片傳不上去。改成解不開/縮圖失敗時，
+// 退回直接用「原始檔案」的data URL上傳（不縮圖、檔案較大，但至少
+// 傳得上去），只有連FileReader讀檔案本身都失敗才真的視為失敗。
+function normalizeImageDataUrl(dataUrl){
+  return /^data:image\/\w+;base64,/.test(dataUrl) ? dataUrl : dataUrl.replace(/^data:[^;]*;base64,/, 'data:image/jpeg;base64,');
+}
 function compressImageFile(file, maxDim=1000, quality=0.6){
   return new Promise((resolve, reject)=>{
     const reader = new FileReader();
     reader.onload = ()=>{
+      const rawDataUrl = normalizeImageDataUrl(reader.result);
       const img = new Image();
       img.onload = ()=>{
-        let width = img.width, height = img.height;
-        if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
-        else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
-        const canvas = document.createElement('canvas');
-        canvas.width = width; canvas.height = height;
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        try{ resolve(canvas.toDataURL('image/jpeg', quality)); }
-        catch(e){ reject(e); }
+        try{
+          let width = img.width, height = img.height;
+          if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
+          else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        }catch(e){ resolve(rawDataUrl); }
       };
-      img.onerror = reject;
-      img.src = reader.result;
+      img.onerror = ()=> resolve(rawDataUrl);
+      img.src = rawDataUrl;
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
@@ -3124,14 +3134,14 @@ function renderTodayDetail(todays){
     const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
     async function go(dataUrl){
       try{ await fillNextPhotoSlot(aid, dpid, dataUrl); renderContent(); }
-      catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
+      catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
     }
     btn.onclick = ()=> capturePhoto(fallbackInput, go);
     fallbackInput.onchange = (e)=>{
       const file = e.target.files[0]; if(!file) return;
       compressImageFile(file).then(go).catch(err=>{
         console.error('照片處理失敗', err);
-        alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
+        alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
       });
     };
   });
@@ -3156,7 +3166,7 @@ function renderTodayDetail(todays){
         renderContent();
       }).catch(err=>{
         console.error('照片處理失敗', err);
-        alert('照片處理失敗，請重新選擇照片再試一次。');
+        alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
       });
     };
   });
