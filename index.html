@@ -911,8 +911,19 @@ function undeliveredTodayGroups(shifts){
     // 已經有原因了（不論是逐店選的原因，還是結束時補填的整趟備註），
     // 不該再留在即時監控清單裡。
     .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
-    .filter(a=> !shifts || shifts.includes((state.data.routes.find(r=>r.id===a.routeId)||{}).shift))
-    .map(a=>({
+    .map(a=> ({ a, route: state.data.routes.find(r=>r.id===a.routeId) }))
+    .filter(({route})=> !shifts || shifts.includes((route||{}).shift))
+    // 依出發地排序，同出發地內再依車次/班次排序——不然這個清單原本是照
+    // assignments陣列本身的順序（近似隨機），同一個出發點的車次會分散
+    // 在畫面各處，主控要一台一台找很亂。有出發點資料才排得動的話用
+    // routeSortCompare（跟路線管理/週班表同一套排序邏輯），route資料
+    // 缺失（理論上不會發生）就排到最後面，不讓程式整個掛掉。
+    .sort((x,y)=>{
+      if(!x.route) return 1;
+      if(!y.route) return -1;
+      return routeSortCompare(x.route, y.route);
+    })
+    .map(({a})=>({
       // 車次名稱後面直接帶出當班司機名字，不用另外切到週班表查是誰在跑。
       routeLabel: `${routeName(a.routeId)} ${driverName(a.driverId)}`,
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
@@ -2847,15 +2858,34 @@ function renderExport(c){
     <div class="panel">
       <div class="grid3">
         <div class="field"><label>資料類型</label>
-          <select id="exType"><option value="assignments">車趟／班表紀錄</option><option value="adjustments">薪資調整項</option></select>
+          <select id="exType"><option value="assignments">車趟／班表紀錄</option><option value="adjustments">薪資調整項</option><option value="routeVersions">路線管理（歷史版本）</option></select>
         </div>
-        <div class="field"><label>起始日期</label><input id="exStart" type="date"></div>
-        <div class="field"><label>結束日期</label><input id="exEnd" type="date"></div>
+        <div class="field" id="exStartField"><label>起始日期</label><input id="exStart" type="date"></div>
+        <div class="field" id="exEndField"><label>結束日期</label><input id="exEnd" type="date"></div>
       </div>
+      <p class="section-sub" id="exTypeHint" style="display:none;"></p>
       <button class="btn ghost" id="exPreview">預覽區間資料</button>
     </div>
     <div id="exResult"></div>
   `;
+  document.getElementById('exType').onchange = ()=>{
+    const isRouteVersions = document.getElementById('exType').value==='routeVersions';
+    document.getElementById('exTypeHint').style.display = isRouteVersions ? '' : 'none';
+    document.getElementById('exTypeHint').textContent = isRouteVersions ? '只列出「已經被新版本取代」的舊版本（依版本結束日判斷是否落在區間內），目前生效中的版本不會出現在這裡、也不會被刪除。' : '';
+  };
+  // 每一條路線的歷史版本（route_versions裡end不是null的，代表已被新版本
+  // 取代），攤平成一筆一筆方便依「版本結束日」篩選區間、預覽、匯出、
+  // 確認備份後刪除釋放資料量——跟車趟/薪資調整項同一套流程，只是資料
+  // 來源是route裡的versions陣列，不是獨立的table直接查。
+  function allClosedRouteVersions(){
+    const rows = [];
+    state.data.routes.forEach(route=>{
+      route.versions.forEach(v=>{
+        if(v.end) rows.push({ ...v, routeId: route.id, routeName: route.name });
+      });
+    });
+    return rows;
+  }
   function getMatched(){
     const type = document.getElementById('exType').value;
     const start = document.getElementById('exStart').value;
@@ -2863,6 +2893,8 @@ function renderExport(c){
     if(!start || !end) return {type, start, end, rows:[]};
     if(type==='assignments'){
       return {type, start, end, rows: state.data.assignments.filter(a=>a.date>=start && a.date<=end)};
+    } else if(type==='routeVersions'){
+      return {type, start, end, rows: allClosedRouteVersions().filter(v=>v.end>=start && v.end<=end)};
     } else {
       return {type, start, end, rows: state.data.adjustments.filter(a=>a.month >= start.slice(0,7) && a.month <= end.slice(0,7))};
     }
@@ -2877,6 +2909,12 @@ function renderExport(c){
           ${type==='assignments' ? `
             <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>車資</th><th>狀態</th></tr></thead>
             <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(a.fare)}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+          ` : type==='routeVersions' ? `
+            <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>司機費用</th><th>請款總額</th><th>下貨點（當時）</th></tr></thead>
+            <tbody>${rows.map(v=>{
+              const pts = (v.dropPointIds||[]).map(id=>{ const dp = state.data.dropPoints.find(x=>x.id===id); return dp ? dpLabel(dp) : '（已刪除的下貨點）'; }).join('、') || '—';
+              return `<tr><td>${escapeHtml(v.routeName)}</td><td>${v.start} ~ ${v.end}</td><td>${v.distanceKm??'—'}km</td><td class="amount">$${money(v.driverFare||0)}</td><td class="amount">$${money(v.billingTotal||0)}</td><td style="font-size:12px;">${pts}</td></tr>`;
+            }).join('') || '<tr><td colspan="6"><div class="empty">此區間無資料</div></td></tr>'}
           ` : `
             <thead><tr><th>月份</th><th>司機</th><th>類型</th><th>金額</th><th>備註</th></tr></thead>
             <tbody>${rows.map(a=>`<tr><td>${a.month}</td><td>${driverName(a.driverId)}</td><td>${a.type==='advance'?'預支':a.type==='add'?'加錢':'減錢'}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
@@ -2894,6 +2932,7 @@ function renderExport(c){
       try{
         const ids = rows.map(r=>r.id);
         if(type==='assignments') await bulkDeleteAssignments(ids);
+        else if(type==='routeVersions') await bulkDeleteRouteVersions(ids);
         else await bulkDeleteAdjustments(ids);
         document.getElementById('exResult').innerHTML = '<div class="note">已刪除該區間資料。</div>';
       }catch(err){ alert(err.message); }

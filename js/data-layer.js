@@ -897,6 +897,19 @@ async function bulkDeleteAssignments(ids) {
   state.data.assignments = state.data.assignments.filter(a => !idSet.has(a.id));
 }
 
+// 只用在「資料匯出」頁刪除已經匯出備份的歷史路線版本（route_versions，
+// end_date不是null，代表已被新版本取代、不是目前生效中的版本）。刪除
+// route_versions會連動cascade刪掉route_version_points，不會動到routes
+// 本身或目前生效的版本。呼叫端(renderExport)已經保證ids只會是已結束的
+// 版本，這裡不用再檢查一次。
+async function bulkDeleteRouteVersions(ids) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('route_versions').delete().in('id', ids);
+  if (error) throw new Error('刪除資料失敗：' + error.message);
+  const idSet = new Set(ids);
+  state.data.routes.forEach(r => { r.versions = r.versions.filter(v => !idSet.has(v.id)); });
+}
+
 // ---------------- 薪資調整項 / 月結對帳單 ----------------
 
 async function createAdjustment(input) {
