@@ -162,18 +162,25 @@ function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d
 function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
 function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?r.name:'—'; }
 function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(addr); }
-// 路線規劃用的多點導航連結：出發點固定當起點，中間停靠站全部放進
-// waypoints並加optimize=true，交給Google自己排出最順的實際行車順序
-// （我們資料庫沒有座標、沒有串Google付費API算真實距離，這一步完全
-// 交給Google在點開連結那一刻幫忙算，不用我們自己猜）。純組網址字串，
-// 不呼叫任何API、不用金鑰、不花錢。
-function buildOptimizedMapsLink(originAddr, stopAddrs){
-  const addrs = (stopAddrs||[]).filter(Boolean);
-  if(!addrs.length) return '';
-  const destination = addrs[addrs.length-1];
-  const waypoints = addrs.slice(0, -1);
+// 路線規劃用的多點導航連結：出發點固定當起點，停靠站依「我們給的順序」
+// 依序放進waypoints。原本有加optimize:true想交給Google自動排出最順的
+// 行車順序，但實測手機上的Google地圖App根本不認得這個網址參數（那是
+// 舊版Directions URL API網頁版才吃的語法），結果整串"optimize:true"被
+// 當成一個真的停靠站字面文字塞進行程裡，變成一個假地點——所以拿掉，
+// 順序完全照我們路線管理裡人工排好的順序（up/down鈕調整過的那個順序）
+// 給Google，Google純粧照著跑，不會也不能自動幫忙重排。
+// 每個停靠站的文字用「代號 地址」（例如"A店 台中市西屯區..."）而不是
+// 只用地址：Google地圖的行程列表上顯示的就是我們傳進去的這串文字，
+// 帶代號可以讓司機/主控一眼看出是哪間店，地址還留著確保能查到正確地
+// 點（單純店名容易撞名、查到別的地方去）。
+function buildMultiStopMapsLink(originAddr, stops){
+  const items = (stops||[]).filter(s=>s && s.address);
+  if(!items.length) return '';
+  const label = s => s.code ? `${s.code} ${s.address}` : s.address;
+  const destination = label(items[items.length-1]);
+  const waypoints = items.slice(0, -1).map(label);
   let url = 'https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(originAddr||'')+'&destination='+encodeURIComponent(destination)+'&travelmode=driving';
-  if(waypoints.length) url += '&waypoints=optimize:true|'+waypoints.map(encodeURIComponent).join('|');
+  if(waypoints.length) url += '&waypoints='+waypoints.map(encodeURIComponent).join('|');
   return url;
 }
 function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURIComponent(text); }
@@ -1759,7 +1766,7 @@ function renderRouteDetail(rid){
         <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km ・ 司機費用 $${money(v.driverFare||0)} ・ 請款總額 $${money(v.billingTotal||0)}</div>
         ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
-        ${(()=>{ const link = buildOptimizedMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id)?.address)); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
+        ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
       </div>`;
   const draft = ensureDraft(r);
   detailEl.innerHTML = `
@@ -1794,7 +1801,7 @@ function renderRouteDetail(rid){
       <div id="dpSearchResults" style="margin-top:6px;"></div>
 
       <label style="margin-top:10px; display:block;">目前順序（可用↑↓調整，實際跑車順序以此為準）</label>
-      ${(()=>{ const link = buildOptimizedMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id)?.address)); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航（依下面目前順序）</a>` : ''; })()}
+      ${(()=>{ const link = buildMultiStopMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航（依下面目前順序）</a>` : ''; })()}
       <div data-orderlist="${r.id}">
         ${draft.order.map((id,i)=>{
           const dp = state.data.dropPoints.find(x=>x.id===id);
