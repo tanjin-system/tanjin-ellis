@@ -12,6 +12,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap');
   :root{
@@ -187,19 +188,33 @@ function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURICom
 // pushNotification()（純記憶體 unshift）已由 js/data-layer.js 的 createNotification()
 // 取代——正式版通知要讓其他人（主控／司機）在別的裝置上也看得到，必須真的寫進資料庫，
 // 不能只是塞進當下這個瀏覽器分頁的記憶體陣列。
-// 從相簿選的照片格式五花八門（尤其手機拍的HEIC，或某些選擇器回傳
-// file.type是空字串），瀏覽器的<img>不一定解得開，解不開就會整個
-// reject、擋掉上傳，讓司機的照片傳不上去。改成解不開/縮圖失敗時，
-// 退回直接用「原始檔案」的data URL上傳（不縮圖、檔案較大，但至少
-// 傳得上去），只有連FileReader讀檔案本身都失敗才真的視為失敗。
-function normalizeImageDataUrl(dataUrl){
-  return /^data:image\/\w+;base64,/.test(dataUrl) ? dataUrl : dataUrl.replace(/^data:[^;]*;base64,/, 'data:image/jpeg;base64,');
+// 手機相簿選出來的照片常常是HEIC格式（iPhone拍照預設格式）——瀏覽器
+// 內建的<img>/canvas在iOS Safari可以解開HEIC，但Android的Chrome等瀏覽器
+// 幾乎都解不開，會整個decode失敗。單純瀏覽器內建功能沒辦法把HEIC轉成
+// 一般圖片，所以另外載入heic2any這個函式庫（在瀏覽器端把HEIC真的解碼
+// 轉成JPEG），這樣才能真正做到縮圖壓縮，不會佔用太多Storage空間；
+// 不是HEIC的檔案完全不受影響，一樣走原本的<img>/canvas流程。
+function looksLikeHeic(file){
+  const type = (file.type||'').toLowerCase();
+  if(type.includes('heic') || type.includes('heif')) return true;
+  return /\.(heic|heif)$/i.test(file.name||'');
 }
-function compressImageFile(file, maxDim=1000, quality=0.6){
+// 縮圖/重新編碼失敗時（HEIC轉檔本身失敗，或<img>解不開其他格式），退回
+// 直接用「原始檔案」的data URL上傳（不縮圖、檔案較大，但至少傳得上去，
+// dataUrlToBytesAndType()那邊也已經改成不管data URL頭部長什麼樣子都
+// 收），只有連FileReader讀檔案本身都失敗才真的視為失敗。
+async function compressImageFile(file, maxDim=1000, quality=0.6){
+  let workingFile = file;
+  if(looksLikeHeic(file) && typeof heic2any === 'function'){
+    try{
+      const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality });
+      workingFile = Array.isArray(converted) ? converted[0] : converted;
+    }catch(e){ console.error('HEIC轉檔失敗，改用原始檔案', e); }
+  }
   return new Promise((resolve, reject)=>{
     const reader = new FileReader();
     reader.onload = ()=>{
-      const rawDataUrl = normalizeImageDataUrl(reader.result);
+      const rawDataUrl = reader.result;
       const img = new Image();
       img.onload = ()=>{
         try{
@@ -216,7 +231,7 @@ function compressImageFile(file, maxDim=1000, quality=0.6){
       img.src = rawDataUrl;
     };
     reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(workingFile);
   });
 }
 // input[capture]屬性在Android上非常不可靠——很多系統版本/瀏覽器（尤其是

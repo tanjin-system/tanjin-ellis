@@ -185,10 +185,21 @@ async function resolveSignatureUrls(statements) {
   data.forEach((item, i) => { targets[i].signatureDataUrl = item?.signedUrl || null; });
 }
 
+// data URL格式是 data:[mediatype][;base64],data ——逗號永遠是切開「頭部
+// 說明」跟「實際資料」的分界，這是規格保證的，不會變。原本用一個很嚴格
+// 的正規表達式要求頭部長得剛好是"image/xxx;base64"，結果部分手機（會
+// 在mediatype跟base64中間多塞一段例如";charset=binary"）產生的data URL
+// 對不上這個嚴格格式，直接被當成「圖片格式錯誤」擋掉上傳——不是照片真
+// 的壞掉，是我們自己的格式檢查太嚴格。改成不管頭部塞了什麼，一律照
+// 逗號切開來，頭部隨便抓得到image/xxx就用，抓不到就預設當jpeg，一律
+// 都收，不再因為頭部格式差一點就整個拒收。
 function dataUrlToBytesAndType(dataUrl) {
-  const match = /^data:(image\/\w+);base64,(.+)$/.exec(dataUrl);
-  if (!match) throw new Error('圖片格式錯誤');
-  const [, contentType, base64] = match;
+  const commaIdx = (dataUrl || '').indexOf(',');
+  if (commaIdx === -1) throw new Error('圖片格式錯誤');
+  const header = dataUrl.slice(0, commaIdx);
+  const base64 = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = /^data:(image\/[\w.\-]+)/.exec(header);
+  const contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
   return { bytes: Uint8Array.from(atob(base64), c => c.charCodeAt(0)), contentType };
 }
 
