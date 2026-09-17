@@ -3056,11 +3056,12 @@ function renderTodayDetail(todays){
             ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未配達：${dp.issueReason}</span>` : ''}
             <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
-              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">${dp.status==='completed'?'重新拍照':'拍照上傳'}</button>
+              ${photoCount<3 ? `
+              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>
               <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${dp.id}" style="display:none;">
-              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photolib="${a.id}|${dp.id}">上傳照片（從相簿選，可多選）</button>
+              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photolib="${a.id}|${dp.id}">上傳照片</button>
               <input type="file" accept="image/*" multiple data-photolibinput="${a.id}|${dp.id}" style="display:none;">
-              ${dp.status==='completed' && photoCount<3 ? `<button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-addphoto="${dp.id}">新增照片（${photoCount}/3）</button><input type="file" accept="image/*" capture="environment" data-addphotofallback="${dp.id}" style="display:none;"><button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-addphotolib="${dp.id}">上傳照片（從相簿選，可多選）</button><input type="file" accept="image/*" multiple data-addphotolibinput="${dp.id}" style="display:none;">` : ''}
+              ` : '<span style="font-size:11.5px; color:var(--ink-soft);">已達3張上限</span>'}
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
             ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
@@ -3100,6 +3101,18 @@ function renderTodayDetail(todays){
       catch(err){ alert(err.message); }
     };
   });
+  // 「拍照上傳」跟「上傳照片」兩顆按鈕共用同一套「填下一格」邏輯：一個
+  // 下貨點最多3格照片，第1格是主要送達證明照（決定這個點是否算已送達），
+  // 第2、3格是附加照片。不管是先按拍照還是先用相簿上傳、按第幾次，都是
+  // 「填下一個還空著的格子」，沒有「重新拍照＝覆蓋」這種概念了——按鈕
+  // 名稱/行為固定，同一顆「拍照上傳」按第一次拍主要照片，再按同一顆按
+  // 鈕拍第二、第三張，都是往後補上附加照片，直到補滿3格按鈕才會消失
+  // （見上面模板 photoCount<3 的判斷）。
+  async function fillNextPhotoSlot(aid, dpid, dataUrl){
+    const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+    if(dp && dp.status!=='completed') await uploadDropPointPhoto(aid, dpid, dataUrl);
+    else await handleExtraMediaUpload(dpid, [dataUrl]);
+  }
   // 拍照按鈕改成自己拉相機串流（openCameraCapture/capturePhoto，見上面
   // compressImageFile旁邊的說明），不再依賴 input[capture] ——那個屬性在
   // Android上很不可靠，很多系統/瀏覽器版本即使寫了 capture="environment"
@@ -3109,60 +3122,8 @@ function renderTodayDetail(todays){
   box.querySelectorAll('[data-photo]').forEach(btn=>{
     const [aid, dpid] = btn.dataset.photo.split('|');
     const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
-    const libInput = box.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
-    const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
     async function go(dataUrl){
-      try{ await uploadDropPointPhoto(aid, dpid, dataUrl); renderContent(); }
-      catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
-    }
-    function confirmOverwriteIfNeeded(){
-      return !(dp && dp.status==='completed') || confirm('這個下貨點已經完成拍照，重新上傳會覆蓋原本的送達證明照，確定要重新拍照嗎？');
-    }
-    btn.onclick = ()=>{
-      if(!confirmOverwriteIfNeeded()) return;
-      capturePhoto(fallbackInput, go);
-    };
-    fallbackInput.onchange = (e)=>{
-      const file = e.target.files[0]; if(!file) return;
-      compressImageFile(file).then(go).catch(err=>{
-        console.error('照片處理失敗', err);
-        alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
-      });
-    };
-    // 「上傳照片」：不開相機，直接跳手機相簿/檔案選擇——鏡頭串流在部分
-    // 手機上不穩定時，讓司機可以直接用手機原生相機APP先拍好，再從相簿
-    // 選那張照片上傳，不用依賴我們這個自建相機。可以一次多選：第一張
-    // 當主要送達證明照，其餘依序補進附加照片（一個下貨點總共最多3張，
-    // 超過的部分不會上傳，會提示哪些沒傳成功）。
-    const libBtn = box.querySelector(`[data-photolib="${aid}|${dpid}"]`);
-    if(libBtn) libBtn.onclick = ()=>{ if(confirmOverwriteIfNeeded()) libInput.click(); };
-    if(libInput) libInput.onchange = (e)=>{
-      const files = [...e.target.files]; if(!files.length) return;
-      const freshDp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-      const existingExtraCount = (freshDp?.media||[]).filter(m=>m.type==='image').length;
-      const extraBudget = Math.max(0, 3 - 1 - existingExtraCount);
-      const [mainFile, ...restFiles] = files;
-      const extraFiles = restFiles.slice(0, extraBudget);
-      const droppedCount = restFiles.length - extraFiles.length;
-      Promise.all([mainFile, ...extraFiles].map(compressImageFile)).then(async ([mainDataUrl, ...extraDataUrls])=>{
-        await uploadDropPointPhoto(aid, dpid, mainDataUrl);
-        if(extraDataUrls.length) await handleExtraMediaUpload(dpid, extraDataUrls);
-        if(droppedCount>0) alert(`一個下貨點最多3張照片，已上傳主要照片＋${extraDataUrls.length}張附加照片，其餘 ${droppedCount} 張未上傳。`);
-        renderContent();
-      }).catch(err=>{
-        console.error('照片處理失敗', err);
-        alert('照片處理失敗，請重新選擇照片再試一次。');
-      });
-    };
-  });
-  // 「新增照片」：送達證明照最多累計3張（主要照片+這裡新增的），達到3張
-  // 之後按鈕就不會再出現；每次都是額外附加一張，不覆蓋任何既有照片。
-  box.querySelectorAll('[data-addphoto]').forEach(btn=>{
-    const dpid = btn.dataset.addphoto;
-    const fallbackInput = box.querySelector(`[data-addphotofallback="${dpid}"]`);
-    const libInput = box.querySelector(`[data-addphotolibinput="${dpid}"]`);
-    async function go(dataUrl){
-      try{ await handleExtraMediaUpload(dpid, [dataUrl]); renderContent(); }
+      try{ await fillNextPhotoSlot(aid, dpid, dataUrl); renderContent(); }
       catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗，請重新拍攝再試一次。'); }
     }
     btn.onclick = ()=> capturePhoto(fallbackInput, go);
@@ -3170,23 +3131,28 @@ function renderTodayDetail(todays){
       const file = e.target.files[0]; if(!file) return;
       compressImageFile(file).then(go).catch(err=>{
         console.error('照片處理失敗', err);
-        alert('照片處理失敗，請重新拍攝再試一次。');
+        alert('照片處理失敗，請重新拍攝或選擇另一張照片再試一次。');
       });
     };
-    const libBtn = box.querySelector(`[data-addphotolib="${dpid}"]`);
-    if(libBtn) libBtn.onclick = ()=> libInput.click();
-    // 一次可以多選：依目前還剩幾格（總共最多3張）決定最多能收幾張，
-    // 選超過的部分不會上傳，會提示哪些沒傳成功。
-    if(libInput) libInput.onchange = (e)=>{
+  });
+  // 「上傳照片」：不開相機，直接跳手機相簿/檔案選擇——鏡頭串流在部分
+  // 手機上不穩定時，讓司機可以直接用手機原生相機APP先拍好，再從相簿
+  // 選照片上傳，不用依賴我們這個自建相機。可以一次多選，依序填入還空著
+  // 的格子（最多3格），選超過的部分不會上傳，會提示哪些沒傳成功。
+  box.querySelectorAll('[data-photolib]').forEach(btn=>{
+    const [aid, dpid] = btn.dataset.photolib.split('|');
+    const libInput = box.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
+    btn.onclick = ()=> libInput.click();
+    libInput.onchange = (e)=>{
       const files = [...e.target.files]; if(!files.length) return;
-      const dp = todays.flatMap(a=>a.dropPoints).find(x=>x.id===dpid);
+      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
       const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
       const budget = Math.max(0, 3 - photoCount);
       const acceptFiles = files.slice(0, budget);
       const droppedCount = files.length - acceptFiles.length;
       Promise.all(acceptFiles.map(compressImageFile)).then(async dataUrls=>{
-        if(dataUrls.length) await handleExtraMediaUpload(dpid, dataUrls);
-        if(droppedCount>0) alert(`一個下貨點最多3張照片，已上傳${dataUrls.length}張，其餘 ${droppedCount} 張未上傳。`);
+        for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
+        if(droppedCount>0) alert(`一個下貨點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
         renderContent();
       }).catch(err=>{
         console.error('照片處理失敗', err);
