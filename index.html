@@ -3048,7 +3048,7 @@ function openWeekTripPreview(assignmentId){
       <div class="modal-box" style="max-width:480px;">
         <div class="toolbar"><h3 style="margin:0;">${routeName(a.routeId)}</h3><button class="btn ghost" id="closeWeekTrip">關閉</button></div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 8px;">${a.date}（星期${['日','一','二','三','四','五','六'][new Date(a.date+'T00:00:00').getDay()]}）</p>
-        <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
+        <p style="font-size:12.5px;">出發點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
         <p style="font-size:12.5px;">里程：${a.distanceKm??'—'} km ・ <strong>司機費用：$${money(a.fare)}</strong></p>
         <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">下貨點（${a.dropPoints.length}）</label>
         ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排下貨點</div>'}
@@ -3071,7 +3071,7 @@ function renderTodayDetail(todays){
           <a class="btn ghost" href="${lineShareLink(`【出車提醒】${a.date} ${routeName(a.routeId)}\n出發點：${a.origin||'—'}\n下貨點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
         </span>
       </div>
-      <p style="font-size:12.5px;">出發點：${a.origin||'—'} <a class="link" href="${mapLink(a.origin||'')}" target="_blank">${a.origin?'開啟導航':''}</a></p>
+      <p style="font-size:12.5px;">出發點：${a.origin||'—'} <a class="link" href="${mapLink(a.origin||'')}" target="_blank">${a.origin?'開啟導航':''}</a> ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
         ${a.dropPoints.map(dp=>{
           const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
