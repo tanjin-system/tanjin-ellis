@@ -339,7 +339,13 @@ function mediaGalleryHtml(media){
 // （這個動作跟使用者點擊是同一時間，不會被瀏覽器當成不明來源的彈出視窗擋掉），
 // PDF做好後把內容放進那個分頁，用瀏覽器內建的PDF檢視器開啟，使用者自己用瀏覽器
 // 的分享／下載功能存檔即可，比強制觸發下載在各平台上都穩定。
-function exportPrintable(title, bodyHtml){
+// heading省略時預設沿用title當PDF內文最上面顯示的標題（原本的行為，
+// 大部分報表就是要顯示自己的標題，例如「週班表_xxx」）；title本身永遠
+// 只拿去當下載檔名用（已經有做過檔名安全字元替換），跟heading是兩件
+// 事——請款單特別傳空字串heading，因為請款單內文最上面已經自己放了
+// 「信興行銷有限公司」，不需要再重複顯示一次跟檔名一樣的標題。
+function exportPrintable(title, bodyHtml, heading){
+  if(heading===undefined) heading = title;
   const previewWin = window.open('', '_blank');
   if(previewWin){
     previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
@@ -373,7 +379,7 @@ function exportPrintable(title, bodyHtml){
       table, tr, thead, tbody, .panel, .version-block, .date-group{ break-inside: avoid; page-break-inside: avoid; }
       h1, h2, h3, h4{ break-after: avoid; page-break-after: avoid; }
     </style>
-    <h1>${title}</h1>
+    ${heading ? `<h1>${heading}</h1>` : ''}
     ${bodyHtml}
   `;
   document.body.appendChild(wrap);
@@ -477,11 +483,11 @@ function exportPrintable(title, bodyHtml){
     alert('產生PDF失敗：' + err.message);
   });
 }
-function exportPanelPrint(panelEl, title){
+function exportPanelPrint(panelEl, title, heading){
   if(!panelEl){ alert('找不到可列印的內容'); return; }
   const clone = panelEl.cloneNode(true);
   clone.querySelectorAll('.no-print').forEach(el=>el.remove());
-  exportPrintable(title, clone.innerHTML);
+  exportPrintable(title, clone.innerHTML, heading);
 }
 // 勞報單專用的直式PDF：每份 slipHtml（payrollSlipHtml() 產生的字串）固定佔
 // 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週班表那樣允許
@@ -2815,7 +2821,7 @@ function renderBilling(c){
         <button class="btn amber" id="printBilling">產生請款單（列印/另存PDF）</button>
         <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
       </div>`;
-    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('billingPrintArea'), `請款單_${start}_${end}`);
+    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('billingPrintArea'), `請款單_${start}_${end}`, '');
     document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end);
   }
   document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
