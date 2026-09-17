@@ -2648,6 +2648,7 @@ function addAOASheet(wb, sheetName, aoa, merges){
 function buildChannelSummarySheet(wb, report){
   const { channel, start, end, segRows, adjustments, grand, originWithTax } = report;
   const aoa = [];
+  aoa.push(['信興行銷有限公司']);
   aoa.push([`${channel.name}｜物流費用請款總覽（${start}~${end}）`]);
   aoa.push(['請款期間','物流費']);
   segRows.forEach(s=> aoa.push([`${s.start}~${s.end}`, s.amount]));
@@ -2659,7 +2660,7 @@ function buildChannelSummarySheet(wb, report){
   aoa.push(['各區費用總覽（依供應商／出發點）']);
   aoa.push(['供應商','車趟數','配送店次','未稅','稅額','含稅']);
   originWithTax.forEach(o=> aoa.push([originLabel(o.originAddr), o.tripCount, o.storeCount, o.untaxed, o.tax, o.withTax]));
-  const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:5} }];
+  const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:1,c:0}, e:{r:1,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:5} }];
   addAOASheet(wb, `${channel.name}請款總覽`, aoa, merges);
 }
 function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
@@ -2803,6 +2804,7 @@ function renderBilling(c){
     const merged = mergedRunRows(channelIds, start, end);
     document.getElementById('billingResult').innerHTML = `
       <div id="billingPrintArea">
+        <h2 style="text-align:center; margin:0 0 14px;">信興行銷有限公司</h2>
         ${reports.map(channelSummaryPanelHtml).join('')}
         <div class="panel">
           <h3 style="margin-top:0;">配送明細（已選通路：${reports.map(r=>r.channel.name).join('、')}）</h3>
