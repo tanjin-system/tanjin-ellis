@@ -251,21 +251,23 @@ async function compressImageFile(file, maxDim=1000, quality=0.6){
 // {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
 // 相機權限），呼叫端應該退回原本 <input capture> 的方式讓使用者至少還能
 // 選一張既有的照片，不會整個功能卡死。
-// 拍完第一張後，緊接著再拍第二張、第三張時，之前的做法是每次都把鏡頭
-// 串流關掉再重新要一次——實測部分手機（回報主要是iOS）這樣連續兩次呼叫
-// getUserMedia，第二次會失敗，硬體/系統似乎需要一點時間才會真的釋放上
-// 一次的串流，多短的延遲都不保證解決。改成根本不要有「再要一次」這個
-// 動作：同一個瀏覽分頁裡，鏡頭串流開一次就一直留著、重複使用，拍完不
-// 關閉，下一次拍照直接沿用同一個串流接到新的畫面上，不會再觸發第二次
-// getUserMedia要求。只有切到背景（visibilitychange）時才真的關閉鏡頭，
-// 尊重隱私、省電；下次要拍照時會自動重新要一次（那算是「第一次」，不
-// 是連續第二次，理論上不會踩到這個bug）。
-let cachedCameraStream = null;
-function stopCachedCameraStream(){
-  if(cachedCameraStream){ cachedCameraStream.getTracks().forEach(t=>t.stop()); cachedCameraStream = null; }
-}
-document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopCachedCameraStream(); });
-function openCameraCapture(){
+// 拍完第一張後，緊接著再拍第二張、第三張——先前試過「把鏡頭串流留著、
+// 下次直接重用」，實測發現這樣反而在部分手機上拍出全黑照片（懷疑是
+// 串流被移到新的<video>元素時，部分瀏覽器沒有正確重新啟動畫面，變成
+// 定格在黑畫面）；也試過「每次都重新getUserMedia」，部分手機（尤其
+// Android）連續呼叫第二次直接失敗。兩種做法都繞不開——所以改成根本
+// 不要有「關閉再重開」這個動作：一次要拍幾張，鏡頭視窗開著不關，讓
+// 使用者在同一個畫面裡連續拍完全部幾張（每拍一張畫面上會多一個縮圖、
+// 「拍照」鍵可以一直按到拍滿張數為止），只有整批拍完按「完成」或「取消」
+// 才會真的關閉鏡頭、停止串流——全程只呼叫一次getUserMedia、視訊畫面
+// 從頭到尾是同一個<video>元素，不會有「重新接上串流」這個環節，理論上
+// 兩種bug都碰不到。
+// 回傳 {dataUrls:[...]} 表示拍到至少一張（可能小於maxShots，使用者可以
+// 提前按完成）；{cancelled:true} 表示一張都沒拍、使用者按取消；
+// {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
+// 相機權限），呼叫端應該退回原本 <input capture multiple> 的方式讓
+// 使用者至少還能選現成的照片，不會整個功能卡死。
+function openCameraCapture(maxShots){
   return new Promise((resolve)=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       resolve({ fallback:true });
@@ -275,15 +277,23 @@ function openCameraCapture(){
     overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
     overlay.innerHTML = `
       <video autoplay playsinline muted style="flex:1; width:100%; height:100%; object-fit:cover; background:#000;"></video>
+      <div data-camthumbs style="display:flex; gap:6px; padding:8px; background:#111; overflow-x:auto;"></div>
       <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
-        <button type="button" data-camcancel style="flex:1; max-width:160px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
-        <button type="button" data-camshoot style="flex:1; max-width:160px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">拍照</button>
+        <button type="button" data-camcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-camshoot style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">拍照（<span data-camcount>0</span>/${maxShots}）</button>
+        <button type="button" data-camdone style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#2C6B44; color:#fff; font-size:15px; font-weight:700; display:none;">完成</button>
       </div>`;
     document.body.appendChild(overlay);
     const video = overlay.querySelector('video');
+    const shootBtn = overlay.querySelector('[data-camshoot]');
+    const doneBtn = overlay.querySelector('[data-camdone]');
+    const countEl = overlay.querySelector('[data-camcount]');
+    const thumbsEl = overlay.querySelector('[data-camthumbs]');
+    let stream = null;
     let settled = false;
+    const shots = [];
     function cleanup(){
-      // 注意：故意不stop串流，讓下一次拍照可以直接重用（見上面說明）。
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
       if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
     }
     function settle(result){
@@ -292,22 +302,19 @@ function openCameraCapture(){
       cleanup();
       resolve(result);
     }
-    (async ()=>{
-      try{
-        if(!cachedCameraStream || cachedCameraStream.getVideoTracks().some(t=>t.readyState!=='live')){
-          stopCachedCameraStream();
-          cachedCameraStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
-        }
-        if(settled){ return; }
-        video.srcObject = cachedCameraStream;
-      }catch(e){ settle({ fallback:true }); }
-    })();
-    overlay.querySelector('[data-camcancel]').onclick = ()=> settle({ cancelled:true });
-    overlay.querySelector('[data-camshoot]').onclick = ()=>{
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
+      stream = s;
+      video.srcObject = s;
+      video.play().catch(()=>{}); // 部分裝置的autoplay政策較嚴格，明確呼叫一次play()避免畫面停在黑屏
+    }).catch(()=>{ settle({ fallback:true }); });
+    overlay.querySelector('[data-camcancel]').onclick = ()=> settle(shots.length ? { dataUrls:shots } : { cancelled:true });
+    doneBtn.onclick = ()=> settle({ dataUrls: shots });
+    shootBtn.onclick = ()=>{
       // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
       // 是黑的），這種情況直接當作失敗退回檔案選擇，不要硬拍出一張空白
       // 照片讓司機以為拍成功了。
-      if(!video.videoWidth || !video.videoHeight){ settle({ fallback:true }); return; }
+      if(!video.videoWidth || !video.videoHeight){ settle(shots.length ? { dataUrls:shots } : { fallback:true }); return; }
       const maxDim = 1000;
       let width = video.videoWidth, height = video.videoHeight;
       if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
@@ -317,16 +324,24 @@ function openCameraCapture(){
       canvas.getContext('2d').drawImage(video, 0, 0, width, height);
       let dataUrl;
       try{ dataUrl = canvas.toDataURL('image/jpeg', 0.7); }
-      catch(e){ settle({ fallback:true }); return; }
-      settle({ dataUrl });
+      catch(e){ settle(shots.length ? { dataUrls:shots } : { fallback:true }); return; }
+      shots.push(dataUrl);
+      countEl.textContent = shots.length;
+      const thumb = document.createElement('img');
+      thumb.src = dataUrl;
+      thumb.style.cssText = 'width:48px; height:48px; object-fit:cover; border-radius:4px; border:2px solid #fff;';
+      thumbsEl.appendChild(thumb);
+      doneBtn.style.display = 'block';
+      if(shots.length>=maxShots) settle({ dataUrls:shots });
     };
   });
 }
 // 拍照按鈕的統一入口：先試自建相機（一定是相機，不會跳相簿），拿不到
-// 鏡頭權限或裝置不支援時才退回原本的 <input capture> 檔案選擇（fallbackInput）。
-async function capturePhoto(fallbackInput, onDataUrl){
-  const result = await openCameraCapture();
-  if(result.dataUrl){ onDataUrl(result.dataUrl); }
+// 鏡頭權限或裝置不支援時才退回原本的 <input capture multiple> 檔案選擇
+// （fallbackInput）。onDataUrls收到的是陣列，即使maxShots是1也一樣。
+async function capturePhoto(fallbackInput, maxShots, onDataUrls){
+  const result = await openCameraCapture(maxShots);
+  if(result.dataUrls && result.dataUrls.length){ onDataUrls(result.dataUrls); }
   else if(result.fallback){ fallbackInput.click(); }
   // cancelled：使用者自己取消，什麼都不做。
 }
@@ -3218,17 +3233,35 @@ function renderTodayDetail(todays){
   box.querySelectorAll('[data-photo]').forEach(btn=>{
     const [aid, dpid] = btn.dataset.photo.split('|');
     const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
-    async function go(dataUrl){
-      try{ await fillNextPhotoSlot(aid, dpid, dataUrl); renderContent(); }
-      catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
+    async function goMany(dataUrls){
+      try{
+        for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
+        renderContent();
+      }catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
     }
-    btn.onclick = ()=> capturePhoto(fallbackInput, go);
+    btn.onclick = ()=>{
+      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+      const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
+      const budget = Math.max(1, 3 - photoCount);
+      // 一次開一個「多拍模式」的鏡頭視窗，budget是這一次最多還能拍幾張
+      // （例如已經有主要照片、還剩2格附加照片，budget就是2）——同一個
+      // 視窗裡連拍到budget張或按「完成」才關閉，不會每拍一張就關掉鏡頭
+      // 再重開一次（見openCameraCapture()旁邊的說明，這是為了避開連續
+      // 拍照時部分手機會失敗/黑屏的問題）。
+      capturePhoto(fallbackInput, budget, goMany);
+    };
     fallbackInput.onchange = (e)=>{
-      const file = e.target.files[0]; if(!file) return;
-      compressImageFile(file).then(go).catch(err=>{
-        console.error('照片處理失敗', err);
-        alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
-      });
+      const files = [...e.target.files]; if(!files.length) return;
+      (async ()=>{
+        try{
+          const dataUrls = [];
+          for(const f of files) dataUrls.push(await compressImageFile(f));
+          await goMany(dataUrls);
+        }catch(err){
+          console.error('照片處理失敗', err);
+          alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
+        }
+      })();
     };
   });
   // 「上傳照片」：不開相機，直接跳手機相簿/檔案選擇——鏡頭串流在部分
