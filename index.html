@@ -2422,14 +2422,18 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   // 不是當月15日；跨年（12月→次年1月）要記得年份也要跟著加1。
   const payMonthDate = new Date(Number(y), Number(m), 1); // Date月份參數0-indexed，剛好等於「下一個月」
   const payDateStr = `${payMonthDate.getFullYear()}-${String(payMonthDate.getMonth()+1).padStart(2,'0')}-15`;
-  // 勞務內容只列車趟服務報酬這一行——預支不算扣款所以不影響金額、加項/
-  // 減項雖然還是會影響下面「報酬總額」，但兩種調整項的明細本身都不需要
-  // 逐項列在這張正式勞報單上（司機若想知道明細，另外在「我的報酬」頁
-  // 看即時的調整項清單）。
+  // 勞務內容列車趟服務報酬＋加項/減項明細——加項/減項會影響下面「報酬
+  // 總額」，也需要逐項列在這張正式勞報單上讓司機清楚知道明細；只有預支
+  // 不列出來，因為預支不算扣款、也不影響這裡的金額（是薪資提前請領，
+  // 不該在這張正式文件上再處理一次）。
   const contentRows = [];
   if(r.trips.length){
     contentRows.push(`<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
   }
+  r.adjustments.filter(a=>a.type!=='advance').forEach(a=>{
+    const amt = a.type==='deduct' ? -Math.abs(Number(a.amount)) : Number(a.amount);
+    contentRows.push(`<tr><td>${monthStr}</td><td>${adjTypeLabel(a.type)}</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">${amt>=0?'':'-'}$${money(Math.abs(amt))}</td><td>—</td></tr>`);
+  });
   const sigCell = opts.signatureDataUrl
     ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
     : '<div style="height:56px;"></div>';
