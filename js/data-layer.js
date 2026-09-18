@@ -1117,6 +1117,25 @@ async function rejectStatementSignature(statementId) {
   await createNotification('statement', `主控已退回 ${driverName(s?.driverId)} ${s?.month || ''} 的勞報單簽名，待司機重新簽名`);
 }
 
+// 司機首頁「同出發點今日尚未配送完成」：呼叫 schema.sql 裡的
+// security definer 函式 driver_depot_overview()，只回傳沒有金額的窄
+// 欄位（車次名稱/司機姓名/狀態/還沒送達的店名清單），繞過司機只能查
+// 自己車趟的RLS限制，但不會洩漏其他司機的薪資/請款資料。
+async function fetchDepotOverview(date) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.rpc('driver_depot_overview', { p_date: date });
+  if (error) { console.error('取得同出發點車隊狀況失敗:', error.message); return []; }
+  return (data || []).map(r => ({
+    assignmentId: r.assignment_id,
+    routeName: r.route_name,
+    driverName: r.driver_name,
+    status: r.status,
+    seq: r.seq,
+    shift: r.shift,
+    remainingPoints: r.remaining_points || []
+  }));
+}
+
 // 司機自己按「確認簽名」把 signed 鎖定成 confirmed，鎖定後司機端不再顯示
 // 「重新簽名」按鈕（例如主控已經拿這份簽名去申報國稅局之後，就不該再讓
 // 簽名內容悄悄變掉）。主控的退回簽名不受這個狀態影響，隨時能退回重簽。

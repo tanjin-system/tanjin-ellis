@@ -826,3 +826,61 @@ grant select on announcement_recipients to app_driver;
 create policy admin_all on announcement_recipients for all to app_admin using (true) with check (true);
 create policy driver_select_own on announcement_recipients for select to app_driver
   using (driver_id = auth_driver_id());
+
+-- ============================================================
+-- PART 7：司機互看「同出發點車隊今日尚未配送完成」
+-- 概念沿用主控首頁本來就有的「今日尚未配送完成」面板（見index.html的
+-- undeliveredTodayGroups()），只是拆分成「依同出發點」給司機看，讓司機
+-- 也能掌握同一出發點其他車次的出發/配送進度。
+-- assignments 的 driver_select_own policy 只讓司機查到自己的車趟，看不到
+-- 同出發點其他司機的資料——這是故意的，因為 assignments 整張表包含司機
+-- 費用/請款金額等敏感欄位，不能整表開放給其他司機查。這裡改用一個
+-- security definer 函式，只回傳「車次名稱、司機姓名、出發狀態、還沒送達
+-- 的店名清單」這幾個沒有金額的欄位，繞過（但不破壞）assignments 本身的
+-- RLS限制——app_driver 只拿得到這個函式回傳的窄欄位結果，查不到底下
+-- assignments/routes 表的其他欄位（尤其是fare/payroll_fare_snapshot/
+-- billing_total_snapshot這些薪資/請款金額，完全不會出現在回傳結果裡）。
+-- ============================================================
+create or replace function driver_depot_overview(p_date date default current_date)
+returns table (
+  assignment_id uuid,
+  route_name text,
+  driver_name text,
+  status text,
+  seq text,
+  shift text,
+  remaining_points text[]
+)
+language plpgsql security definer set search_path = public as $$
+declare
+  my_id uuid := auth_driver_id();
+begin
+  if my_id is null then
+    return;
+  end if;
+  return query
+    select
+      a.id,
+      r.name,
+      d.name,
+      a.status,
+      r.seq,
+      r.shift,
+      array(
+        select coalesce(adp.code, adp.address) from assignment_drop_points adp
+        where adp.assignment_id = a.id and adp.status <> 'completed' and adp.issue_reason is null
+        order by adp.sequence_no
+      )
+    from assignments a
+    join routes r on r.id = a.route_id
+    join drivers d on d.id = a.driver_id
+    where a.trip_date = p_date
+      and a.status <> 'cancelled'
+      and r.origin_id in (
+        select r2.origin_id from assignments a2
+        join routes r2 on r2.id = a2.route_id
+        where a2.driver_id = my_id and a2.trip_date = p_date
+      );
+end;
+$$;
+grant execute on function driver_depot_overview(date) to app_driver;

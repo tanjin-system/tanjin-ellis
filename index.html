@@ -1015,6 +1015,38 @@ function undeliveredTodayGroups(shifts){
     }))
     .filter(g=>g.points.length);
 }
+// 司機首頁「同出發點今日尚未配送完成」：概念跟上面 undeliveredTodayGroups()
+// 一樣，只是拆分成「只看跟我同一個出發點的車次」給司機看。司機登入時
+// state.data.assignments 因為RLS只有自己的車趟，算不出「同出發點其他
+// 車次」，要透過 fetchDepotOverview()（呼叫schema.sql的security definer
+// 函式）另外查；主控本人或「主控檢視中」預覽時本來就有完整資料，直接
+// 從 state.data 算，確保跟司機實際登入看到的內容一致，不用另外呼叫。
+let depotOverviewCache = { key:null, rows:null };
+function computeDepotOverviewLocal(driverId, date){
+  const myAssignment = state.data.assignments.find(a=>a.driverId===driverId && a.date===date && a.status!=='cancelled');
+  if(!myAssignment) return [];
+  const myRoute = state.data.routes.find(r=>r.id===myAssignment.routeId);
+  if(!myRoute) return [];
+  return state.data.assignments
+    .filter(a=> a.date===date && a.status!=='cancelled')
+    .map(a=>({ a, route: state.data.routes.find(r=>r.id===a.routeId) }))
+    .filter(({route})=> route && route.originAddr===myRoute.originAddr)
+    .sort((x,y)=> routeSortCompare(x.route, y.route))
+    .map(({a, route})=>({
+      assignmentId:a.id, routeName:route.name, driverName:driverName(a.driverId), status:a.status,
+      seq:route.seq, shift:route.shift,
+      remainingPoints: a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.issueReason).map(dp=>dpLabel(dp))
+    }));
+}
+async function loadDepotOverview(driverId, date){
+  const key = driverId+'|'+date;
+  if(depotOverviewCache.key===key) return depotOverviewCache.rows;
+  const rows = (state.role==='driver' && !state.adminViewDriver)
+    ? await fetchDepotOverview(date)
+    : computeDepotOverviewLocal(driverId, date);
+  depotOverviewCache = { key, rows };
+  return rows;
+}
 function renderHomeAdmin(c){
   const tiles = [
     {id:'announcements', label:'公告管理', sub:'發布訊息給全體司機'},
@@ -1118,9 +1150,25 @@ function renderHomeDriver(c){
         <span style="font-size:11px; color:var(--ink-soft);">${new Date(a.createdAt).toLocaleString('zh-Hant-TW')}</span>
       </div>`).join('')}
     </div>` : ''}
+    <div class="panel" style="border-color:var(--danger); border-width:2px;">
+      <h3 style="margin-top:0;">🚚 同出發點今日尚未配送完成</h3>
+      <div id="depotOverviewBox"><div class="empty">載入中…</div></div>
+    </div>
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
+  loadDepotOverview(dId, todayStr()).then(rows=>{
+    if(state.tab!=='home') return; // 使用者可能早就切到別的分頁了，避免這裡的畫面蓋掉別的內容
+    const box = document.getElementById('depotOverviewBox');
+    if(!box) return;
+    const groups = rows.filter(r=>r.remainingPoints.length);
+    box.innerHTML = groups.length ? groups.map(g=>`
+      <div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);">
+        <strong>${escapeHtml(g.routeName)} ${escapeHtml(g.driverName)}</strong>
+        ${g.status==='scheduled'?' <span class="badge pending">尚未出發</span>':g.status==='in_progress'?' <span class="badge progress">執行中</span>':''}
+        <br>${g.remainingPoints.map(escapeHtml).join('、')}
+      </div>`).join('') : '<div class="empty">同出發點的車次今天都已配送完成 🎉</div>';
+  });
 }
 
 // ---------- 司機資料（含車輛、銀行細節） ----------
