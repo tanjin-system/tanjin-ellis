@@ -251,6 +251,20 @@ async function compressImageFile(file, maxDim=1000, quality=0.6){
 // {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
 // 相機權限），呼叫端應該退回原本 <input capture> 的方式讓使用者至少還能
 // 選一張既有的照片，不會整個功能卡死。
+// 拍完第一張後，緊接著再拍第二張、第三張時，之前的做法是每次都把鏡頭
+// 串流關掉再重新要一次——實測部分手機（回報主要是iOS）這樣連續兩次呼叫
+// getUserMedia，第二次會失敗，硬體/系統似乎需要一點時間才會真的釋放上
+// 一次的串流，多短的延遲都不保證解決。改成根本不要有「再要一次」這個
+// 動作：同一個瀏覽分頁裡，鏡頭串流開一次就一直留著、重複使用，拍完不
+// 關閉，下一次拍照直接沿用同一個串流接到新的畫面上，不會再觸發第二次
+// getUserMedia要求。只有切到背景（visibilitychange）時才真的關閉鏡頭，
+// 尊重隱私、省電；下次要拍照時會自動重新要一次（那算是「第一次」，不
+// 是連續第二次，理論上不會踩到這個bug）。
+let cachedCameraStream = null;
+function stopCachedCameraStream(){
+  if(cachedCameraStream){ cachedCameraStream.getTracks().forEach(t=>t.stop()); cachedCameraStream = null; }
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopCachedCameraStream(); });
 function openCameraCapture(){
   return new Promise((resolve)=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -267,10 +281,9 @@ function openCameraCapture(){
       </div>`;
     document.body.appendChild(overlay);
     const video = overlay.querySelector('video');
-    let stream = null;
     let settled = false;
     function cleanup(){
-      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+      // 注意：故意不stop串流，讓下一次拍照可以直接重用（見上面說明）。
       if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
     }
     function settle(result){
@@ -279,21 +292,16 @@ function openCameraCapture(){
       cleanup();
       resolve(result);
     }
-    // 部分手機（回報主要是iOS）連續兩次呼叫getUserMedia時，第一次拍完
-    // 停止串流後立刻再開第二次會失敗——鏡頭硬體/系統似乎需要一點時間
-    // 才會真的釋放上一次的串流。這裡加一個很短的延遲當緩解措施，不保證
-    // 一定解決（我們沒有能重現問題的實機可以驗證），真的還是不行的話
-    // 旁邊新增的「上傳照片」讓司機可以直接從手機相簿選現成的照片，不用
-    // 依賴這個相機鏡頭串流。
-    new Promise(r=>setTimeout(r,300)).then(()=>{
-      if(settled) return;
-      return navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
-    }).then(s=>{
-      if(!s) return;
-      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
-      stream = s;
-      video.srcObject = s;
-    }).catch(()=>{ settle({ fallback:true }); });
+    (async ()=>{
+      try{
+        if(!cachedCameraStream || cachedCameraStream.getVideoTracks().some(t=>t.readyState!=='live')){
+          stopCachedCameraStream();
+          cachedCameraStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
+        }
+        if(settled){ return; }
+        video.srcObject = cachedCameraStream;
+      }catch(e){ settle({ fallback:true }); }
+    })();
     overlay.querySelector('[data-camcancel]').onclick = ()=> settle({ cancelled:true });
     overlay.querySelector('[data-camshoot]').onclick = ()=>{
       // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
@@ -3531,11 +3539,11 @@ function renderMyStatement(c){
 // 沒有真正的驗證）與 renderLoginGate（直接比對 state.data 裡的明文PIN/代碼）
 // 已經整個由 js/auth.js 取代：改成呼叫 Vercel Serverless Function 驗證、拿到簽過名的
 // JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
+// 司機視角原本只顯示「碳金車隊」，把「信興」拿掉——沒有留下原因，
+// 使用者反映司機登入後「信興」不見了要修正，改成不管主控／司機視角都
+// 顯示完整的「信興｜碳金車隊」。
 function updateTitle(){
-  const inDriverView = state.adminViewDriver || state.role==='driver';
-  document.getElementById('appTitle').innerHTML = inDriverView
-    ? '<span class="title-tan">碳金車隊</span>'
-    : '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span>';
+  document.getElementById('appTitle').innerHTML = '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span>';
 }
 function updateHeaderBar(){
   const who = document.getElementById('whoAmI');
