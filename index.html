@@ -2442,7 +2442,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       <h3 style="text-align:center; margin:0 0 14px;">${Number(m)}月勞務報酬單</h3>
       <table>
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
-        <tr><td>所得人姓名</td><td>${driver.name}</td><td>身分證／居留證號</td><td>${driver.idNumber||'（未填寫）'}</td></tr>
+        <tr><td>所得人姓名</td><td>${driver.bank.holder||driver.name}</td><td>身分證／居留證號</td><td>${driver.idNumber||'（未填寫）'}</td></tr>
         <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>銀行轉帳</td></tr>
         <tr><td>銀行／分行</td><td>${driver.bank.bankName||'—'}／${driver.bank.branch||'—'}</td><td>帳號</td><td>${driver.bank.account||'—'}</td></tr>
       </table>
