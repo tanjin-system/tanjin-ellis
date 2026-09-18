@@ -1362,6 +1362,8 @@ function renderDrivers(c){
     });
     listEl.querySelectorAll('[data-regen]').forEach(btn=>{
       btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(d=>d.id===btn.dataset.regen);
+        if(!confirm(`確定要重設「${driver?.name||''}」的登入代碼嗎？舊代碼會立刻失效，這位司機要用新代碼才能登入——記得把新代碼告訴他。`)) return;
         try{ await regenerateDriverAccessCode(btn.dataset.regen); renderContent(); }
         catch(err){ alert(err.message); }
       };
@@ -1371,6 +1373,8 @@ function renderDrivers(c){
     });
     listEl.querySelectorAll('[data-del]').forEach(btn=>{
       btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(d=>d.id===btn.dataset.del);
+        if(!confirm(`確定要刪除司機「${driver?.name||''}」嗎？\n\n如果這位司機已有歷史車趟紀錄，系統會改為「停用」以保留歷史資料（該司機將無法再登入）；如果從未有任何車趟，會直接永久刪除、無法復原。`)) return;
         try{
           const result = await deleteOrDeactivateDriver(btn.dataset.del);
           if(result==='deactivated') alert('這位司機已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
@@ -1580,6 +1584,8 @@ function renderChannelList(){
   });
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
+      const ch = state.data.channels.find(x=>x.id===btn.dataset.del);
+      if(!confirm(`確定要刪除通路「${ch?.name||''}」嗎？\n\n如果這個通路已有下貨點或歷史車趟關聯，系統會改為「已停用」保留歷史分類；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateChannel(btn.dataset.del);
         if(result==='deactivated') alert('這個通路已有下貨點或歷史車趟關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
@@ -1678,6 +1684,8 @@ function renderDpListBody(){
   });
   wrap.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
+      const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.del);
+      if(!confirm(`確定要刪除下貨點「${dp?dpLabel(dp):''}」嗎？\n\n如果這個下貨點已被路線版本或歷史車趟使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateDropPoint(btn.dataset.del);
         if(result==='deactivated') alert('這個下貨點已被路線版本或歷史車趟使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
@@ -1751,6 +1759,8 @@ function renderOgList(){
   });
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
+      const og = state.data.origins.find(x=>x.id===btn.dataset.del);
+      if(!confirm(`確定要刪除出發點「${og?.label||og?.address||''}」嗎？\n\n如果這個出發點已被路線或歷史車趟使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateOrigin(btn.dataset.del);
         if(result==='deactivated') alert('這個出發點已被路線或歷史車趟使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
@@ -2005,6 +2015,7 @@ function renderRouteDetail(rid){
   });
   detailEl.querySelectorAll('[data-delroute]').forEach(btn=>{
     btn.onclick = async ()=>{
+      if(!confirm(`確定要刪除路線「${r.name}」嗎？這條路線還沒有任何歷史版本紀錄，刪除後會永久消失、無法復原。`)) return;
       try{
         await deleteRoute(btn.dataset.delroute);
         delete routeDraft[btn.dataset.delroute]; expandedRouteId=null;
@@ -2367,6 +2378,7 @@ function renderAssignmentDetail(id){
   `;
   const db = document.getElementById('assignDetail').querySelector('[data-delassign]');
   if(db) db.onclick = async ()=>{
+    if(!confirm(`確定要刪除 ${a.date} ${routeName(a.routeId)}（${driverName(a.driverId)}）這趟排定中的車次嗎？刪除後這位司機當天就不會再看到這趟行程，無法復原。`)) return;
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
   };
@@ -2575,6 +2587,8 @@ function renderPayroll(c){
     document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(driverId)}_${monthStr}_勞報單`);
     document.querySelectorAll('[data-deladj]').forEach(btn=>{
       btn.onclick=async()=>{
+        const adj = r.adjustments.find(x=>x.id===btn.dataset.deladj);
+        if(!confirm(`確定要刪除這筆「${adj?adjTypeLabel(adj.type):''}」調整項嗎（$${money(adj?.amount||0)}，${adj?.note||'無備註'}）？刪除後會影響這個月的報酬總額計算，無法復原。`)) return;
         try{ await deleteAdjustment(btn.dataset.deladj); refresh(); }
         catch(err){ alert(err.message); }
       };
@@ -2851,7 +2865,11 @@ function renderBilling(c){
     const list = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===period.start && x.periodEnd===period.end);
     document.getElementById('billingAdjList').innerHTML = list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">此週期尚無例外調整</div>';
     document.getElementById('billingAdjList').querySelectorAll('[data-deladj]').forEach(btn=>{
-      btn.onclick = async ()=>{ try{ await deleteBillingAdjustment(btn.dataset.deladj); refreshAdjList(); refresh(); }catch(err){ alert(err.message); } };
+      btn.onclick = async ()=>{
+        const adj = list.find(x=>x.id===btn.dataset.deladj);
+        if(!confirm(`確定要刪除這筆請款例外調整嗎（${adj?.note||'無備註'}，${adj&&adj.amount>=0?'+':''}$${money(adj?.amount||0)}）？刪除後會影響這個通路這期的請款總額，無法復原。`)) return;
+        try{ await deleteBillingAdjustment(btn.dataset.deladj); refreshAdjList(); refresh(); }catch(err){ alert(err.message); }
+      };
     });
   }
   document.getElementById('addBillingAdj').onclick = async ()=>{
