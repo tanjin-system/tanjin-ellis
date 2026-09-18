@@ -754,6 +754,17 @@ function driverMonthly(driverId, monthStr){
   const adjTotal = adjustments.reduce((s,a)=> s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
   return { trips, tripTotal, adjustments, adjTotal, net: tripTotal+adjTotal };
 }
+// 勞報單（正式稅務/勞務文件）月結確認時要用的淨額，跟上面driverMonthly()
+// 算給「我的報酬/薪資結算」即時參考用的net故意不一樣：預支是薪資提前
+// 請領，不是扣款，不該讓這張要簽名的正式文件把預支再扣一次（不然司機
+// 等於同一筆錢被扣兩次）；一般加項/減項不受影響，照樣計入。「我的報酬」
+// 那邊維持原本邏輯（含預支扣減），是為了讓司機/主控隨時看到「實際還能
+// 拿到多少現金」的即時參考數字，跟這裡刻意不同、不用同步。
+function adjTypeLabel(type){ return type==='advance' ? '預支' : type==='add' ? '加項' : '減項'; }
+function statementNetFromAdjustments(tripTotal, adjustments){
+  const adjTotal = adjustments.reduce((s,a)=> a.type==='advance' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  return { adjTotal, net: tripTotal+adjTotal };
+}
 function computeProfitSnapshot(){
   const monthStr = todayStr().slice(0,7);
   const today = todayStr();
@@ -2404,15 +2415,14 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   // 不是當月15日；跨年（12月→次年1月）要記得年份也要跟著加1。
   const payMonthDate = new Date(Number(y), Number(m), 1); // Date月份參數0-indexed，剛好等於「下一個月」
   const payDateStr = `${payMonthDate.getFullYear()}-${String(payMonthDate.getMonth()+1).padStart(2,'0')}-15`;
+  // 勞務內容只列車趟服務報酬這一行——預支不算扣款所以不影響金額、加項/
+  // 減項雖然還是會影響下面「報酬總額」，但兩種調整項的明細本身都不需要
+  // 逐項列在這張正式勞報單上（司機若想知道明細，另外在「我的報酬」頁
+  // 看即時的調整項清單）。
   const contentRows = [];
   if(r.trips.length){
     contentRows.push(`<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
   }
-  r.adjustments.forEach(a=>{
-    const label = a.type==='advance'?'預支':a.type==='add'?'加項':'減項';
-    const amt = a.type==='deduct' ? -Math.abs(Number(a.amount)) : Number(a.amount);
-    contentRows.push(`<tr><td>${monthStr}</td><td>${label}</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">${amt>=0?'':'-'}$${money(Math.abs(amt))}</td><td>—</td></tr>`);
-  });
   const sigCell = opts.signatureDataUrl
     ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
     : '<div style="height:56px;"></div>';
@@ -2471,7 +2481,7 @@ function renderPayroll(c){
         <div class="field"><label>結算月份</label><input id="pMonth" type="month" value="${month}"></div>
       </div>
       <div class="grid3">
-        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加錢</option><option value="deduct">減錢</option></select></div>
+        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option></select></div>
         <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
         <div class="field"><label>備註</label><input id="aNote"></div>
       </div>
@@ -2524,7 +2534,10 @@ function renderPayroll(c){
     const live = driverMonthly(driverId, monthStr);
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
     const isFrozen = !!record;
-    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net } : live;
+    // 還沒月結確認的預覽，要用「排除預支」的淨額（跟confirmMonthlyStatement()
+    // 存檔時算的邏輯一致），不能直接用live.net（那個是含預支扣減的即時參考值）。
+    const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
     const ded = isFrozen
       ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
       : computePayrollDeductions(r.net);
@@ -2539,7 +2552,7 @@ function renderPayroll(c){
         ${!record ? '<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費），調整項仍可新增；確認無誤後按「月結確認」凍結金額並開放司機回簽。</div>' : ''}
         <table>
           <thead><tr><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
-          <tbody>${r.adjustments.map(a=>`<tr><td>${a.type==='advance'?'預支':a.type==='add'?'加錢':'減錢'}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
+          <tbody>${r.adjustments.map(a=>`<tr><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
         </table>
       </div>
       <div id="payrollSlipArea">${slipHtml}</div>
@@ -3065,7 +3078,7 @@ function renderExport(c){
             }).join('') || '<tr><td colspan="6"><div class="empty">此區間無資料</div></td></tr>'}
           ` : `
             <thead><tr><th>月份</th><th>司機</th><th>類型</th><th>金額</th><th>備註</th></tr></thead>
-            <tbody>${rows.map(a=>`<tr><td>${a.month}</td><td>${driverName(a.driverId)}</td><td>${a.type==='advance'?'預支':a.type==='add'?'加錢':'減錢'}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+            <tbody>${rows.map(a=>`<tr><td>${a.month}</td><td>${driverName(a.driverId)}</td><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
           `}
         </table>
         <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
@@ -3368,7 +3381,7 @@ function renderMyEarnings(c){
         <h3>本月調整項明細</h3>
         <table>
           <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
-          <tbody>${r.adjustments.map(adj=>`<tr><td>${adj.type==='advance'?'預支':adj.type==='add'?'加項':'扣項'}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+          <tbody>${r.adjustments.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
         </table>
       ` : ''}
     </div>`;

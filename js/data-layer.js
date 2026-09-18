@@ -1058,13 +1058,17 @@ function computePayrollDeductions(grossAmount) {
   };
 }
 
-// live: driverMonthly() 算出來的即時金額（凍結當下的快照數字）
+// live: driverMonthly() 算出來的即時金額（凍結當下的快照數字）。這裡故意
+// 不直接用live.adjTotal/live.net——那是含預支扣減的即時參考值，勞報單是
+// 正式文件，預支不算扣款，凍結存檔時要用statementNetFromAdjustments()
+// 重新排除預支再算一次（見index.html該函式旁邊的說明）。
 async function confirmMonthlyStatement(driverId, month, live) {
   const supabase = getSupabase();
-  const ded = computePayrollDeductions(live.net);
+  const { adjTotal, net } = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+  const ded = computePayrollDeductions(net);
   const { data, error } = await supabase.from('statements').insert({
     driver_id: driverId, statement_month: `${month}-01`,
-    trip_total: live.tripTotal, adj_total: live.adjTotal, net_amount: live.net,
+    trip_total: live.tripTotal, adj_total: adjTotal, net_amount: net,
     income_type: ded.incomeType,
     withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
     withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
