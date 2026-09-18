@@ -1045,6 +1045,15 @@ function undeliveredTodayGroups(shifts){
 // 區間外（太早或太晚）整個面板不顯示——這是主控明確指定的兩個時間段，
 // 不是「累加、只看有沒有處理完」，是單純的時段切換。主控首頁的「今日
 // 尚未配送完成」跟司機首頁的「同出發點今日出發狀況」共用同一套時段判斷。
+// 中秋節限定的小驚喜——2026年中秋節是9/25（國曆），只在節日前後這段
+// 期間顯示一些應景的裝飾（首頁問候語、配送進度面板的標題加個月亮/月餅
+// emoji），不改動任何現有的顏色/版面/logo（主視覺維持原樣，使用者明確
+// 說不要動）。日期是寫死的，明年如果還想做一樣的事，要記得改成明年的
+// 中秋節日期（農曆節日每年西曆日期都不同）。
+function isMidAutumnSeason(){
+  const d = todayStr();
+  return d >= '2026-09-15' && d <= '2026-09-28';
+}
 function currentProgressShifts(){
   const nowMinutes = (()=>{ const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
   const inAmWindow = nowMinutes >= 6*60 && nowMinutes < 14*60;
@@ -1121,7 +1130,10 @@ function renderHomeAdmin(c){
   }).filter(Boolean);
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
-    <p class="section-sub">主控帳號 — 點選功能方塊快速前往。</p>
+    <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${isMidAutumnSeason()?' 🌕 中秋佳節愉快！':''}</p>
+    ${isMidAutumnSeason() ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <p style="margin:0; font-size:13px;">🥮🌕 中秋佳節愉快！感謝各位司機同仁辛苦配送，祝大家團圓平安、月圓人圓。</p>
+    </div>` : ''}
     ${backupReminder || periodReminders.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
@@ -1143,7 +1155,7 @@ function renderHomeAdmin(c){
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">依各通路目前的請款週期規則，估算本月至今（未到週期結束日者以今天為止）；支出為司機當月已完成車趟的應付淨額。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3><span style="font-size:11px; color:var(--ink-soft);">即時更新，配送完成後自動消失</span></div>
+      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成${isMidAutumnSeason()?' 🌕':''}</h3><span style="font-size:11px; color:var(--ink-soft);">即時更新，配送完成後自動消失</span></div>
       ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);"><strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
     </div>` : ''}
     ${recent.length ? `<div class="panel">
@@ -1172,7 +1184,10 @@ function renderHomeDriver(c){
     a.active && (a.audience!=='selected' || a.driverIds.includes(dId)));
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
-    <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
+    <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。${isMidAutumnSeason()?' 🌕 中秋佳節愉快！':''}</p>
+    ${isMidAutumnSeason() ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <p style="margin:0; font-size:13px;">🥮🌕 中秋佳節愉快！辛苦了，祝您與家人團圓平安、月圓人圓。</p>
+    </div>` : ''}
     ${activeAnnouncements.length ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
       <h3 style="margin-top:0;">📢 公告</h3>
       ${activeAnnouncements.map(a=>`<div style="padding:8px 0; border-bottom:1px solid var(--border);">
@@ -1182,7 +1197,7 @@ function renderHomeDriver(c){
       </div>`).join('')}
     </div>` : ''}
     ${currentProgressShifts() ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <h3 style="margin-top:0;">🚚 同出發點今日出發狀況</h3>
+      <h3 style="margin-top:0;">🚚 同出發點今日出發狀況${isMidAutumnSeason()?' 🌕':''}</h3>
       <div id="depotOverviewBox"><div class="empty">載入中…</div></div>
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
