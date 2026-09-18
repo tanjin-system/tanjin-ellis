@@ -1135,8 +1135,7 @@ async function fetchDepotOverview(date) {
     driverName: r.driver_name,
     status: r.status,
     seq: r.seq,
-    shift: r.shift,
-    remainingPoints: r.remaining_points || []
+    shift: r.shift
   }));
 }
 

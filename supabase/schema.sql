@@ -828,16 +828,16 @@ create policy driver_select_own on announcement_recipients for select to app_dri
   using (driver_id = auth_driver_id());
 
 -- ============================================================
--- PART 7：司機互看「同出發點車隊今日尚未配送完成」
--- 概念沿用主控首頁本來就有的「今日尚未配送完成」面板（見index.html的
--- undeliveredTodayGroups()），只是拆分成「依同出發點」給司機看，讓司機
--- 也能掌握同一出發點其他車次的出發/配送進度。
+-- PART 7：司機互看「同出發點車隊今日出發狀況」
+-- 同出發點所有還沒完成的車次（不論出發了沒）都列出來給司機看，只顯示
+-- 「出發了沒」這個狀態，不含下貨點/店名等配送細節；完成的車次直接從
+-- 清單消失，不是顯示成「已完成」。
 -- assignments 的 driver_select_own policy 只讓司機查到自己的車趟，看不到
 -- 同出發點其他司機的資料——這是故意的，因為 assignments 整張表包含司機
 -- 費用/請款金額等敏感欄位，不能整表開放給其他司機查。這裡改用一個
--- security definer 函式，只回傳「車次名稱、司機姓名、出發狀態、還沒送達
--- 的店名清單」這幾個沒有金額的欄位，繞過（但不破壞）assignments 本身的
--- RLS限制——app_driver 只拿得到這個函式回傳的窄欄位結果，查不到底下
+-- security definer 函式，只回傳「車次名稱、司機姓名、出發狀態」這幾個
+-- 沒有金額的欄位，繞過（但不破壞）assignments 本身的RLS限制——
+-- app_driver 只拿得到這個函式回傳的窄欄位結果，查不到底下
 -- assignments/routes 表的其他欄位（尤其是fare/payroll_fare_snapshot/
 -- billing_total_snapshot這些薪資/請款金額，完全不會出現在回傳結果裡）。
 -- ============================================================
@@ -848,8 +848,7 @@ returns table (
   driver_name text,
   status text,
   seq text,
-  shift text,
-  remaining_points text[]
+  shift text
 )
 language plpgsql security definer set search_path = public as $$
 declare
@@ -865,17 +864,12 @@ begin
       d.name,
       a.status,
       r.seq,
-      r.shift,
-      array(
-        select coalesce(adp.code, adp.address) from assignment_drop_points adp
-        where adp.assignment_id = a.id and adp.status <> 'completed' and adp.issue_reason is null
-        order by adp.sequence_no
-      )
+      r.shift
     from assignments a
     join routes r on r.id = a.route_id
     join drivers d on d.id = a.driver_id
     where a.trip_date = p_date
-      and a.status <> 'cancelled'
+      and a.status not in ('cancelled', 'completed')
       and r.origin_id in (
         select r2.origin_id from assignments a2
         join routes r2 on r2.id = a2.route_id
