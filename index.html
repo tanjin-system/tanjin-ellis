@@ -1155,7 +1155,11 @@ function renderHomeAdmin(c){
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">依各通路目前的請款週期規則，估算本月至今（未到週期結束日者以今天為止）；支出為司機當月已完成車趟的應付淨額。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成${isMidAutumnSeason()?' 🌕':''}</h3><span style="font-size:11px; color:var(--ink-soft);">即時更新，配送完成後自動消失</span></div>
+      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成${isMidAutumnSeason()?' 🌕':''}</h3>
+        <span style="font-size:11px; color:var(--ink-soft);">每25秒自動更新・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
+          <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
+        </span>
+      </div>
       ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);"><strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
     </div>` : ''}
     ${recent.length ? `<div class="panel">
@@ -1165,6 +1169,11 @@ function renderHomeAdmin(c){
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
+  const manualRefreshBtn = document.getElementById('manualRefreshBtn');
+  if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
+    manualRefreshBtn.disabled = true; manualRefreshBtn.textContent = '更新中…';
+    await refreshHomeDataIfIdle();
+  };
 }
 function renderHomeDriver(c){
   const dId = state.activeDriverId;
@@ -1197,12 +1206,21 @@ function renderHomeDriver(c){
       </div>`).join('')}
     </div>` : ''}
     ${currentProgressShifts() ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <h3 style="margin-top:0;">🚚 同出發點今日出發狀況${isMidAutumnSeason()?' 🌕':''}</h3>
+      <div class="toolbar"><h3 style="margin:0;">🚚 同出發點今日出發狀況${isMidAutumnSeason()?' 🌕':''}</h3>
+        <span style="font-size:11px; color:var(--ink-soft);">每25秒自動更新・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
+          <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
+        </span>
+      </div>
       <div id="depotOverviewBox"><div class="empty">載入中…</div></div>
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
+  const manualRefreshBtn = document.getElementById('manualRefreshBtn');
+  if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
+    manualRefreshBtn.disabled = true; manualRefreshBtn.textContent = '更新中…';
+    await refreshHomeDataIfIdle();
+  };
   const progressShifts = currentProgressShifts();
   if(progressShifts){
     loadDepotOverview(dId, todayStr()).then(rows=>{
@@ -3767,10 +3785,22 @@ async function checkForUpdate(){
   if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
   if(sig !== __bootPageSignature) showUpdateBanner();
 }
+// 首頁待著不動時原本3分鐘才自動重新抓一次資料，主控反映「今日尚未
+// 配送完成」這種本來就該看即時進度的面板延遲感很重。改成停留在首頁時
+// 每25秒就抓一次（分頁切到背景時暫停，不做沒人看的無意義請求，省流量）
+// ；另外記錄「上次更新時間」讓畫面上看得到資料新鮮度，不用自己猜，
+// 面板也加了手動「重新整理」按鈕，想馬上看最新的不用等。
+let lastHomeRefreshAt = null;
 async function refreshHomeDataIfIdle(){
-  if(!state.data || state.tab!=='home') return;
+  if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
     state.data = await loadAllData();
+    // 司機首頁的「同出發點今日出發狀況」是另外呼叫loadDepotOverview()
+    // 查的（司機身份是走RPC，不在loadAllData()裡），有自己的一層快取
+    // （depotOverviewCache），這裡一起清掉，讓renderContent()重新渲染時
+    // 順便重新抓一次，不然這個面板不會跟著這裡的25秒一起變新。
+    depotOverviewCache = { key:null, rows:null };
+    lastHomeRefreshAt = new Date();
     renderNav();
     renderContent();
   }catch(e){ console.error('背景重新整理資料失敗', e); }
@@ -3780,7 +3810,7 @@ document.addEventListener('visibilitychange', ()=>{
 });
 window.addEventListener('focus', ()=>{ checkForUpdate(); refreshHomeDataIfIdle(); });
 setInterval(checkForUpdate, 5*60*1000);
-setInterval(refreshHomeDataIfIdle, 3*60*1000);
+setInterval(refreshHomeDataIfIdle, 25*1000);
 
 async function bootApp(){
   const auth = getStoredAuth();
