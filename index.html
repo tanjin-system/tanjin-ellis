@@ -1045,14 +1045,33 @@ function undeliveredTodayGroups(shifts){
 // 區間外（太早或太晚）整個面板不顯示——這是主控明確指定的兩個時間段，
 // 不是「累加、只看有沒有處理完」，是單純的時段切換。主控首頁的「今日
 // 尚未配送完成」跟司機首頁的「同出發點今日出發狀況」共用同一套時段判斷。
-// 中秋節限定的小驚喜——2026年中秋節是9/25（國曆），只在節日前後這段
-// 期間顯示一些應景的裝飾（首頁問候語、配送進度面板的標題加個月亮/月餅
-// emoji），不改動任何現有的顏色/版面/logo（主視覺維持原樣，使用者明確
-// 說不要動）。日期是寫死的，明年如果還想做一樣的事，要記得改成明年的
-// 中秋節日期（農曆節日每年西曆日期都不同）。
-function isMidAutumnSeason(){
-  const d = todayStr();
-  return d >= '2026-09-15' && d <= '2026-09-28';
+// 2026年（民國115年）台灣國定假日，資料來源：行政院人事行政總處公告
+// 行事曆。greeting是null的幾個（和平紀念日、兒童節／清明節、台灣光復節、
+// 行憲紀念日）是紀念性質的節日，不適合用「快樂」這種歡慶字眼，司機端
+// 故意不顯示賀詞（用詞用「祝福」不是「放假通知」——車隊不一定真的休息，
+// 這個功能純粹是顯示用，不會自動擋掉那天的排班或出車，中秋節照樣可以
+// 正常排車出貨）；主控的週班表則不分節日性質，統一顯示節日名稱（排班
+// 規劃用，不是賀詞）。日期是寫死的，明年要記得換成明年的行事曆（尤其
+// 農曆節日，每年國曆日期都不同）。
+const TAIWAN_HOLIDAYS_2026 = [
+  { start:'2026-01-01', end:'2026-01-01', name:'元旦', greeting:'🎉 元旦快樂，新年新氣象！' },
+  { start:'2026-02-16', end:'2026-02-19', name:'春節', greeting:'🧧 新年快樂，恭喜發財！' },
+  { start:'2026-02-28', end:'2026-02-28', name:'和平紀念日', greeting:null },
+  { start:'2026-04-04', end:'2026-04-05', name:'兒童節／清明節', greeting:null },
+  { start:'2026-05-01', end:'2026-05-01', name:'勞動節', greeting:'💪 勞動節快樂，您辛苦了！' },
+  { start:'2026-06-19', end:'2026-06-19', name:'端午節', greeting:'🎏 端午節快樂，平安順心！' },
+  { start:'2026-09-25', end:'2026-09-25', name:'中秋節', greeting:'🌕🥮 中秋節快樂，闔家團圓！' },
+  { start:'2026-09-28', end:'2026-09-28', name:'教師節', greeting:'📚 教師節快樂！' },
+  { start:'2026-10-10', end:'2026-10-10', name:'國慶日', greeting:'🎊 國慶日快樂！' },
+  { start:'2026-10-25', end:'2026-10-25', name:'台灣光復節', greeting:null },
+  { start:'2026-12-25', end:'2026-12-25', name:'行憲紀念日', greeting:null }
+];
+function holidayForDate(dateStr){
+  return TAIWAN_HOLIDAYS_2026.find(h => dateStr>=h.start && dateStr<=h.end) || null;
+}
+function todayHolidayGreeting(){
+  const h = holidayForDate(todayStr());
+  return h ? h.greeting : null;
 }
 function currentProgressShifts(){
   const nowMinutes = (()=>{ const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
@@ -1130,10 +1149,7 @@ function renderHomeAdmin(c){
   }).filter(Boolean);
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
-    <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${isMidAutumnSeason()?' 🌕 中秋佳節愉快！':''}</p>
-    ${isMidAutumnSeason() ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
-      <p style="margin:0; font-size:13px;">🥮🌕 中秋佳節愉快！感謝各位司機同仁辛苦配送，祝大家團圓平安、月圓人圓。</p>
-    </div>` : ''}
+    <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${backupReminder || periodReminders.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
@@ -1155,7 +1171,7 @@ function renderHomeAdmin(c){
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">依各通路目前的請款週期規則，估算本月至今（未到週期結束日者以今天為止）；支出為司機當月已完成車趟的應付淨額。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成${isMidAutumnSeason()?' 🌕':''}</h3>
+      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3>
         <span style="font-size:11px; color:var(--ink-soft);">每25秒自動更新・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
@@ -1193,9 +1209,9 @@ function renderHomeDriver(c){
     a.active && (a.audience!=='selected' || a.driverIds.includes(dId)));
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
-    <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。${isMidAutumnSeason()?' 🌕 中秋佳節愉快！':''}</p>
-    ${isMidAutumnSeason() ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
-      <p style="margin:0; font-size:13px;">🥮🌕 中秋佳節愉快！辛苦了，祝您與家人團圓平安、月圓人圓。</p>
+    <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
+    ${todayHolidayGreeting() ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <p style="margin:0; font-size:13px;">${todayHolidayGreeting()} 辛苦了，感謝您的配送服務。</p>
     </div>` : ''}
     ${activeAnnouncements.length ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
       <h3 style="margin-top:0;">📢 公告</h3>
@@ -1206,7 +1222,7 @@ function renderHomeDriver(c){
       </div>`).join('')}
     </div>` : ''}
     ${currentProgressShifts() ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">🚚 同出發點今日出發狀況${isMidAutumnSeason()?' 🌕':''}</h3>
+      <div class="toolbar"><h3 style="margin:0;">🚚 同出發點今日出發狀況</h3>
         <span style="font-size:11px; color:var(--ink-soft);">每25秒自動更新・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
@@ -2315,7 +2331,8 @@ function renderWeekGrid(containerId, dates){
     const dateRow = dates.map(d=>{
       const wd = new Date(d+'T00:00:00').getDay();
       const isWeekend = wd===0||wd===6;
-      return `<th colspan="2" class="${isWeekend?'weekend':''}">${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）</th>`;
+      const holiday = holidayForDate(d);
+      return `<th colspan="2" class="${isWeekend?'weekend':''}">${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）${holiday?`<br><span style="font-weight:400; font-size:10.5px; color:var(--amber);">${escapeHtml(holiday.name)}</span>`:''}</th>`;
     }).join('');
     const shiftRow = dates.map(d=>{
       const wd = new Date(d+'T00:00:00').getDay();
