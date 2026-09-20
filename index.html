@@ -192,9 +192,6 @@ function buildMultiStopMapsLink(originAddr, stops){
   return url;
 }
 function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURIComponent(text); }
-// pushNotification()（純記憶體 unshift）已由 js/data-layer.js 的 createNotification()
-// 取代——正式版通知要讓其他人（主控／司機）在別的裝置上也看得到，必須真的寫進資料庫，
-// 不能只是塞進當下這個瀏覽器分頁的記憶體陣列。
 // 手機相簿選出來的照片常常是HEIC格式（iPhone拍照預設格式）——瀏覽器
 // 內建的<img>/canvas在iOS Safari可以解開HEIC，但Android的Chrome等瀏覽器
 // 幾乎都解不開，會整個decode失敗。單純瀏覽器內建功能沒辦法把HEIC轉成
@@ -793,7 +790,6 @@ function getWeekDates(offset){
 const ADMIN_TABS = [
   {id:'home', label:'首頁'},
   {id:'announcements', label:'公告管理'},
-  {id:'notifications', label:'即時通知'},
   {id:'schedule', label:'週班表'},
   {id:'drivers', label:'司機資料'},
   {id:'channels', label:'通路管理'},
@@ -828,11 +824,10 @@ function renderNav(){
     !isDriverProfileRequiredComplete(state.data.drivers.find(d=>d.id===state.activeDriverId));
   if(lockToProfile) state.tab = 'profile';
   else if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
-  const unread = visibleNotifications().filter(n=>!n.read).length;
   const nav = document.getElementById('tabsNav');
   nav.innerHTML = tabs.map(t=>{
     const disabled = lockToProfile && t.id!=='profile';
-    return `<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}" ${disabled?'disabled style="opacity:.4; cursor:not-allowed;"':''}>${t.label}${(t.id==='notifications' && unread)?` <span class="badge pending" style="margin-left:4px;">${unread}</span>`:''}</button>`;
+    return `<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}" ${disabled?'disabled style="opacity:.4; cursor:not-allowed;"':''}>${t.label}</button>`;
   }).join('');
   nav.querySelectorAll('button').forEach(b=>{
     b.onclick=()=>{
@@ -845,7 +840,7 @@ function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
   if(!inDriverView){
-    ({home:renderHomeAdmin, announcements:renderAnnouncements, notifications:renderNotifications, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+    ({home:renderHomeAdmin, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
@@ -853,15 +848,6 @@ function renderContent(){
   }
 }
 function goTab(id){ state.tab = id; renderNav(); renderContent(); }
-// ---------- 即時通知 ----------
-const NOTIF_LABEL = { profile:'✏️ 資料修改', statement:'🖊️ 回簽' };
-// 出發/拍照/完成這幾種動態太頻繁、對主控端來說是噪音，已經拿掉不再產生
-// （見 data-layer.js 的 markAssignmentDeparted/markAssignmentComplete/
-// uploadDropPointPhoto），這裡額外過濾掉是為了保險：萬一資料庫裡還留著
-// 拿掉之前產生的舊紀錄，也不會再顯示出來。
-function visibleNotifications(){
-  return (state.data.notifications||[]).filter(n=> n.type==='profile' || n.type==='statement');
-}
 // ---------- 公告管理（主控發布，全體司機首頁看得到） ----------
 let editingAnnouncementId = null;
 // 發送對象的司機勾選清單（只列在職司機，停用司機沒有登入系統的可能，
@@ -984,27 +970,6 @@ function renderAnnouncementListBody(){
   });
 }
 
-function renderNotifications(c){
-  const list = visibleNotifications();
-  c.innerHTML = `
-    <h2 class="section-title">即時通知</h2>
-    <p class="section-sub">司機資料修改、對帳單回簽等動態都會顯示在這裡；打開系統重新整理即可看到最新狀況。</p>
-    <div class="toolbar no-print">
-      <span></span>
-      <button class="btn ghost" id="markAllRead">全部標記已讀</button>
-    </div>
-    <div class="panel">
-      ${list.map(n=>`<div class="drop-point" style="${n.read?'opacity:.6;':''} display:flex; justify-content:space-between; align-items:center;">
-        <span>${NOTIF_LABEL[n.type]||''} ${n.message}<br><span style="font-size:11px; color:var(--ink-soft);">${new Date(n.createdAt).toLocaleString('zh-Hant-TW')}</span></span>
-      </div>`).join('') || '<div class="empty">目前沒有通知</div>'}
-    </div>
-  `;
-  document.getElementById('markAllRead').onclick = async ()=>{
-    try{ await markAllNotificationsRead(); renderContent(); renderNav(); }
-    catch(err){ alert(err.message); }
-  };
-}
-
 // 今天還沒配送完成的車次/下貨點，給主控掌握即時進度用。上午車次只在
 // 06:00–14:00這個區間顯示，下午車次只在14:00–18:30這個區間顯示（主控
 // 明確指定的兩個時段，不是「還沒處理完就一直留著」）；呼叫端（見
@@ -1124,7 +1089,6 @@ async function loadDepotOverview(driverId, date){
 function renderHomeAdmin(c){
   const tiles = [
     {id:'announcements', label:'公告管理', sub:'發布訊息給全體司機'},
-    {id:'notifications', label:'即時通知', sub:'資料修改/對帳單回簽動態'},
     {id:'schedule', label:'週班表', sub:'指派司機與路線'},
     {id:'drivers', label:'司機資料', sub:'含車輛與銀行資訊'},
     {id:'channels', label:'通路管理', sub:'請款週期設定'},
@@ -1137,7 +1101,6 @@ function renderHomeAdmin(c){
     {id:'settings', label:'系統設定', sub:'管理PIN碼'}
   ];
   const p = computeProfitSnapshot();
-  const recent = visibleNotifications().slice(0,6);
   const progressShifts = currentProgressShifts();
   const showProgress = !!progressShifts;
   const progressGroups = showProgress ? undeliveredTodayGroups(progressShifts) : [];
@@ -1186,10 +1149,6 @@ function renderHomeAdmin(c){
         </span>
       </div>
       ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);"><strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
-    </div>` : ''}
-    ${recent.length ? `<div class="panel">
-      <div class="toolbar"><h3 style="margin:0;">最新動態</h3><button class="btn ghost" data-goto="notifications">查看全部</button></div>
-      ${recent.map(n=>`<div style="font-size:12.5px; padding:5px 0; border-bottom:1px solid var(--border);">${NOTIF_LABEL[n.type]||''} ${n.message} <span style="color:var(--ink-soft); font-size:11px;">－ ${new Date(n.createdAt).toLocaleString('zh-Hant-TW')}</span></div>`).join('')}
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
@@ -1460,7 +1419,7 @@ function renderDrivers(c){
             branch: document.getElementById('eBranch').value.trim(),
             account: document.getElementById('eAccount').value.trim(),
             holder: document.getElementById('eHolder').value.trim()
-          }, '基本資料（管理端編輯）');
+          });
           editingDriverId = null;
           renderContent();
         }catch(err){ alert(err.message); }
@@ -3572,8 +3531,8 @@ function renderMyProfile(c){
         branch: document.getElementById('mpBranch').value.trim(),
         account: document.getElementById('mpAccount').value.trim(),
         holder: document.getElementById('mpHolder').value.trim()
-      }, changes.join('、'));
-      alert('已儲存，主控端會收到通知。');
+      });
+      alert('已儲存。');
       renderNav(); renderContent();
     }catch(err){ alert(err.message); }
   };
@@ -3824,15 +3783,15 @@ document.getElementById('logoutBtn').onclick = ()=>{
 
 // 「加入主畫面」的網頁App在不少手機上會被系統背景凍結、放很久都沒有
 // 真正重新載入過（不是瀏覽器分頁那種無痕快取問題，是整個JS執行環境
-// 一直沒有重啟），導致上線的新功能、跟即時性的資料（今日尚未配送完成、
-// 最新動態等）長時間卡住不動、看起來「無法同步」。這裡用兩個機制補救：
+// 一直沒有重啟），導致上線的新功能、跟即時性的資料（今日尚未配送完成
+// 等）長時間卡住不動、看起來「無法同步」。這裡用兩個機制補救：
 // 1. 切回前景/每隔幾分鐘，比對目前執行中的頁面內容跟伺服器上最新的
 //    是否不同，不同就跳出一條提示，讓使用者自己決定要不要點擊重新
 //    整理（不強制自動reload，避免打斷正在填寫的表單）。
 // 2. 切回前景時，如果人在「首頁」（這個分頁沒有任何表單欄位，不會有
 //    填到一半被清掉的風險），就悄悄重新抓一次資料並重繪，讓「今日
-//    尚未配送完成」「最新動態」這類即時面板自動跟上最新狀態；其他
-//    分頁刻意不自動重繪，使用者切換分頁時自然就會拿到最新資料。
+//    尚未配送完成」這類即時面板自動跟上最新狀態；其他分頁刻意不自動
+//    重繪，使用者切換分頁時自然就會拿到最新資料。
 let __bootPageSignature = null;
 async function computePageSignature(){
   try{

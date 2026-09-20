@@ -129,10 +129,6 @@ function mapStatement(row) {
   };
 }
 
-function mapNotification(row) {
-  return { id: row.id, type: row.type, message: row.message, createdAt: row.created_at, read: row.read };
-}
-
 function mapBillingAdjustment(row) {
   return {
     id: row.id, channelId: row.channel_id, periodStart: row.period_start, periodEnd: row.period_end,
@@ -224,10 +220,6 @@ async function loadAllData() {
     assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').order('trip_date'),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
-    // 同樣的道理：schema.sql 只 grant app_driver 對 notifications 的 insert 權限
-    // （司機端沒有通知頁，出發/完成時只需要新增一筆，不需要讀取），所以司機身份
-    // 查這個表一定 permission denied，只有 admin 才查。
-    ...(isAdmin ? { notificationsRes: supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(200) } : {}),
     // billing_adjustments 只 grant app_admin，司機身份查會 permission denied，只有 admin 才查。
     ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
     // 公告：admin/driver 都能查，driver 只查得到 active=true 的（RLS擋掉下架的），
@@ -252,7 +244,6 @@ async function loadAllData() {
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
     statements: (byKey.statementsRes.data || []).map(mapStatement),
-    notifications: (byKey.notificationsRes?.data || []).map(mapNotification),
     billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment),
     announcements: (byKey.announcementsRes.data || []).map(mapAnnouncement)
   };
@@ -269,25 +260,6 @@ async function fetchAssignment(id) {
   const assignment = mapAssignment(data);
   await resolvePhotoUrls([assignment]);
   return assignment;
-}
-
-// ---------------- 通知（司機端動作會建立一筆，失敗不擋主流程） ----------------
-
-async function createNotification(type, message) {
-  try {
-    const supabase = getSupabase();
-    const { error } = await supabase.from('notifications').insert({ type, message });
-    if (error) console.error('建立通知失敗：', error.message);
-  } catch (e) { console.error('建立通知失敗：', e.message); }
-}
-
-async function markAllNotificationsRead() {
-  const supabase = getSupabase();
-  const unreadIds = state.data.notifications.filter(n => !n.read).map(n => n.id);
-  if (!unreadIds.length) return;
-  const { error } = await supabase.from('notifications').update({ read: true }).in('id', unreadIds);
-  if (error) throw new Error('標記已讀失敗：' + error.message);
-  state.data.notifications.forEach(n => n.read = true);
 }
 
 // ---------------- 司機 ----------------
@@ -352,9 +324,7 @@ async function deleteOrDeactivateDriver(driverId) {
 }
 
 // 司機端「我的資料」頁可編輯欄位（跟 schema.sql 裡 app_driver 的欄位權限一致）
-// changeSummary：呼叫端算好的「修改了哪些欄位」文字（例如「電話、車牌」），
-// 沒傳的話通知訊息會用比較籠統的說法。
-async function updateDriverProfile(driverId, fields, changeSummary) {
+async function updateDriverProfile(driverId, fields) {
   const payload = {};
   if ('name' in fields) payload.name = fields.name || null;
   if ('status' in fields) payload.status = fields.status || 'active';
@@ -373,7 +343,6 @@ async function updateDriverProfile(driverId, fields, changeSummary) {
   if (error) throw new Error('更新資料失敗：' + error.message);
   const idx = state.data.drivers.findIndex(d => d.id === driverId);
   if (idx >= 0) state.data.drivers[idx] = mapDriver(data);
-  await createNotification('profile', `${data.name} 修改了基本資料${changeSummary ? '：' + changeSummary : ''}`);
 }
 
 // ---------------- 通路 ----------------
@@ -778,11 +747,7 @@ async function reassignAssignmentDriver(assignmentId, newDriverId) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).eq('id', assignmentId);
   if (error) throw new Error('換司機失敗：' + error.message);
-  if (a) {
-    const oldDriverId = a.driverId;
-    a.driverId = newDriverId;
-    await createNotification('profile', `${routeName(a.routeId)}（${a.date}）已由 ${driverName(oldDriverId)} 臨時改派給 ${driverName(newDriverId)}`);
-  }
+  if (a) a.driverId = newDriverId;
 }
 
 async function markAssignmentDeparted(assignmentId) {
@@ -1104,7 +1069,6 @@ async function signStatement(statementId, signatureDataUrl) {
 
   const s = state.data.statements.find(x => x.id === statementId);
   if (s) { s.status = 'signed'; s.signedAt = signedAt; s.signatureDataUrl = signatureDataUrl; }
-  await createNotification('statement', `${driverName(s?.driverId)} 已完成 ${s?.month || ''} 對帳單回簽`);
 }
 
 // 主控退回簽名：把已回簽的勞報單退回「待回簽」狀態，讓司機可以重新簽名
@@ -1118,13 +1082,12 @@ async function rejectStatementSignature(statementId) {
   if (error) throw new Error('退回簽名失敗：' + error.message);
   const s = state.data.statements.find(x => x.id === statementId);
   if (s) { s.status = 'awaiting_signature'; s.signedAt = null; s.signatureDataUrl = null; s.adminAcked = false; }
-  await createNotification('statement', `主控已退回 ${driverName(s?.driverId)} ${s?.month || ''} 的勞報單簽名，待司機重新簽名`);
 }
 
-// 司機首頁「同出發點今日尚未配送完成」：呼叫 schema.sql 裡的
+// 司機首頁「同出發點今日出發狀況」：呼叫 schema.sql 裡的
 // security definer 函式 driver_depot_overview()，只回傳沒有金額的窄
-// 欄位（車次名稱/司機姓名/狀態/還沒送達的店名清單），繞過司機只能查
-// 自己車趟的RLS限制，但不會洩漏其他司機的薪資/請款資料。
+// 欄位（車次名稱/司機姓名/狀態），繞過司機只能查自己車趟的RLS限制，
+// 但不會洩漏其他司機的薪資/請款資料。
 async function fetchDepotOverview(date) {
   const supabase = getSupabase();
   const { data, error } = await supabase.rpc('driver_depot_overview', { p_date: date });
