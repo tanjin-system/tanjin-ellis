@@ -1069,9 +1069,18 @@ const TAIWAN_HOLIDAYS_2026 = [
 function holidayForDate(dateStr){
   return TAIWAN_HOLIDAYS_2026.find(h => dateStr>=h.start && dateStr<=h.end) || null;
 }
-function todayHolidayGreeting(){
-  const h = holidayForDate(todayStr());
-  return h ? h.greeting : null;
+// 節日賀詞是「祝福」不是「放假通知」，車隊不一定真的休息——如果主控
+// 那天其實有排這位司機的班（車趟狀態不是cancelled），代表他當天照常
+// 出車，就不顯示賀詞了（顯示「中秋節快樂，闔家團圓」給一個正在跑車的
+// 司機看很奇怪）。是依「這位司機本人」當天有沒有被排班判斷，不是看
+// 整個車隊有沒有人上班——同一天，沒被排班的司機正常看得到賀詞，有
+// 被排班出車的司機就不會看到。
+function todayHolidayGreeting(driverId){
+  const today = todayStr();
+  const h = holidayForDate(today);
+  if(!h || !h.greeting) return null;
+  const isWorkingToday = state.data.assignments.some(a=>a.driverId===driverId && a.date===today && a.status!=='cancelled');
+  return isWorkingToday ? null : h.greeting;
 }
 function currentProgressShifts(){
   const nowMinutes = (()=>{ const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
@@ -1210,8 +1219,8 @@ function renderHomeDriver(c){
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
-    ${todayHolidayGreeting() ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
-      <p style="margin:0; font-size:13px;">${todayHolidayGreeting()} 辛苦了，感謝您的配送服務。</p>
+    ${todayHolidayGreeting(dId) ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <p style="margin:0; font-size:13px;">${todayHolidayGreeting(dId)} 辛苦了，感謝您的配送服務。</p>
     </div>` : ''}
     ${activeAnnouncements.length ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
       <h3 style="margin-top:0;">📢 公告</h3>
@@ -3195,7 +3204,7 @@ function renderToday(c){
   const weekDates = [...getWeekDates(0), ...getWeekDates(1)];
   c.innerHTML = `
     <h2 class="section-title">今日行程</h2>
-    <p class="section-sub">Hi~${driverName(dId)}，這是您今天的出車行程。</p>
+    <p class="section-sub">Hi~${driverName(dId)}，這是您今天的出車行程。${todayHolidayGreeting(dId)?` ${todayHolidayGreeting(dId)}`:''}</p>
     <div id="todayDetail"></div>
     <h3 style="margin-top:20px;">本週行程總覽</h3>
     <p class="section-sub" style="margin-top:-6px;">點擊「待出發」的車次可預覽當天行程與司機費用。</p>
