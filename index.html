@@ -1265,6 +1265,23 @@ function renderHomeDriver(c){
 // ---------- 司機資料（含車輛、銀行細節） ----------
 let editingDriverId = null;
 let driverListSearch = '';
+let driverGroupExpandedSet = new Set(); // 使用者手動展開過的出發點名稱，預設全部收合
+// 依這位司機「最近一筆還沒取消的排班」找出他固定跑哪個出發點——一個
+// 司機理論上都固定跑同一個出發點的車，用最近一筆代表就好。優先找今天
+// 或未來的排班（比較貼近「現在」的分組狀態），完全沒有未來排班的話
+// 退回找最近一筆過去的排班；兩種都找不到（從來沒被排過班）就回傳null，
+// 畫面上歸類到「未分類」。
+function driverOriginLabel(driverId){
+  const today = todayStr();
+  const mine = state.data.assignments.filter(a=>a.driverId===driverId && a.status!=='cancelled');
+  const upcoming = mine.filter(a=>a.date>=today).sort((a,b)=>a.date.localeCompare(b.date))[0];
+  const a = upcoming || mine.sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if(!a) return null;
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  if(!route) return null;
+  const og = state.data.origins.find(o=>o.address===route.originAddr);
+  return og ? (og.label||og.address) : route.originAddr;
+}
 function renderDrivers(c){
   c.innerHTML = `
     <div class="toolbar"><h2 class="section-title" style="margin:0;">司機資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部司機資料</button></div>
@@ -1352,34 +1369,65 @@ function renderDrivers(c){
         <button class="btn ghost" data-canceldriver="${d.id}">取消</button>
       </div>`;
   }
+  function driverCardHtml(d){
+    if(editingDriverId === d.id){
+      return `<div class="driver-card">${renderEditForm(d)}</div>`;
+    }
+    return `
+    <div class="driver-card">
+      <div class="driver-card-head">
+        <div>
+          <div class="driver-card-name">${d.name} <span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></div>
+          <div class="driver-card-sub">
+            電話：${d.phone||'—'}　車牌：${d.vehicle.plate||'—'}<br>
+            登入代碼：<span class="mono">${d.accessCode}</span>
+            ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
+          </div>
+        </div>
+      </div>
+      <div class="driver-card-actions">
+        <button class="btn ghost" data-view="${d.id}">查看司機畫面</button>
+        <button class="btn ghost" data-editdriver="${d.id}">編輯</button>
+        <button class="btn ghost" data-regen="${d.id}">重新產生代碼</button>
+        <button class="btn danger" data-del="${d.id}">刪除</button>
+      </div>
+    </div>`;
+  }
   function renderDriverCards(){
     const listEl = document.getElementById('driverCardList');
     const kw = driverListSearch.trim().toLowerCase();
     const filteredDrivers = kw ? state.data.drivers.filter(d=>d.name.toLowerCase().includes(kw)) : state.data.drivers;
-    listEl.innerHTML = filteredDrivers.map(d=>{
-      if(editingDriverId === d.id){
-        return `<div class="driver-card">${renderEditForm(d)}</div>`;
-      }
-      return `
-      <div class="driver-card">
-        <div class="driver-card-head">
-          <div>
-            <div class="driver-card-name">${d.name} <span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></div>
-            <div class="driver-card-sub">
-              電話：${d.phone||'—'}　車牌：${d.vehicle.plate||'—'}<br>
-              登入代碼：<span class="mono">${d.accessCode}</span>
-              ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
-            </div>
-          </div>
-        </div>
-        <div class="driver-card-actions">
-          <button class="btn ghost" data-view="${d.id}">查看司機畫面</button>
-          <button class="btn ghost" data-editdriver="${d.id}">編輯</button>
-          <button class="btn ghost" data-regen="${d.id}">重新產生代碼</button>
-          <button class="btn danger" data-del="${d.id}">刪除</button>
-        </div>
+    if(!filteredDrivers.length){
+      listEl.innerHTML = `<div class="empty">${kw?'找不到符合的司機':'尚無司機資料'}</div>`;
+      return;
+    }
+    // 依「這位司機目前跑哪個出發點」分組並收合，跟下貨點資料庫／路線管理
+    // 同一套分組收合邏輯：搜尋中的話全部自動展開，不然預設全部收合。
+    const byOrigin = {};
+    filteredDrivers.forEach(d=>{
+      const key = driverOriginLabel(d.id) || '未分類';
+      if(!byOrigin[key]) byOrigin[key] = [];
+      byOrigin[key].push(d);
+    });
+    const originKeys = Object.keys(byOrigin).filter(k=>k!=='未分類').sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+    if(byOrigin['未分類']) originKeys.push('未分類');
+    listEl.innerHTML = originKeys.map(origin=>{
+      const drivers = byOrigin[origin];
+      const collapsed = !driverGroupExpandedSet.has(origin) && !kw;
+      return `<div style="margin-bottom:10px;">
+        <h3 data-drivergrouptoggle="${escapeHtml(origin)}" style="margin:0 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:14px;">
+          <span>${escapeHtml(origin)}（${drivers.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
+        </h3>
+        <div style="${collapsed?'display:none;':''}">${drivers.map(driverCardHtml).join('')}</div>
       </div>`;
-    }).join('') || `<div class="empty">${kw?'找不到符合的司機':'尚無司機資料'}</div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-drivergrouptoggle]').forEach(h=>{
+      h.onclick = ()=>{
+        const key = h.dataset.drivergrouptoggle;
+        if(driverGroupExpandedSet.has(key)) driverGroupExpandedSet.delete(key); else driverGroupExpandedSet.add(key);
+        renderDriverCards();
+      };
+    });
     listEl.querySelectorAll('[data-etabtn]').forEach(btn=>{
       btn.onclick = ()=>{
         const card = btn.closest('.driver-card');
