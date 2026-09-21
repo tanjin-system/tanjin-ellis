@@ -346,9 +346,9 @@ async function capturePhoto(fallbackInput, maxShots, onDataUrls){
 // uploadDropPointPhoto）：全部進 assignment_drop_point_media，不影響
 // 下貨點的完成狀態。dataUrls 是呼叫端已經處理好（相機直接擷取或
 // compressImageFile壓縮過）的圖片dataURL陣列——影片拍攝功能已關閉。
-async function handleExtraMediaUpload(dropPointId, dataUrls){
+async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
   const items = dataUrls.map(dataUrl => ({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' }));
-  if(items.length) await uploadDropPointMedia(dropPointId, items);
+  if(items.length) await uploadDropPointMedia(assignmentId, dropPointId, items);
 }
 function mediaGalleryHtml(media){
   if(!media || !media.length) return '';
@@ -3330,7 +3330,7 @@ function renderTodayDetail(todays){
   async function fillNextPhotoSlot(aid, dpid, dataUrl){
     const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
     if(dp && dp.status!=='completed') await uploadDropPointPhoto(aid, dpid, dataUrl);
-    else await handleExtraMediaUpload(dpid, [dataUrl]);
+    else await handleExtraMediaUpload(aid, dpid, [dataUrl]);
   }
   // 拍照按鈕改成自己拉相機串流（openCameraCapture/capturePhoto，見上面
   // compressImageFile旁邊的說明），不再依賴 input[capture] ——那個屬性在

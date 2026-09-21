@@ -838,13 +838,18 @@ async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
 // 很多筆，不會互相覆蓋。items 是呼叫端（index.html）已經處理好的
 // [{bytes, contentType, mediaType}, ...]，圖片已經過 compressImageFile 壓縮、
 // 影片則是原始檔案位元組（不做壓縮）。
-async function uploadDropPointMedia(dropPointId, items) {
+// 路徑第一層資料夾一定要是 assignmentId（跟 uploadDropPointPhoto 用同一套規則），
+// Storage 的 RLS policy 是用路徑第一層資料夾比對司機是否為這張 assignment 的
+// 車手——之前這裡路徑是 extra/xxx（第一層資料夾是字面上的"extra"，比對不到
+// 任何 assignment），導致附加照片上傳100%被RLS擋下、報「new row violates
+// row-level security policy」。
+async function uploadDropPointMedia(assignmentId, dropPointId, items) {
   if (!items || !items.length) return [];
   const supabase = getSupabase();
   const uploaded = [];
   for (const item of items) {
     const ext = item.mediaType === 'video' ? 'mp4' : 'jpg';
-    const path = `extra/${dropPointId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const path = `${assignmentId}/extra/${dropPointId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     const { error: upErr } = await supabase.storage.from('assignment-photos').upload(path, item.bytes, { contentType: item.contentType, upsert: false });
     if (upErr) throw new Error('附加媒體上傳失敗：' + upErr.message);
     const { data, error: insErr } = await supabase.from('assignment_drop_point_media')
