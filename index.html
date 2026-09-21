@@ -2543,6 +2543,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       </table>
     </div>`;
 }
+let payrollTripsExpanded = false; // 該司機配送明細（日期/路線/車資）預設收合，跟其他清單一致
 function renderPayroll(c){
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
@@ -2635,10 +2636,22 @@ function renderPayroll(c){
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
       signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
+    const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <h3 style="margin-top:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
         ${!record ? '<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費），調整項仍可新增；確認無誤後按「月結確認」凍結金額並開放司機回簽。</div>' : ''}
+        <h4 data-tripstoggle style="margin:14px 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:13.5px;">
+          <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
+          <span style="color:var(--ink-soft); font-size:12px;">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
+        </h4>
+        <div style="${payrollTripsExpanded?'':'display:none;'}">
+          <table>
+            <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
+            <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(Number(a.payrollFareSnapshot ?? a.fare)||0)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月無已完成車趟</div></td></tr>'}</tbody>
+          </table>
+        </div>
+        <h4 style="margin:14px 0 8px; font-size:13.5px;">調整項</h4>
         <table>
           <thead><tr><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
           <tbody>${r.adjustments.map(a=>`<tr><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
@@ -2651,6 +2664,8 @@ function renderPayroll(c){
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
       </div>`;
     document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml], `${driverName(driverId)}_${monthStr}_勞報單`);
+    const tripsToggle = document.querySelector('[data-tripstoggle]');
+    if(tripsToggle) tripsToggle.onclick = ()=>{ payrollTripsExpanded = !payrollTripsExpanded; refresh(); };
     document.querySelectorAll('[data-deladj]').forEach(btn=>{
       btn.onclick=async()=>{
         const adj = r.adjustments.find(x=>x.id===btn.dataset.deladj);
