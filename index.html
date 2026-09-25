@@ -672,20 +672,21 @@ function findRouteFamily(route){
 function findMondayQuoteRoute(route){
   return findRouteFamily(route).find(r=> /星期一|週一/.test(r.seq)) || null;
 }
-// 對客戶的請款金額：如果這趟車的路線有一個「星期一」報價版本，不管實際是哪一天、
-// 用哪個版本跑的，請款一律套用星期一版本「當天生效」的拆賬金額（司機薪資
-// 不受影響，司機費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
+// 對客戶的請款金額：一律以「路線管理」裡這條路線（如果有「星期一」報價版本，
+// 不管實際是哪一天、用哪個版本跑的，套用星期一版本）當天生效的拆賬金額為準
+// ——路線管理的拆賬是主控手動輸入／確認過的金額，車趟完成當下資料庫自動
+// 算出來的 a.billingSnapshot 只是formula估算值，兩邊算法本來就不保證一致，
+// 這正是請款結算跟路線管理對不起來的原因。只有在路線被刪除、或該版本從未
+// 設定過拆賬金額時，才退回用車趟自己的快照／即時試算頂著（司機薪資不受
+// 影響，司機費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
 function effectiveByChannelForAssignment(a){
-  let byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
   const route = state.data.routes.find(r=>r.id===a.routeId);
   if(route){
-    const mondayRoute = findMondayQuoteRoute(route);
-    if(mondayRoute && mondayRoute.id!==route.id){
-      const mv = getActiveVersion(mondayRoute, a.date) || [...(mondayRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
-      if(mv && mv.billingByChannel && Object.keys(mv.billingByChannel).length) byChannel = mv.billingByChannel;
-    }
+    const quoteRoute = findMondayQuoteRoute(route) || route;
+    const v = getActiveVersion(quoteRoute, a.date) || [...(quoteRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
+    if(v && v.billingByChannel && Object.keys(v.billingByChannel).length) return v.billingByChannel;
   }
-  return byChannel;
+  return (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
 }
 function channelBillingTotal(channelId, start, end){
   let total=0; const contributing=[];
