@@ -2023,6 +2023,9 @@ function renderRouteDetail(rid){
 
       <label style="margin-top:10px; display:block;">目前順序（可用↑↓調整，實際跑車順序以此為準）</label>
       ${(()=>{ const link = buildMultiStopMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航（依下面目前順序）</a>` : ''; })()}
+      <div class="field" style="max-width:220px;"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
+      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與司機結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
+      <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <div data-orderlist="${r.id}">
         ${draft.order.map((id,i)=>{
           const dp = state.data.dropPoints.find(x=>x.id===id);
@@ -2037,13 +2040,10 @@ function renderRouteDetail(rid){
         }).join('') || '<div class="empty">尚未加入任何下貨點</div>'}
       </div>
       <h4 style="margin:14px 0 4px;">費用資料（人工輸入，跟著這個版本走）</h4>
-      <div class="grid3">
+      <div class="grid2">
         <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
         <div class="field"><label>司機費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
-        <div class="field"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
-      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與司機結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
-      <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
   `;
