@@ -413,12 +413,31 @@ async function createOrigin(input) {
   return origin;
 }
 
+// 路線名稱（例如「三洋工業零件中心 第一車 上午」）是新增路線當下把出發點
+// 名稱直接寫死存成文字，不會跟著出發點改名自動更新——如果只改 origins
+// 這張表，底下已存在的路線名稱會卡在改名前的舊字，變成到處都看得到卻
+// 改不掉的舊名字（司機端、週班表、請款結算、薪資結算配送明細都顯示路線
+// 名稱）。所以出發點改名時，這裡一併把底下每一條路線的名稱依「現在的
+// label＋自己的 seq/shift」重新組一次、寫回去，不是只把舊字串換成新字串
+// ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟出發點同步。
 async function updateOrigin(originId, input) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('origins').update({ address: input.address, label: input.label || null }).eq('id', originId).select().single();
   if (error) throw new Error('更新出發點失敗：' + error.message);
+  const origin = mapOrigin(data);
   const idx = state.data.origins.findIndex(o => o.id === originId);
-  if (idx >= 0) state.data.origins[idx] = mapOrigin(data);
+  if (idx >= 0) state.data.origins[idx] = origin;
+
+  const { data: routeRows, error: routesErr } = await supabase.from('routes').select('id, seq, shift').eq('origin_id', originId);
+  if (routesErr) throw new Error('讀取路線失敗：' + routesErr.message);
+  const label = origin.label || origin.address;
+  for (const r of routeRows || []) {
+    const newName = `${label} ${r.seq} ${r.shift === 'AM' ? '上午' : '下午'}`;
+    const { error: renameErr } = await supabase.from('routes').update({ name: newName }).eq('id', r.id);
+    if (renameErr) throw new Error('同步路線名稱失敗：' + renameErr.message);
+    const localRoute = state.data.routes.find(x => x.id === r.id);
+    if (localRoute) localRoute.name = newName;
+  }
 }
 
 async function deleteOrDeactivateOrigin(originId) {
