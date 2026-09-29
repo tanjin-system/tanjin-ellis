@@ -669,10 +669,9 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
 // 但還沒開始/還沒完成的未來車趟，不會自動跟著變——建立車趟當下就把內容複製
 // 成快照了（見 createAssignment）。這裡是選配的「一鍵套用」：找出這條路線
 // 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的車趟，
-// 把下貨點清單、里程、請款拆賬全部重新套用成當時該生效版本的內容，
-// 司機／日期／車次都不動。司機費用（fare）刻意不碰——那是給主控在車趟
-// 管理個別覆寫用的欄位（調整金額），版本更新不應該連同一起洗掉人工調整。
-// 已完成的車趟本來就凍結，不在套用範圍內。
+// 把下貨點清單、里程、司機費用、請款拆賬全部重新套用成當時該生效版本的
+// 內容，司機／日期／車次都不動。已完成的車趟本來就凍結（付過的司機費用、
+// 請款金額都不該回頭被重算），不在套用範圍內。
 async function regenerateFutureAssignments(routeId, fromDate) {
   const route = state.data.routes.find(r => r.id === routeId);
   if (!route) throw new Error('找不到路線');
@@ -696,6 +695,7 @@ async function regenerateFutureAssignments(routeId, fromDate) {
     }
     const { error: updErr } = await supabase.from('assignments').update({
       distance_km: version.distanceKm ?? null,
+      fare: version.driverFare ?? 0,
       billing_total_snapshot: version.billingTotal ?? null,
       billing_by_channel_snapshot: version.billingByChannel ?? null
     }).eq('id', a.id);

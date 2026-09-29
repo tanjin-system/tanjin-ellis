@@ -2210,7 +2210,7 @@ function renderRouteDetail(rid){
         // 複製成快照了），這裡問一次要不要一鍵套用，避免每一趟都要手動重建。
         const futureCount = state.data.assignments.filter(a=>
           a.routeId===rid2 && a.date>=effDate && (a.status==='scheduled'||a.status==='in_progress')).length;
-        if(futureCount>0 && confirm(`週班表中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、請款拆賬）套用到這些車次嗎？司機與日期不會改變，司機費用（調整金額）也不會被覆蓋。`)){
+        if(futureCount>0 && confirm(`週班表中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、司機費用、請款拆賬）套用到這些車次嗎？司機與日期不會改變，已完成的車次不受影響。`)){
           try{
             const { updated } = await regenerateFutureAssignments(rid2, effDate);
             alert(`已套用到 ${updated} 趟未來車次。`);
