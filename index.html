@@ -359,7 +359,7 @@ function mediaGalleryHtml(media){
   return `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
     ${media.map(m=> m.type==='video'
       ? `<video src="${m.url||''}" controls style="width:70px; height:70px; border-radius:4px; background:#000;"></video>`
-      : `<img src="${m.url||''}" style="width:70px; height:70px; object-fit:cover; border-radius:4px; border:1px solid var(--border);">`
+      : `<img src="${m.url||''}" loading="lazy" decoding="async" style="width:70px; height:70px; object-fit:cover; border-radius:4px; border:1px solid var(--border);">`
     ).join('')}
   </div>`;
 }
@@ -3304,7 +3304,7 @@ function renderTodayDetail(todays){
               ` : '<span style="font-size:11.5px; color:var(--ink-soft);">已達3張上限</span>'}
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
-            ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
+            ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}" loading="lazy" decoding="async">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
             ${mediaGalleryHtml(dp.media)}
             ${dp.status!=='completed' ? `<div style="margin-top:8px;">
               <label style="font-size:12px; color:var(--ink-soft); display:block; margin-bottom:3px;">若無法送達，請選擇原因：</label>
@@ -3462,7 +3462,7 @@ function renderHistory(c){
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
               <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-              ${a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':`<span class="badge pending">未配達${dp.issueReason?'：'+dp.issueReason:''}</span>`}${dp.photo?`<br><img src="${dp.photo}">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}${mediaGalleryHtml(dp.media)}</div>`).join('')}
+              ${a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':`<span class="badge pending">未配達${dp.issueReason?'：'+dp.issueReason:''}</span>`}${dp.photo?`<br><img src="${dp.photo}" loading="lazy" decoding="async">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}${mediaGalleryHtml(dp.media)}</div>`).join('')}
             </div>
           `).join('')}
         </div>

@@ -91,7 +91,7 @@ function dateKeyCompare(a, b, todayKey){
 
 function rowHtml(it){
   return it.delivered ? `<div class="delivery-row">
-    ${it.photoUrl ? `<img src="${it.photoUrl}" data-full="${it.photoUrl}">` : '<div style="width:52px;height:52px;background:#EFEEE9;border-radius:4px;flex-shrink:0;"></div>'}
+    ${it.photoUrl ? `<img src="${it.photoUrl}" data-full="${it.photoUrl}" loading="lazy" decoding="async">` : '<div style="width:52px;height:52px;background:#EFEEE9;border-radius:4px;flex-shrink:0;"></div>'}
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
       <div class="delivery-time">送達時間 ${formatTime(new Date(it.completedAt))}</div>
