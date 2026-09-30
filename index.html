@@ -837,9 +837,22 @@ function renderNav(){
   nav.querySelectorAll('button').forEach(b=>{
     b.onclick=()=>{
       if(lockToProfile && b.dataset.tab!=='profile'){ alert('請先補齊必填的基本資料（電話、銀行帳戶）並儲存，才能使用其他功能。'); return; }
-      state.tab=b.dataset.tab; renderNav(); renderContent();
+      switchTab(b.dataset.tab);
     };
   });
+}
+// 週班表／薪資結算／請款結算／資料匯出都可能為了查舊資料，把
+// state.data.assignments 的窗口往前補到超過日常需要的範圍（見
+// trimAssignmentsToBaseWindow 說明）。離開這幾個分頁、切去別的分頁時，
+// 把窗口縮回日常操作真的需要的基本大小，避免查過的舊資料一直占著拖慢
+// 其他畫面——這是所有「切分頁」的共用入口（點側邊選單、或頁面內部
+// 「前往OOO」按鈕都會經過這裡），比只改 goTab() 更保險。
+const REPORT_TABS = new Set(['schedule', 'payroll', 'billing', 'export']);
+function switchTab(id){
+  if(REPORT_TABS.has(state.tab) && state.tab!==id) trimAssignmentsToBaseWindow();
+  state.tab = id;
+  renderNav();
+  renderContent();
 }
 function renderContent(){
   const c = document.getElementById('content');
@@ -852,7 +865,7 @@ function renderContent(){
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
   }
 }
-function goTab(id){ state.tab = id; renderNav(); renderContent(); }
+function goTab(id){ switchTab(id); }
 // ---------- 公告管理（主控發布，全體司機首頁看得到） ----------
 let editingAnnouncementId = null;
 // 發送對象的司機勾選清單（只列在職司機，停用司機沒有登入系統的可能，

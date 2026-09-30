@@ -325,6 +325,23 @@ async function refreshAssignmentsRange(start, end) {
   }
 }
 
+// ensureAssignmentsRange() 只會往前補資料、從不清掉，如果放著不管，一個
+// 主控在同一個session裡多查幾次舊月份薪資、舊區間請款、舊週班表，
+// state.data.assignments 會一路累積下去——100司機/1000店規模下，查個
+// 5、6次舊資料累積起來的量，跟直接抓90天窗口一樣重，等於繞了一圈又
+// 繞回原本要解決的問題。查歷史資料本身完全合理（要用就是要能查到），
+// 但查完離開那個畫面後，不該一直占用著拖慢其他所有畫面的篩選/掃描
+// 效能。這裡把 state.data.assignments 縮回「日常操作真的需要」的基本
+// 窗口（今日行程/週班表當週用），離開薪資結算/請款結算/資料匯出/週班表
+// 這些「查歷史資料」的分頁時呼叫（見 index.html goTab()），下次要查
+// 別的舊資料時 ensureAssignmentsRange() 會重新按需補抓，不影響查詢
+// 本身，只是不讓查過的舊資料一直賴著不走。
+function trimAssignmentsToBaseWindow() {
+  const baseStart = ymd(addDays(todayStr(), -ASSIGNMENTS_WINDOW_DAYS));
+  state.data.assignments = state.data.assignments.filter(a => a.date >= baseStart);
+  state.data.assignmentsWindowStart = baseStart;
+}
+
 async function fetchAssignment(id) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').eq('id', id).single();
