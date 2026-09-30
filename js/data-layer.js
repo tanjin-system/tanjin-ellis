@@ -201,6 +201,15 @@ function dataUrlToBytesAndType(dataUrl) {
 
 // ---------------- 讀取全部資料（取代 loadData()） ----------------
 
+// 車趟紀錄只會越堆越多、從來不會清（「資料匯出與封存」要admin手動確認才會刪），
+// 每次登入/重新整理都把全部車趟連同下貨點、附加照片一次抓光，資料量只會越來越大、
+// 越來越慢——尤其「加入主畫面」模式常被手機系統整個殺掉釋放記憶體，比一般瀏覽器
+// 分頁更常從頭冷啟動、更常整批重抓，延遲感特別明顯。改成預設只抓近期（今天往前
+// ASSIGNMENTS_WINDOW_DAYS天）＋所有未來已排定的車趟，涵蓋首頁/週班表/今日行程/
+// 歷史班表等日常畫面；真的需要查更久以前資料的地方（薪資結算、請款結算查舊月份、
+// 資料匯出與封存）用 ensureAssignmentsRange() 另外按需補抓，不影響一般登入速度。
+const ASSIGNMENTS_WINDOW_DAYS = 90;
+
 async function loadAllData() {
   const supabase = getSupabase();
   // 安全性修補：settings 表（含 admin_pin）依 schema.sql 設計刻意「只有 app_admin 能碰，
@@ -210,6 +219,7 @@ async function loadAllData() {
   // 無法登入使用。改成只有 admin 才查 settings，司機端用空殼帶過即可（司機端本來就
   // 沒有任何畫面會用到 adminPin）。
   const isAdmin = state.role === 'admin';
+  const assignmentsWindowStart = ymd(addDays(todayStr(), -ASSIGNMENTS_WINDOW_DAYS));
   const queries = {
     ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
     driversRes: supabase.from('drivers').select('*').order('created_at'),
@@ -217,7 +227,7 @@ async function loadAllData() {
     originsRes: supabase.from('origins').select('*').order('created_at'),
     dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
     routesRes: supabase.from('routes').select('*, origins(address), route_versions(*, route_version_points(*))'),
-    assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').order('trip_date'),
+    assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', assignmentsWindowStart).order('trip_date'),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
     // billing_adjustments 只 grant app_admin，司機身份查會 permission denied，只有 admin 才查。
@@ -242,6 +252,7 @@ async function loadAllData() {
     dropPoints: (byKey.dropPointsRes.data || []).map(mapDropPoint),
     routes: (byKey.routesRes.data || []).map(mapRoute),
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
+    assignmentsWindowStart,
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
     statements: (byKey.statementsRes.data || []).map(mapStatement),
     billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment),
@@ -251,6 +262,31 @@ async function loadAllData() {
   await resolvePhotoUrls(data.assignments);
   await resolveSignatureUrls(data.statements);
   return data;
+}
+
+// 補抓 loadAllData() 預設時間窗口之外、更早的車趟資料（見 ASSIGNMENTS_WINDOW_DAYS
+// 說明），只補「要求的日期」到「目前已載入的最早日期」這一段缺口，抓回來的資料
+// 直接併入 state.data.assignments（依 id 去重，正常不會重疊），並把
+// assignmentsWindowStart 往前推——之後再查更早的日期，缺口只會越補越小，
+// 不會整批重抓。startDate 已經在目前已載入範圍內時直接跳過，不打資料庫。
+async function ensureAssignmentsRange(startDate) {
+  if (!startDate) return;
+  const windowStart = state.data.assignmentsWindowStart;
+  if (!windowStart || startDate >= windowStart) return;
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('assignments')
+    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
+    .gte('trip_date', startDate)
+    .lt('trip_date', windowStart)
+    .order('trip_date');
+  if (error) throw new Error('讀取較早的車趟資料失敗：' + error.message);
+  const extra = (data || []).map(mapAssignment);
+  await resolvePhotoUrls(extra);
+  const existingIds = new Set(state.data.assignments.map(a => a.id));
+  extra.forEach(a => { if (!existingIds.has(a.id)) state.data.assignments.push(a); });
+  state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
+  state.data.assignmentsWindowStart = startDate;
 }
 
 async function fetchAssignment(id) {

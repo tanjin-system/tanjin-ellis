@@ -2622,11 +2622,17 @@ function renderPayroll(c){
     }).filter(Boolean);
     exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
   };
-  function refresh(){
+  async function refresh(){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     state._payrollMonth = monthStr;
     if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
+    const monthStart = monthStr + '-01';
+    if(state.data.assignmentsWindowStart && monthStart < state.data.assignmentsWindowStart){
+      document.getElementById('payrollResult').innerHTML = '<div class="empty">載入較早的車趟資料中...</div>';
+      try{ await ensureAssignmentsRange(monthStart); }
+      catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
+    }
     const live = driverMonthly(driverId, monthStr);
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
     const isFrozen = !!record;
@@ -2988,7 +2994,7 @@ function renderBilling(c){
     if(channelIds.length===1) return { start:sharedStart, end:sharedEnd };
     return defaultPeriod(channel, monthStr);
   }
-  function refresh(){
+  async function refresh(){
     const channelIds = checkedChannelIds();
     state._billingChannelIds = channelIds;
     const monthStr = document.getElementById('bMonth').value;
@@ -3005,6 +3011,11 @@ function renderBilling(c){
       }
     }
     const start = startInput.value, end = endInput.value; // 抓取範圍（合併配送明細用）
+    if(start && state.data.assignmentsWindowStart && start < state.data.assignmentsWindowStart){
+      document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">載入較早的車趟資料中...</div></div>';
+      try{ await ensureAssignmentsRange(start); }
+      catch(err){ document.getElementById('billingResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+    }
     refreshAdjList();
     if(!channelIds.length){
       document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">請至少勾選一個通路</div></div>';
@@ -3181,9 +3192,20 @@ function renderExport(c){
       return {type, start, end, rows: state.data.adjustments.filter(a=>a.month >= start.slice(0,7) && a.month <= end.slice(0,7))};
     }
   }
-  document.getElementById('exPreview').onclick = ()=>{
+  document.getElementById('exPreview').onclick = async ()=>{
+    const preType = document.getElementById('exType').value;
+    const preStart = document.getElementById('exStart').value;
+    if(!preStart || !document.getElementById('exEnd').value){ alert('請選擇起訖日期'); return; }
+    // 車趟／班表紀錄預設只在記憶體裡保留近期資料（見 loadAllData 的
+    // ASSIGNMENTS_WINDOW_DAYS），這裡是唯一需要任意查回更久以前資料的地方
+    // （匯出封存的目的就是處理舊資料），查詢範圍超出目前已載入的區間時，
+    // 才額外去資料庫把缺的那段補齊，不影響其他畫面的載入速度。
+    if(preType==='assignments' && state.data.assignmentsWindowStart && preStart < state.data.assignmentsWindowStart){
+      document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入較早的車趟資料中...</div></div>';
+      try{ await ensureAssignmentsRange(preStart); }
+      catch(err){ document.getElementById('exResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+    }
     const {type, start, end, rows} = getMatched();
-    if(!start || !end){ alert('請選擇起訖日期'); return; }
     document.getElementById('exResult').innerHTML = `
       <div class="panel">
         <h3 style="margin-top:0;">預覽：${start} ~ ${end}（共 ${rows.length} 筆）</h3>
