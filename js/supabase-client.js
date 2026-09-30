@@ -18,3 +18,53 @@ function getSupabase() {
   });
   return supabaseClient;
 }
+
+// Realtime 需要一條「常駐」的 WebSocket 連線，不能像 getSupabase() 那樣每次查詢
+// 都重新建立一個新的 client（那樣會一直開新連線、舊的變成孤兒）。這裡刻意另外
+// 維護一個獨立的 realtimeClient，整個登入session只建立一次。
+// setAuth() 把跟一般REST查詢同一組自訂JWT交給Realtime，讓它判斷「這個連線可以
+// 收到哪些異動」時，套用的是跟REST查詢一模一樣的RLS規則（司機只收得到自己的
+// 車趟/下貨點異動，主控收得到全部）——這件事已經實際用兩個不同司機的真實帳號
+// 測過雙向隔離，包含 assignment_drop_points 這種帶子查詢的RLS規則，確認沒有
+// 外洩風險，才接上這段。
+let realtimeClient = null;
+let realtimeChannel = null;
+
+// 一段時間內可能連續收到好幾筆異動（例如司機連續點好幾個下貨點完成），
+// debounce 讓短時間內的一串事件只觸發一次畫面刷新，不會一筆一筆刷。
+function debounce(fn, wait) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+}
+
+async function startRealtimeSync(onChange) {
+  const token = localStorage.getItem('fleet_auth_token');
+  if (!token || realtimeClient) return; // 沒登入，或已經在跑了（不重複訂閱）
+  try {
+    realtimeClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    await realtimeClient.realtime.setAuth(token);
+    const debouncedChange = debounce(onChange, 1200);
+    realtimeChannel = realtimeClient
+      .channel('assignments-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments' }, debouncedChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'assignment_drop_points' }, debouncedChange)
+      .subscribe();
+  } catch (e) {
+    console.error('Realtime 訂閱失敗，將繼續依賴定期輪詢：', e.message);
+    realtimeClient = null;
+    realtimeChannel = null;
+  }
+}
+
+function stopRealtimeSync() {
+  if (realtimeClient && realtimeChannel) {
+    realtimeClient.removeChannel(realtimeChannel);
+  }
+  realtimeClient = null;
+  realtimeChannel = null;
+}

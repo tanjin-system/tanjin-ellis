@@ -1174,7 +1174,7 @@ async function renderHomeAdmin(c){
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3>
-        <span style="font-size:11px; color:var(--ink-soft);">每25秒自動更新・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
+        <span style="font-size:11px; color:var(--ink-soft);">即時更新中・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
       </div>
@@ -1221,7 +1221,7 @@ function renderHomeDriver(c){
     </div>` : ''}
     ${currentProgressShifts() ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">🚚 同出發點今日出發狀況</h3>
-        <span style="font-size:11px; color:var(--ink-soft);">每25秒自動更新・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
+        <span style="font-size:11px; color:var(--ink-soft);">即時更新中・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
       </div>
@@ -3907,6 +3907,10 @@ function showApp(){
   document.getElementById('appLayout').style.display = 'flex';
   updateHeaderBar();
   updateTitle(); renderNav(); renderContent();
+  // 首頁即時更新改成主要靠 Realtime（車趟/下貨點一有異動就推播），不用再
+  // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
+  // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
+  startRealtimeSync(()=> refreshHomeDataIfIdle());
 }
 // renderLoginGate() 的正式版實作在 js/auth.js（呼叫 /api/auth-driver、/api/auth-admin，
 // 不再直接比對 state.data 裡的明文PIN/代碼；此時 state.data 根本還沒載入）。
@@ -3916,6 +3920,7 @@ document.getElementById('logoutBtn').onclick = ()=>{
     updateHeaderBar(); updateTitle(); renderNav(); renderContent();
     return;
   }
+  stopRealtimeSync();
   clearAuth(); state.role=null; state.activeDriverId=null; state.tab=null;
   renderLoginGate();
 };
@@ -3965,11 +3970,12 @@ async function checkForUpdate(){
   if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
   if(sig !== __bootPageSignature) showUpdateBanner();
 }
-// 首頁待著不動時原本3分鐘才自動重新抓一次資料，主控反映「今日尚未
-// 配送完成」這種本來就該看即時進度的面板延遲感很重。改成停留在首頁時
-// 每25秒就抓一次（分頁切到背景時暫停，不做沒人看的無意義請求，省流量）
-// ；另外記錄「上次更新時間」讓畫面上看得到資料新鮮度，不用自己猜，
-// 面板也加了手動「重新整理」按鈕，想馬上看最新的不用等。
+// 首頁即時更新主要靠 Realtime 推播（見 startRealtimeSync，車趟/下貨點一有
+// 異動，debounce一下就會呼叫這支函式刷新），不用再每25秒硬去問一次資料庫。
+// 這裡的定時輪詢改成保險用的備援（例如WebSocket連線中途斷掉、或Realtime
+// 訂閱失敗退回純輪詢的情況），間隔放寬到3分鐘即可，平常都是Realtime先
+// 觸發。分頁切到背景時暫停，不做沒人看的無意義請求；另外記錄「上次更新
+// 時間」讓畫面上看得到資料新鮮度，面板也保留手動「重新整理」按鈕。
 let lastHomeRefreshAt = null;
 async function refreshHomeDataIfIdle(){
   if(!state.data || state.tab!=='home' || document.hidden) return;
@@ -3996,7 +4002,7 @@ document.addEventListener('visibilitychange', ()=>{
 });
 window.addEventListener('focus', ()=>{ checkForUpdate(); refreshHomeDataIfIdle(); });
 setInterval(checkForUpdate, 5*60*1000);
-setInterval(refreshHomeDataIfIdle, 25*1000);
+setInterval(refreshHomeDataIfIdle, 180*1000);
 
 async function bootApp(){
   const auth = getStoredAuth();
