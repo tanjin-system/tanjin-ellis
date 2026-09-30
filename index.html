@@ -3072,8 +3072,13 @@ function renderSettings(c){
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">Supabase 免費方案用量</h3>
-      <p class="section-sub">免費方案上限：資料庫 500MB・檔案儲存 1GB・每月流量 5GB（流量無法從系統內查詢，請自行到 <a class="link" href="https://supabase.com/dashboard/project/rcdvclfvqnrvffxkseqh/settings/billing/usage" target="_blank">Supabase 後台 Usage 頁面</a>查看）。免費方案沒有自動備份機制，接近上限時請用下方「資料匯出與封存」處理，或考慮升級付費方案。</p>
+      <p class="section-sub">免費方案上限：資料庫 500MB・檔案儲存 1GB・每月流量 5GB。免費方案沒有自動備份機制，接近上限時請用下方「資料匯出與封存」處理，或考慮升級付費方案。</p>
       <div id="usageStatsBody"><div class="empty">載入中...</div></div>
+      <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+        <h4 style="margin:0 0 4px;">流量（Egress）監測</h4>
+        <p class="section-sub" style="margin-bottom:8px;">流量（司機/客戶讀取照片、資料庫查詢等所有對外傳輸的資料量）無法從系統內查詢即時數字，Supabase 官方沒有開放這項資料的查詢介面，只能到後台實際查看目前用量、是否超過每月5GB免費額度。</p>
+        <a class="btn ghost" href="https://supabase.com/dashboard/project/rcdvclfvqnrvffxkseqh/settings/billing/usage" target="_blank" rel="noopener" style="text-decoration:none; display:inline-block;">前往 Supabase 後台查看流量用量</a>
+      </div>
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">資料備份</h3>
