@@ -219,8 +219,32 @@ function dataUrlToBytesAndType(dataUrl) {
 // 按需補抓缺口，不受這個預設窗口大小影響。
 const ASSIGNMENTS_WINDOW_DAYS = 14;
 
+// 目錄資料（司機/通路/出發點/下貨點/路線，含路線巢狀的全部版本跟版本下貨點）
+// 幾乎不會變動，但份量是 loadAllData() 裡最大的一塊（尤其是路線，每條都
+// 巢狀帶著全部歷史版本）。這裡先查 catalog_meta 這個單一時間戳記（見
+// schema.sql PART 9，目錄表格任一張有異動，觸發器就會更新它），跟瀏覽器
+// localStorage 存的版本比對——一樣就直接用本地快取，完全跳過這5支查詢；
+// 版本查詢本身失敗（例如舊版資料庫還沒跑 migration）就當作沒快取，照原本
+// 方式整包重抓，不影響既有行為。
+const CATALOG_CACHE_KEY = 'fleet_catalog_cache_v1';
+const CATALOG_VERSION_KEY = 'fleet_catalog_version_v1';
+
 async function loadAllData() {
   const supabase = getSupabase();
+
+  let cachedCatalog = null;
+  let remoteCatalogVersion = null;
+  try {
+    const { data: meta, error: metaErr } = await supabase.from('catalog_meta').select('version').eq('id', 1).maybeSingle();
+    if (!metaErr && meta?.version) {
+      remoteCatalogVersion = meta.version;
+      if (remoteCatalogVersion === localStorage.getItem(CATALOG_VERSION_KEY)) {
+        const cachedJson = localStorage.getItem(CATALOG_CACHE_KEY);
+        if (cachedJson) cachedCatalog = JSON.parse(cachedJson);
+      }
+    }
+  } catch (e) { /* 版本比對只是加速用，任何失敗都當作沒快取，退回正常整包重抓 */ }
+
   // 安全性修補：settings 表（含 admin_pin）依 schema.sql 設計刻意「只有 app_admin 能碰，
   // app_driver 完全不可見」，故意不 grant app_driver 任何權限，避免司機讀到明文主控PIN。
   // 但這代表司機身份查 settings 一定會收到 permission denied 錯誤——原本這裡不分身份
@@ -231,11 +255,13 @@ async function loadAllData() {
   const assignmentsWindowStart = ymd(addDays(todayStr(), -ASSIGNMENTS_WINDOW_DAYS));
   const queries = {
     ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
-    driversRes: supabase.from('drivers').select('*').order('created_at'),
-    channelsRes: supabase.from('channels').select('*').order('created_at'),
-    originsRes: supabase.from('origins').select('*').order('created_at'),
-    dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
-    routesRes: supabase.from('routes').select('*, origins(address), route_versions(*, route_version_points(*))'),
+    ...(cachedCatalog ? {} : {
+      driversRes: supabase.from('drivers').select('*').order('created_at'),
+      channelsRes: supabase.from('channels').select('*').order('created_at'),
+      originsRes: supabase.from('origins').select('*').order('created_at'),
+      dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
+      routesRes: supabase.from('routes').select('*, origins(address), route_versions(*, route_version_points(*))')
+    }),
     assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', assignmentsWindowStart).order('trip_date'),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
@@ -255,11 +281,11 @@ async function loadAllData() {
 
   const data = {
     settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null },
-    drivers: (byKey.driversRes.data || []).map(mapDriver),
-    channels: (byKey.channelsRes.data || []).map(mapChannel),
-    origins: (byKey.originsRes.data || []).map(mapOrigin),
-    dropPoints: (byKey.dropPointsRes.data || []).map(mapDropPoint),
-    routes: (byKey.routesRes.data || []).map(mapRoute),
+    drivers: cachedCatalog ? cachedCatalog.drivers : (byKey.driversRes.data || []).map(mapDriver),
+    channels: cachedCatalog ? cachedCatalog.channels : (byKey.channelsRes.data || []).map(mapChannel),
+    origins: cachedCatalog ? cachedCatalog.origins : (byKey.originsRes.data || []).map(mapOrigin),
+    dropPoints: cachedCatalog ? cachedCatalog.dropPoints : (byKey.dropPointsRes.data || []).map(mapDropPoint),
+    routes: cachedCatalog ? cachedCatalog.routes : (byKey.routesRes.data || []).map(mapRoute),
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
     assignmentsWindowStart,
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
@@ -267,6 +293,19 @@ async function loadAllData() {
     billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment),
     announcements: (byKey.announcementsRes.data || []).map(mapAnnouncement)
   };
+
+  if (!cachedCatalog && remoteCatalogVersion) {
+    // 剛才是整包重抓目錄資料，把這次抓到的資料連同版本寫回本地快取，下次
+    // 登入版本沒變就吃得到——寫入失敗（例如瀏覽器localStorage被塞滿）不影響
+    // 正常運作，純粹放棄這次快取，下次登入照樣會走一樣的判斷、不會壞掉。
+    try {
+      localStorage.setItem(CATALOG_VERSION_KEY, remoteCatalogVersion);
+      localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({
+        drivers: data.drivers, channels: data.channels, origins: data.origins,
+        dropPoints: data.dropPoints, routes: data.routes
+      }));
+    } catch (e) { /* 忽略快取寫入失敗 */ }
+  }
 
   await resolvePhotoUrls(data.assignments);
   await resolveSignatureUrls(data.statements);

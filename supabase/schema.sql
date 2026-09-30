@@ -878,3 +878,48 @@ begin
 end;
 $$;
 grant execute on function driver_depot_overview(date) to app_driver;
+
+-- ============================================================
+-- PART 9：目錄資料版本標記，給前端做「有變動才重抓」的快取比對用
+-- ============================================================
+-- drivers/channels/origins/drop_points/routes（含巢狀的route_versions/
+-- route_version_points）這些「目錄資料」在 loadAllData() 裡幾乎每次登入
+-- 都會整包重抓，但實際上一天可能只會被改個一兩次。這裡維護一個單一列
+-- 的版本戳記，這些目錄表格任何一張有異動（不管是新增/修改/刪除），
+-- 觸發器就會把這裡的時間戳記更新成當下時間；前端登入時先查這裡的
+-- version，跟本地瀏覽器快取的版本比對，一樣就直接用快取、不用重新整包
+-- 抓那幾支查詢（詳見 js/data-layer.js 的 loadAllData()）。
+--
+-- 沒有加 RLS——跟 channels/origins/drop_points/routes 這些目錄表格一樣，
+-- 單純依賴 anon 角色的預設權限（app_admin/app_driver 都是 anon 的成員），
+-- 這裡只存一個時間戳記，不是機敏資料，不需要另外鎖權限。
+-- ============================================================
+create table catalog_meta (
+  id smallint primary key default 1,
+  version timestamptz not null default now(),
+  constraint catalog_meta_singleton check (id = 1)
+);
+insert into catalog_meta (id, version) values (1, now());
+
+create or replace function bump_catalog_version() returns trigger
+language plpgsql as $$
+begin
+  update catalog_meta set version = now() where id = 1;
+  return null;
+end;
+$$;
+
+create trigger trg_catalog_version_drivers after insert or update or delete on drivers
+  for each statement execute function bump_catalog_version();
+create trigger trg_catalog_version_channels after insert or update or delete on channels
+  for each statement execute function bump_catalog_version();
+create trigger trg_catalog_version_origins after insert or update or delete on origins
+  for each statement execute function bump_catalog_version();
+create trigger trg_catalog_version_drop_points after insert or update or delete on drop_points
+  for each statement execute function bump_catalog_version();
+create trigger trg_catalog_version_routes after insert or update or delete on routes
+  for each statement execute function bump_catalog_version();
+create trigger trg_catalog_version_route_versions after insert or update or delete on route_versions
+  for each statement execute function bump_catalog_version();
+create trigger trg_catalog_version_route_version_points after insert or update or delete on route_version_points
+  for each statement execute function bump_catalog_version();
