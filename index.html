@@ -1091,7 +1091,7 @@ async function loadDepotOverview(driverId, date){
   depotOverviewCache = { key, rows };
   return rows;
 }
-function renderHomeAdmin(c){
+async function renderHomeAdmin(c){
   const tiles = [
     {id:'announcements', label:'公告管理', sub:'發布訊息給全體司機'},
     {id:'schedule', label:'週班表', sub:'指派司機與路線'},
@@ -1105,6 +1105,17 @@ function renderHomeAdmin(c){
     {id:'export', label:'資料匯出', sub:'區間匯出並封存'},
     {id:'settings', label:'系統設定', sub:'管理PIN碼'}
   ];
+  // 即時利潤的支出/請款都是算「本月至今」，登入當下記憶體裡預設只有近14天
+  // （見 ASSIGNMENTS_WINDOW_DAYS），月中之後（超過14號）本月初那幾天會被
+  // 漏算，不只是慢、是金額會算錯，所以這裡渲染前一定要先確保整個月都補齊。
+  // 平常（已經補過、或本來就在14天窗口內）這裡會直接跳過，不會每次都打資料庫。
+  const monthStart = todayStr().slice(0,7) + '-01';
+  if(state.data.assignmentsWindowStart && monthStart < state.data.assignmentsWindowStart){
+    c.innerHTML = '<h2 class="section-title">首頁</h2><div class="empty">載入中...</div>';
+    try{ await ensureAssignmentsRange(monthStart); }
+    catch(e){ c.innerHTML = `<h2 class="section-title">首頁</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    if(state.tab!=='home') return; // 使用者可能已經切走這一頁
+  }
   const p = computeProfitSnapshot();
   const progressShifts = currentProgressShifts();
   const showProgress = !!progressShifts;
@@ -2251,8 +2262,16 @@ function routeSortCompare(a,b){
 function sortedRoutes(){
   return state.data.routes.slice().sort(routeSortCompare);
 }
-function renderScheduleAdmin(c){
+async function renderScheduleAdmin(c){
   const week1 = getWeekDates(state.weekOffset);
+  // 往前翻週（state.weekOffset 可以一直往負的翻）翻超過近14天的預設窗口時，
+  // 要先補齊那一週的資料再畫格子，不然會看到格子是空的、以為那週沒排班。
+  if(state.data.assignmentsWindowStart && week1[0] < state.data.assignmentsWindowStart){
+    c.innerHTML = '<h2 class="section-title">週班表</h2><div class="empty">載入中...</div>';
+    try{ await ensureAssignmentsRange(week1[0]); }
+    catch(e){ c.innerHTML = `<h2 class="section-title">週班表</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    if(state.tab!=='schedule') return; // 使用者可能已經切走這一頁
+  }
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
   const routeOpts = sortedRoutes().map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
   const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
@@ -3491,8 +3510,20 @@ function dpPhotoUrls(dp){
   (dp.media||[]).filter(m=>m.type==='image' && m.url).forEach(m=> urls.push(m.url));
   return urls;
 }
-function renderHistory(c){
+async function renderHistory(c){
   const dId = state.activeDriverId;
+  // 司機自己的歷史班表想看多久以前都合理，而且司機端因為RLS本來就只看得到
+  // 自己的車趟（driver_select_own policy），不會因為系統整體規模（多少司機/
+  // 多少店家）變大而跟著變重，所以這裡直接補到半年前，比預設的14天窗口寬
+  // 很多，不受主控端那邊刻意縮小窗口的影響。
+  const HISTORY_LOOKBACK_DAYS = 180;
+  const lookbackStart = ymd(addDays(todayStr(), -HISTORY_LOOKBACK_DAYS));
+  if(state.data.assignmentsWindowStart && lookbackStart < state.data.assignmentsWindowStart){
+    c.innerHTML = '<h2 class="section-title">歷史班表</h2><div class="empty">載入中...</div>';
+    try{ await ensureAssignmentsRange(lookbackStart); }
+    catch(e){ c.innerHTML = `<h2 class="section-title">歷史班表</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    if(state.tab!=='history') return; // 使用者可能已經切走這一頁
+  }
   const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed').sort((a,b)=>b.date.localeCompare(a.date));
   const groups = {};
   list.forEach(a=>{ if(!groups[a.date]) groups[a.date] = []; groups[a.date].push(a); });
@@ -3912,7 +3943,13 @@ let lastHomeRefreshAt = null;
 async function refreshHomeDataIfIdle(){
   if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
-    state.data = await loadAllData();
+    // 只重抓首頁真的需要跟上即時狀態的車趟資料，不呼叫整支 loadAllData()——
+    // 司機/通路/路線這些目錄資料幾乎不會變動，100人同時在線時每25秒讓每個人
+    // 都重抓一次是不必要的資料庫負擔（見 refreshAssignmentsRange 說明）。
+    // 主控要看到「本月至今」的即時利潤，司機首頁只需要「今天」的行程數字。
+    const today = todayStr();
+    if(state.role==='admin') await refreshAssignmentsRange(today.slice(0,7)+'-01', today);
+    else await refreshAssignmentsRange(today, today);
     // 司機首頁的「同出發點今日出發狀況」是另外呼叫loadDepotOverview()
     // 查的（司機身份是走RPC，不在loadAllData()裡），有自己的一層快取
     // （depotOverviewCache），這裡一起清掉，讓renderContent()重新渲染時

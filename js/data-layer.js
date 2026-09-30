@@ -204,11 +204,20 @@ function dataUrlToBytesAndType(dataUrl) {
 // 車趟紀錄只會越堆越多、從來不會清（「資料匯出與封存」要admin手動確認才會刪），
 // 每次登入/重新整理都把全部車趟連同下貨點、附加照片一次抓光，資料量只會越來越大、
 // 越來越慢——尤其「加入主畫面」模式常被手機系統整個殺掉釋放記憶體，比一般瀏覽器
-// 分頁更常從頭冷啟動、更常整批重抓，延遲感特別明顯。改成預設只抓近期（今天往前
-// ASSIGNMENTS_WINDOW_DAYS天）＋所有未來已排定的車趟，涵蓋首頁/週班表/今日行程/
-// 歷史班表等日常畫面；真的需要查更久以前資料的地方（薪資結算、請款結算查舊月份、
-// 資料匯出與封存）用 ensureAssignmentsRange() 另外按需補抓，不影響一般登入速度。
-const ASSIGNMENTS_WINDOW_DAYS = 90;
+// 分頁更常從頭冷啟動、更常整批重抓，延遲感特別明顯。
+//
+// 這個天數要照「系統設計要撐住的規模」訂，不是照「現在資料量看起來夠不夠」訂：
+// 目標是100位司機、1000+店家同時配送。主控端身份（RLS admin_all policy 是
+// using(true)，看得到全部司機的資料）在那個規模下，即使窗口只抓14天，換算
+// 下來大約還是要抓大幾千筆下貨點紀錄；抓90天在那個規模下單次登入的JSON會到
+// 10幾MB，一定會感覺到卡頓，所以刻意縮到14天，只涵蓋「今日行程/本週班表」
+// 這種天天在看的畫面（這兩個畫面另外各自呼叫 ensureAssignmentsRange 確保涵蓋
+// 實際顯示的區間，不完全依賴這裡的預設值）。司機自己登入時因為 RLS
+// （driver_select_own policy 是 driver_id = auth_driver_id()）本來就只看得到
+// 自己的車趟，不會跟著全系統規模一起變大，14天以外需要的地方（薪資結算、
+// 請款結算查舊月份、資料匯出與封存、司機歷史班表）都用 ensureAssignmentsRange()
+// 按需補抓缺口，不受這個預設窗口大小影響。
+const ASSIGNMENTS_WINDOW_DAYS = 14;
 
 async function loadAllData() {
   const supabase = getSupabase();
@@ -287,6 +296,33 @@ async function ensureAssignmentsRange(startDate) {
   extra.forEach(a => { if (!existingIds.has(a.id)) state.data.assignments.push(a); });
   state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
   state.data.assignmentsWindowStart = startDate;
+}
+
+// 首頁待著不動時的背景自動刷新（見 index.html refreshHomeDataIfIdle）原本是
+// 每25秒重新呼叫整支 loadAllData()——連司機/通路/出發點/路線（含每條路線的
+// 全部版本與版本下貨點）這些幾乎不會變動的目錄資料也一起重抓一次。在100位
+// 司機同時上線的規模下，這代表每25秒就有100個並發連線各自重抓一次幾乎相同
+// 的目錄資料，是完全不必要的資料庫負擔。首頁背景刷新真正需要跟上即時狀態
+// 的只有車趟資料（請款-薪資即時利潤、今日尚未配送完成），改成只重新抓「這個
+// 範圍內」的車趟、直接整段覆蓋（不是像 ensureAssignmentsRange 那樣只補缺口，
+// 這裡要的是最新狀態，即使範圍已經載入過也要覆蓋成最新的），範圍外的資料
+// 完全不動。
+async function refreshAssignmentsRange(start, end) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('assignments')
+    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
+    .gte('trip_date', start)
+    .lte('trip_date', end)
+    .order('trip_date');
+  if (error) throw new Error('重新整理車趟資料失敗：' + error.message);
+  const fresh = (data || []).map(mapAssignment);
+  await resolvePhotoUrls(fresh);
+  const outsideRange = state.data.assignments.filter(a => a.date < start || a.date > end);
+  state.data.assignments = outsideRange.concat(fresh).sort((a, b) => a.date.localeCompare(b.date));
+  if (!state.data.assignmentsWindowStart || start < state.data.assignmentsWindowStart) {
+    state.data.assignmentsWindowStart = start;
+  }
 }
 
 async function fetchAssignment(id) {
