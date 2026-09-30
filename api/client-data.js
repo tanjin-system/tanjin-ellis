@@ -52,16 +52,33 @@ module.exports = async (req, res) => {
   // 88個點，同時有445筆車趟下貨點紀錄）很容易被 limit 截斷，導致「明明路線管理裡
   // 有安排，客戶查詢卻看不到」。現在一次抓齊，用 delivered 欄位分辨已完成/尚未完成，
   // 完全不會因為狀態或筆數而整批消失。
-  const { data: rows, error: rowsErr } = await supabase
-    .from('assignment_drop_points')
-    .select('id, address, code, status, completed_at, photo_url, assignments!inner(trip_date, status, routes!inner(shift))')
-    .eq('channel_id', channel.id)
-    .neq('assignments.status', 'cancelled')
-    .gte('assignments.trip_date', sinceStr)
-    .limit(5000);
-  if (rowsErr) {
-    console.error('client-data points query failed:', rowsErr.message);
-    return res.status(500).json({ error: '伺服器錯誤，請稍後再試' });
+  //
+  // 這裡的 .limit() 只是客戶端「最多要多少筆」的請求值，Supabase 專案本身在
+  // PostgREST 層還有一個獨立的「Max Rows」上限（預設1000筆），不管客戶端
+  // limit 開多大，伺服器都只會回傳到那個上限為止，而且沒下 order 的話回傳的
+  // 是「哪1000筆」完全不保證跟日期順序有關——這正是實際發生過的bug：7-11一個
+  // 通路60天+未來排班合計超過1000筆，被伺服器悄悄截斷，客戶查詢頁面上桃園市
+  // 某兩天的門市因此「隨機」少了8家，看起來像資料出錯，其實資料庫裡完全正常。
+  // 改成用 .range() 分頁迴圈，依 id 排序、每次抓1000筆抓到抓不滿為止，不管
+  // 通路未來成長到多少筆、也不管 Supabase 專案的 Max Rows 設定值多少，都保證
+  // 抓到完整資料，不會再被悄悄截斷。
+  const PAGE_SIZE = 1000;
+  let rows = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data: page, error: pageErr } = await supabase
+      .from('assignment_drop_points')
+      .select('id, address, code, status, completed_at, photo_url, assignments!inner(trip_date, status, routes!inner(shift))')
+      .eq('channel_id', channel.id)
+      .neq('assignments.status', 'cancelled')
+      .gte('assignments.trip_date', sinceStr)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (pageErr) {
+      console.error('client-data points query failed:', pageErr.message);
+      return res.status(500).json({ error: '伺服器錯誤，請稍後再試' });
+    }
+    rows = rows.concat(page);
+    if (page.length < PAGE_SIZE) break;
   }
 
   let signedUrls = {};
