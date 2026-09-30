@@ -3445,6 +3445,30 @@ function renderTodayDetail(todays){
 }
 
 // ---------- 司機端：歷史班表 ----------
+// 送達照片（主照片＋附加照片）共用的點擊看圖彈窗，跟客戶查詢頁面同一個
+// 精神：預設完全不載入照片，點了才跳出視窗、才真的去下載那幾張，避免
+// 像之前那樣「同一頁裡有的門店有照片縮圖、有的沒有」看起來時有時無
+// （其實是每張縮圖都直接下載，只是簽名連結偶爾失敗才會看起來不一致），
+// 同時也減少Supabase流量。
+function openPhotoLightbox(urls){
+  if(!urls || !urls.length) return;
+  let host = document.getElementById('photoLightboxHost');
+  if(!host){ host = document.createElement('div'); host.id = 'photoLightboxHost'; document.body.appendChild(host); }
+  host.innerHTML = `<div class="modal-backdrop" id="photoLightboxBackdrop">
+    <div class="modal-box" style="max-width:480px;">
+      <div class="toolbar"><strong>送達照片</strong><button class="btn ghost" id="photoLightboxClose">關閉</button></div>
+      ${urls.map(u=>`<img src="${u}" style="width:100%; border-radius:4px; margin-bottom:8px; display:block;">`).join('')}
+    </div>
+  </div>`;
+  document.getElementById('photoLightboxBackdrop').onclick = (e)=>{ if(e.target.id==='photoLightboxBackdrop') host.innerHTML=''; };
+  document.getElementById('photoLightboxClose').onclick = ()=> host.innerHTML='';
+}
+function dpPhotoUrls(dp){
+  const urls = [];
+  if(dp.photo) urls.push(dp.photo);
+  (dp.media||[]).filter(m=>m.type==='image' && m.url).forEach(m=> urls.push(m.url));
+  return urls;
+}
 function renderHistory(c){
   const dId = state.activeDriverId;
   const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed').sort((a,b)=>b.date.localeCompare(a.date));
@@ -3467,7 +3491,13 @@ function renderHistory(c){
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
               <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-              ${a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':`<span class="badge pending">未配達${dp.issueReason?'：'+dp.issueReason:''}</span>`}${dp.photo?`<br><img src="${dp.photo}" loading="lazy" decoding="async">`:dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}${mediaGalleryHtml(dp.media)}</div>`).join('')}
+              ${a.dropPoints.map(dp=>{
+                const photoUrls = dpPhotoUrls(dp);
+                const statusBadge = dp.status==='completed'
+                  ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已送達${photoUrls.length?'・點擊看照片':''}</span>`
+                  : `<span class="badge pending">未配達${dp.issueReason?'：'+dp.issueReason:''}</span>`;
+                return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photo && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`;
+              }).join('')}
             </div>
           `).join('')}
         </div>
@@ -3476,6 +3506,13 @@ function renderHistory(c){
   `;
   c.querySelectorAll('.date-head').forEach(head=>{
     head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
+  });
+  const dpById = {};
+  list.forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
+  c.querySelectorAll('[data-dpid]').forEach(el=>{
+    const dp = dpById[el.dataset.dpid];
+    const urls = dp ? dpPhotoUrls(dp) : [];
+    if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
   });
 }
 function renderMyEarnings(c){
