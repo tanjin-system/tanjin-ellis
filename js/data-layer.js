@@ -325,6 +325,25 @@ async function refreshAssignmentsRange(start, end) {
   }
 }
 
+// 薪資結算／請款結算／資料匯出這三個純報表畫面（只讀，不像週班表還要點格子
+// 編輯/指派）改成完全不碰 state.data.assignments 共用陣列，查詢當下直接跟
+// 資料庫要「這次剛好需要的那一段」，用完就丟（存在呼叫端自己的區域變數，
+// 不寫回 state）。這樣畫面停留期間不管查的區間多大，都不會拖到其他任何
+// 畫面的效能，也不需要另外用 trimAssignmentsToBaseWindow 收尾。刻意不呼叫
+// resolvePhotoUrls——這三個畫面從來不顯示送達照片，省下不必要的 Storage
+// 簽名連結請求。
+async function fetchAssignmentsInRange(start, end) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('assignments')
+    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
+    .gte('trip_date', start)
+    .lte('trip_date', end)
+    .order('trip_date');
+  if (error) throw new Error('讀取車趟資料失敗：' + error.message);
+  return (data || []).map(mapAssignment);
+}
+
 // ensureAssignmentsRange() 只會往前補資料、從不清掉，如果放著不管，一個
 // 主控在同一個session裡多查幾次舊月份薪資、舊區間請款、舊週班表，
 // state.data.assignments 會一路累積下去——100司機/1000店規模下，查個

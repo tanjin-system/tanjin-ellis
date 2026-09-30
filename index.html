@@ -162,6 +162,7 @@ function money(n){ return (Number(n)||0).toLocaleString('zh-Hant-TW'); }
 function pad(n){ return String(n).padStart(2,'0'); }
 function ymd(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function addDays(dateStr, days){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return d; }
+function monthEndStr(monthStr){ const [y,m] = monthStr.split('-').map(Number); return ymd(new Date(y,m,0)); }
 // 安全性修補：司機端可自由輸入的文字（目前是 issueNote 異常備註）在塞進 innerHTML 前
 // 一定要先跳脫，否則司機可以在備註裡放 <img onerror=...> 之類的內容，主控端打開該筆
 // 車趟時就會在主控瀏覽器執行，偷走主控的登入token（有全庫存取權）。
@@ -688,9 +689,9 @@ function effectiveByChannelForAssignment(a){
   }
   return (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
 }
-function channelBillingTotal(channelId, start, end){
+function channelBillingTotal(channelId, start, end, assignmentsList = state.data.assignments){
   let total=0; const contributing=[];
-  state.data.assignments.forEach(a=>{
+  assignmentsList.forEach(a=>{
     if(a.status==='completed' && a.date>=start && a.date<=end){
       const byChannel = effectiveByChannelForAssignment(a);
       if(byChannel[channelId]){ total+=byChannel[channelId]; contributing.push({a, amount:byChannel[channelId]}); }
@@ -727,8 +728,8 @@ function splitPeriodByVersionChanges(channelId, start, end){
   });
 }
 // 通路請款總額依「供應商（出發點）」拆開顯示（對應舊Excel「各區費用總覽」）。
-function channelOriginBreakdown(channelId, start, end){
-  const { contributing } = channelBillingTotal(channelId, start, end);
+function channelOriginBreakdown(channelId, start, end, assignmentsList = state.data.assignments){
+  const { contributing } = channelBillingTotal(channelId, start, end, assignmentsList);
   const byOrigin = {};
   contributing.forEach(x=>{
     const route = state.data.routes.find(r=>r.id===x.a.routeId);
@@ -749,8 +750,8 @@ function untaxWithTax(amount, taxMode){
   else { untaxed = Math.round(amount); withTax = Math.round(amount*1.05); }
   return { untaxed, withTax, tax: withTax-untaxed };
 }
-function driverMonthly(driverId, monthStr){
-  const trips = state.data.assignments.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
+function driverMonthly(driverId, monthStr, assignmentsList = state.data.assignments){
+  const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
   const tripTotal = trips.reduce((s,a)=> s+(Number(a.payrollFareSnapshot ?? a.fare)||0), 0);
   const adjustments = state.data.adjustments.filter(a=> a.driverId===driverId && a.month===monthStr);
   const adjTotal = adjustments.reduce((s,a)=> s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
@@ -841,13 +842,13 @@ function renderNav(){
     };
   });
 }
-// 週班表／薪資結算／請款結算／資料匯出都可能為了查舊資料，把
-// state.data.assignments 的窗口往前補到超過日常需要的範圍（見
-// trimAssignmentsToBaseWindow 說明）。離開這幾個分頁、切去別的分頁時，
-// 把窗口縮回日常操作真的需要的基本大小，避免查過的舊資料一直占著拖慢
-// 其他畫面——這是所有「切分頁」的共用入口（點側邊選單、或頁面內部
-// 「前往OOO」按鈕都會經過這裡），比只改 goTab() 更保險。
-const REPORT_TABS = new Set(['schedule', 'payroll', 'billing', 'export']);
+// 薪資結算／請款結算／資料匯出改成各自直接查資料庫、不寫回共用的
+// state.data.assignments 之後，只剩「週班表」還會為了查舊週把窗口往前補
+// 到超過日常需要的範圍（見 trimAssignmentsToBaseWindow 說明）。離開週班表、
+// 切去別的分頁時，把窗口縮回日常操作真的需要的基本大小，避免查過的舊
+// 資料一直占著拖慢其他畫面——這是所有「切分頁」的共用入口（點側邊選單、
+// 或頁面內部「前往OOO」按鈕都會經過這裡），比只改 goTab() 更保險。
+const REPORT_TABS = new Set(['schedule']);
 function switchTab(id){
   if(REPORT_TABS.has(state.tab) && state.tab!==id) trimAssignmentsToBaseWindow();
   state.tab = id;
@@ -2638,14 +2639,20 @@ function renderPayroll(c){
       refresh();
     };
   });
-  document.getElementById('printAllStatements').onclick = ()=>{
+  document.getElementById('printAllStatements').onclick = async ()=>{
     const monthStr = document.getElementById('pAllMonth').value;
     const records = state.data.statements.filter(s=>s.month===monthStr);
     if(!records.length){ alert(`${monthStr} 沒有任何司機完成月結確認`); return; }
+    const btn = document.getElementById('printAllStatements');
+    btn.disabled = true; const originalText = btn.textContent; btn.textContent = '讀取資料中…';
+    let monthAssignments;
+    try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
+    catch(err){ alert(err.message); btn.disabled=false; btn.textContent=originalText; return; }
+    btn.disabled = false; btn.textContent = originalText;
     const slips = records.map(record=>{
       const driver = state.data.drivers.find(d=>d.id===record.driverId);
       if(!driver) return null;
-      const r = driverMonthly(record.driverId, monthStr);
+      const r = driverMonthly(record.driverId, monthStr, monthAssignments);
       const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
       const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
       return payrollSlipHtml(driver, monthStr, merged, ded, {
@@ -2659,13 +2666,15 @@ function renderPayroll(c){
     const monthStr = document.getElementById('pMonth').value;
     state._payrollMonth = monthStr;
     if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
-    const monthStart = monthStr + '-01';
-    if(state.data.assignmentsWindowStart && monthStart < state.data.assignmentsWindowStart){
-      document.getElementById('payrollResult').innerHTML = '<div class="empty">載入較早的車趟資料中...</div>';
-      try{ await ensureAssignmentsRange(monthStart); }
-      catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
-    }
-    const live = driverMonthly(driverId, monthStr);
+    // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
+    // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
+    // 也不影響其他畫面的效能，查哪個月份都一樣快。
+    document.getElementById('payrollResult').innerHTML = '<div class="empty">載入中...</div>';
+    let monthAssignments;
+    try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
+    catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
+    const live = driverMonthly(driverId, monthStr, monthAssignments);
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
     const isFrozen = !!record;
     // 還沒月結確認的預覽，要用「排除預支」的淨額（跟confirmMonthlyStatement()
@@ -2756,15 +2765,15 @@ function originLabel(addr){
 }
 // 算出一個通路在某區間的請款總覽資料（未稅/含稅/各出發點總額，純資料不含畫面），
 // 畫面渲染跟Excel匯出共用同一份資料，確保兩邊數字保證一致。
-function computeChannelBillingReport(channelId, start, end){
+function computeChannelBillingReport(channelId, start, end, assignmentsList = state.data.assignments){
   const channel = state.data.channels.find(ch=>ch.id===channelId);
   if(!channel) return null;
   const segments = splitPeriodByVersionChanges(channelId, start, end);
   // 先把每段小區間的金額四捨五入到整數再往下加總，確保畫面/Excel上顯示的每一列
   // 跟「未稅/含稅合計」對得起來（不會因為先加總浮點數再四捨五入而差1元）。
-  const segRows = segments.map(seg=> ({ ...seg, amount: Math.round(channelBillingTotal(channelId, seg.start, seg.end).total) }));
+  const segRows = segments.map(seg=> ({ ...seg, amount: Math.round(channelBillingTotal(channelId, seg.start, seg.end, assignmentsList).total) }));
   const tripTotal = segRows.reduce((s,x)=>s+x.amount, 0);
-  const originRows = channelOriginBreakdown(channelId, start, end);
+  const originRows = channelOriginBreakdown(channelId, start, end, assignmentsList);
   const adjustments = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===start && x.periodEnd===end);
   const adjTotal = adjustments.reduce((s,x)=>s+x.amount, 0);
   const combined = tripTotal + adjTotal;
@@ -2778,8 +2787,8 @@ function computeChannelBillingReport(channelId, start, end){
 // 同一條路線如果連續好幾天下貨點組成、金額都完全相同（代表路線沒有異動），
 // 會自動合併成一列「生效區間＋天數」；只有真的異動過的路線才會拆成好幾列，
 // 不需要像人工作業一樣，一有異動就整個出發點的車都重新複製一份。
-function mergedRunRows(channelIds, start, end){
-  const rows = state.data.assignments.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
+function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assignments){
+  const rows = assignmentsList.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
   const byOriginRoute = {};
   rows.forEach(a=>{
     const route = state.data.routes.find(r=>r.id===a.routeId);
@@ -2931,20 +2940,23 @@ function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
 // channelIds 只有一個時，該通路的總覽沿用抓取範圍(start~end)；勾選多個通路時，
 // 每個通路的總覽改用自己在「通路管理」設定的週期（自然月／自訂區間），
 // 不會被抓取範圍污染——跟畫面渲染的 ownPeriodFor() 邏輯保持一致。
-function exportBillingExcel(channelIds, monthStr, start, end){
+function exportBillingExcel(channelIds, monthStr, start, end, assignmentsList = state.data.assignments){
   const wb = XLSX.utils.book_new();
   channelIds.forEach(cid=>{
     const channel = state.data.channels.find(ch=>ch.id===cid);
     if(!channel) return;
     const own = channelIds.length===1 ? {start, end} : defaultPeriod(channel, monthStr);
-    const report = computeChannelBillingReport(cid, own.start, own.end);
+    const report = computeChannelBillingReport(cid, own.start, own.end, assignmentsList);
     if(report) buildChannelSummarySheet(wb, report);
   });
-  const merged = mergedRunRows(channelIds, start, end);
+  const merged = mergedRunRows(channelIds, start, end, assignmentsList);
   buildMergedDetailSheets(wb, channelIds, merged, start, end);
   XLSX.writeFile(wb, `請款單_${start}_${end}.xlsx`);
 }
 function renderBilling(c){
+  // 這個畫面查出來的車趟資料只存在這個變數（畫面本身的區域狀態），不寫回
+  // state.data.assignments，離開畫面後自然被丟棄，不需要額外清理。
+  let billingAssignments = [];
   const chChecks = state.data.channels.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" ${(state._billingChannelIds||[]).includes(ch.id)?'checked':''} style="width:auto;">${ch.name}</label>`).join('');
   const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
@@ -3043,10 +3055,14 @@ function renderBilling(c){
       }
     }
     const start = startInput.value, end = endInput.value; // 抓取範圍（合併配送明細用）
-    if(start && state.data.assignmentsWindowStart && start < state.data.assignmentsWindowStart){
-      document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">載入較早的車趟資料中...</div></div>';
-      try{ await ensureAssignmentsRange(start); }
+    // 這個畫面只讀不寫，直接跟資料庫要這段區間的車趟，不碰共用的
+    // state.data.assignments——查完這個函式結束就丟，不管查的區間多大、
+    // 查幾次，都不會累積佔用記憶體、拖慢其他畫面。
+    if(start && end){
+      document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
+      try{ billingAssignments = await fetchAssignmentsInRange(start, end); }
       catch(err){ document.getElementById('billingResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+      if(startInput.value!==start || endInput.value!==end) return; // 使用者可能已經改了區間
     }
     refreshAdjList();
     if(!channelIds.length){
@@ -3055,9 +3071,9 @@ function renderBilling(c){
     }
     const reports = channelIds.map(cid=>{
       const own = ownPeriodFor(cid, monthStr, channelIds, start, end);
-      return own ? computeChannelBillingReport(cid, own.start, own.end) : null;
+      return own ? computeChannelBillingReport(cid, own.start, own.end, billingAssignments) : null;
     }).filter(Boolean);
-    const merged = mergedRunRows(channelIds, start, end);
+    const merged = mergedRunRows(channelIds, start, end, billingAssignments);
     document.getElementById('billingResult').innerHTML = `
       <div id="billingPrintArea">
         <h2 style="text-align:center; margin:0 0 14px;">信興行銷有限公司</h2>
@@ -3072,7 +3088,7 @@ function renderBilling(c){
         <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
       </div>`;
     document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('billingPrintArea'), `請款單_${start}_${end}`, '');
-    document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end);
+    document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end, billingAssignments);
   }
   document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
   document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
@@ -3211,13 +3227,13 @@ function renderExport(c){
     });
     return rows;
   }
-  function getMatched(){
+  function getMatched(assignmentsList){
     const type = document.getElementById('exType').value;
     const start = document.getElementById('exStart').value;
     const end = document.getElementById('exEnd').value;
     if(!start || !end) return {type, start, end, rows:[]};
     if(type==='assignments'){
-      return {type, start, end, rows: state.data.assignments.filter(a=>a.date>=start && a.date<=end)};
+      return {type, start, end, rows: (assignmentsList||[]).filter(a=>a.date>=start && a.date<=end)};
     } else if(type==='routeVersions'){
       return {type, start, end, rows: allClosedRouteVersions().filter(v=>v.end>=start && v.end<=end)};
     } else {
@@ -3227,17 +3243,19 @@ function renderExport(c){
   document.getElementById('exPreview').onclick = async ()=>{
     const preType = document.getElementById('exType').value;
     const preStart = document.getElementById('exStart').value;
-    if(!preStart || !document.getElementById('exEnd').value){ alert('請選擇起訖日期'); return; }
-    // 車趟／班表紀錄預設只在記憶體裡保留近期資料（見 loadAllData 的
-    // ASSIGNMENTS_WINDOW_DAYS），這裡是唯一需要任意查回更久以前資料的地方
-    // （匯出封存的目的就是處理舊資料），查詢範圍超出目前已載入的區間時，
-    // 才額外去資料庫把缺的那段補齊，不影響其他畫面的載入速度。
-    if(preType==='assignments' && state.data.assignmentsWindowStart && preStart < state.data.assignmentsWindowStart){
-      document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入較早的車趟資料中...</div></div>';
-      try{ await ensureAssignmentsRange(preStart); }
+    const preEnd = document.getElementById('exEnd').value;
+    if(!preStart || !preEnd){ alert('請選擇起訖日期'); return; }
+    // 車趟／班表紀錄這裡是唯一需要任意查回更久以前資料的地方（匯出封存的
+    // 目的就是處理舊資料），直接跟資料庫要這段區間，不影響/不依賴共用的
+    // state.data.assignments，查完這個函式結束就丟，不會佔用記憶體。
+    let exAssignments;
+    if(preType==='assignments'){
+      document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
+      try{ exAssignments = await fetchAssignmentsInRange(preStart, preEnd); }
       catch(err){ document.getElementById('exResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+      if(document.getElementById('exStart')?.value!==preStart || document.getElementById('exEnd')?.value!==preEnd) return; // 使用者可能已經改了區間
     }
-    const {type, start, end, rows} = getMatched();
+    const {type, start, end, rows} = getMatched(exAssignments);
     document.getElementById('exResult').innerHTML = `
       <div class="panel">
         <h3 style="margin-top:0;">預覽：${start} ~ ${end}（共 ${rows.length} 筆）</h3>
