@@ -30,7 +30,15 @@
   header p{ font-size:12px; color:#B9C2CE; margin:4px 0 0; }
   main{ max-width:560px; margin:0 auto; padding:14px; }
   .state-msg{ text-align:center; color:var(--ink-soft); padding:60px 16px; font-size:13.5px; }
-  .date-group{ margin-bottom:12px; background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .city-group{ margin-bottom:12px; background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .city-head{ display:flex; justify-content:space-between; align-items:center; padding:13px 14px; cursor:pointer; font-weight:700; font-size:15px; background:#FAF2E3; }
+  .city-head .count{ font-weight:400; font-size:12px; color:var(--ink-soft); }
+  .city-head .chevron{ transition:transform .15s; color:var(--ink-soft); }
+  .city-group.open .chevron{ transform:rotate(90deg); }
+  .city-body{ display:none; padding:8px; }
+  .city-group.open .city-body{ display:block; }
+  .date-group{ margin-bottom:8px; background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .date-group:last-child{ margin-bottom:0; }
   .date-head{ display:flex; justify-content:space-between; align-items:center; padding:12px 14px; cursor:pointer; font-weight:600; font-size:14px; background:#FAF7F1; }
   .date-head .count{ font-weight:400; font-size:12px; color:var(--ink-soft); }
   .date-head .chevron{ transition:transform .15s; color:var(--ink-soft); }
@@ -38,7 +46,8 @@
   .date-body{ display:none; }
   .date-group.open .date-body{ display:block; }
   .delivery-row{ display:flex; gap:10px; padding:10px 14px; border-top:1px solid var(--border); align-items:center; }
-  .delivery-row img{ width:52px; height:52px; object-fit:cover; border-radius:4px; border:1px solid var(--border); flex-shrink:0; cursor:pointer; }
+  .delivery-row[data-full]{ cursor:pointer; }
+  .delivery-row[data-full]:active{ background:#FAF7F1; }
   .delivery-info{ flex:1; min-width:0; }
   .delivery-name{ font-weight:600; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .delivery-time{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
@@ -47,6 +56,7 @@
   .lightbox img{ max-width:100%; max-height:100%; border-radius:4px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
   .upcoming-badge{ font-size:11px; color:var(--teal); background:rgba(63,110,108,.12); border-radius:10px; padding:2px 9px; flex-shrink:0; }
+  .delivered-badge{ font-size:11px; color:#2C6B44; background:rgba(44,107,68,.12); border-radius:10px; padding:2px 9px; flex-shrink:0; }
   .shift-group{ border-top:1px solid var(--border); }
   .shift-group:first-child{ border-top:none; }
   .shift-head{ display:flex; justify-content:space-between; align-items:center; padding:9px 14px; cursor:pointer; font-size:12px; font-weight:600; color:var(--ink-soft); }
@@ -89,13 +99,17 @@ function dateKeyCompare(a, b, todayKey){
   return aFuture ? a.localeCompare(b) : b.localeCompare(a);
 }
 
+// 照片改成「點擊才看」：預設只顯示門店名稱／已送達標籤／送達時間，完全不
+// 放<img>，避免像之前一樣不管客戶有沒有要看，畫面上列出幾筆就下載幾張
+// 照片——這是流量問題的主因之一。有照片的整列才加 data-full+可點擊樣式，
+// 點下去才真的跳出燈箱去下載那一張。
 function rowHtml(it){
-  return it.delivered ? `<div class="delivery-row">
-    ${it.photoUrl ? `<img src="${it.photoUrl}" data-full="${it.photoUrl}" loading="lazy" decoding="async">` : '<div style="width:52px;height:52px;background:#EFEEE9;border-radius:4px;flex-shrink:0;"></div>'}
+  return it.delivered ? `<div class="delivery-row" ${it.photoUrl?`data-full="${it.photoUrl}"`:''}>
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
       <div class="delivery-time">送達時間 ${formatTime(new Date(it.completedAt))}</div>
     </div>
+    <span class="delivered-badge">已送達${it.photoUrl?'・點擊看照片':''}</span>
   </div>` : `<div class="delivery-row">
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
@@ -110,6 +124,23 @@ function shiftGroupHtml(label, rows, forceOpen){
     <div class="shift-body">${rows.map(rowHtml).join('')}</div>
   </div>`;
 }
+function dateGroupHtml(key, rows, forceOpen){
+  const sample = new Date(key + 'T00:00:00');
+  const amRows = rows.filter(it=>it.shift==='AM');
+  const pmRows = rows.filter(it=>it.shift==='PM');
+  const otherRows = rows.filter(it=>it.shift!=='AM' && it.shift!=='PM');
+  return `<div class="date-group ${forceOpen?'open':''}" data-key="${key}">
+    <div class="date-head">
+      <span>${key}（星期${weekdayZh(sample)}）</span>
+      <span><span class="count">${rows.length} 筆</span> <span class="chevron">▸</span></span>
+    </div>
+    <div class="date-body">
+      ${shiftGroupHtml('上午', amRows, forceOpen)}
+      ${shiftGroupHtml('下午', pmRows, forceOpen)}
+      ${otherRows.map(rowHtml).join('')}
+    </div>
+  </div>`;
+}
 let allItems = [];
 function renderList(filterText){
   const content = document.getElementById('content');
@@ -119,38 +150,44 @@ function renderList(filterText){
     content.innerHTML = `<div class="state-msg">${kw ? '找不到符合的門店。' : '目前沒有可顯示的配送記錄。'}</div>`;
     return;
   }
-  const groups = {};
-  items.forEach(it=>{ if(!groups[it.date]) groups[it.date] = []; groups[it.date].push(it); });
+  // 縣市 → 日期 → 上午/下午 → 門店，四層巢狀；搜尋時全部自動展開方便直接看結果，
+  // 平常預設全部收合（跟原本日期分組的收合行為一致）。
+  const cityGroups = {};
+  items.forEach(it=>{
+    const city = it.city || '其他地區';
+    if(!cityGroups[city]) cityGroups[city] = {};
+    if(!cityGroups[city][it.date]) cityGroups[city][it.date] = [];
+    cityGroups[city][it.date].push(it);
+  });
   const todayKey = todayKeyTaipei();
-  const dateKeys = Object.keys(groups).sort((a,b)=> dateKeyCompare(a, b, todayKey));
-  content.innerHTML = dateKeys.map((key)=>{
-    const rows = groups[key];
-    const sample = new Date(key + 'T00:00:00');
-    const amRows = rows.filter(it=>it.shift==='AM');
-    const pmRows = rows.filter(it=>it.shift==='PM');
-    const otherRows = rows.filter(it=>it.shift!=='AM' && it.shift!=='PM');
-    return `<div class="date-group ${kw?'open':''}" data-key="${key}">
-      <div class="date-head">
-        <span>${key}（星期${weekdayZh(sample)}）</span>
-        <span><span class="count">${rows.length} 筆</span> <span class="chevron">▸</span></span>
+  const cityKeys = Object.keys(cityGroups).sort((a,b)=> a==='其他地區'?1 : b==='其他地區'?-1 : a.localeCompare(b,'zh-Hant'));
+  content.innerHTML = cityKeys.map(city=>{
+    const dateGroups = cityGroups[city];
+    const dateKeys = Object.keys(dateGroups).sort((a,b)=> dateKeyCompare(a, b, todayKey));
+    const totalCount = dateKeys.reduce((s,k)=> s+dateGroups[k].length, 0);
+    return `<div class="city-group ${kw?'open':''}">
+      <div class="city-head">
+        <span>${city}</span>
+        <span><span class="count">${totalCount} 筆</span> <span class="chevron">▸</span></span>
       </div>
-      <div class="date-body">
-        ${shiftGroupHtml('上午', amRows, !!kw)}
-        ${shiftGroupHtml('下午', pmRows, !!kw)}
-        ${otherRows.map(rowHtml).join('')}
+      <div class="city-body">
+        ${dateKeys.map(key=> dateGroupHtml(key, dateGroups[key], !!kw)).join('')}
       </div>
     </div>`;
   }).join('') + '<div class="footer-note">照片與送達時間僅供核對配送紀錄使用。</div>';
 
+  content.querySelectorAll('.city-head').forEach(head=>{
+    head.onclick = ()=> head.closest('.city-group').classList.toggle('open');
+  });
   content.querySelectorAll('.date-head').forEach(head=>{
-    head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
+    head.onclick = (e)=>{ e.stopPropagation(); head.closest('.date-group').classList.toggle('open'); };
   });
   content.querySelectorAll('.shift-head').forEach(head=>{
     head.onclick = (e)=>{ e.stopPropagation(); head.closest('.shift-group').classList.toggle('open'); };
   });
-  content.querySelectorAll('img[data-full]').forEach(img=>{
-    img.onclick = ()=>{
-      document.getElementById('lightboxImg').src = img.dataset.full;
+  content.querySelectorAll('.delivery-row[data-full]').forEach(row=>{
+    row.onclick = ()=>{
+      document.getElementById('lightboxImg').src = row.dataset.full;
       document.getElementById('lightbox').classList.add('open');
     };
   });

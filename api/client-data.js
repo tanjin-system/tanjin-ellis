@@ -9,6 +9,20 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
+// 台灣縣市清單（含「臺」異體字，依地址開頭比對，最長/最完整名稱優先，
+// 例如「新竹市」要在「新竹縣」之前個別列出，避免誤判成不存在的「新竹」）。
+// 抓不到縣市的地址（格式異常或非台灣地址）歸到「其他地區」，不會整筆消失。
+const TW_CITIES = [
+  '台北市', '臺北市', '新北市', '桃園市', '台中市', '臺中市', '台南市', '臺南市', '高雄市',
+  '基隆市', '新竹市', '新竹縣', '苗栗縣', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣',
+  '屏東縣', '宜蘭縣', '花蓮縣', '台東縣', '臺東縣', '澎湖縣', '金門縣', '連江縣'
+];
+function extractCity(address) {
+  if (!address) return '其他地區';
+  const found = TW_CITIES.find(c => address.startsWith(c));
+  return found ? found.replace('臺', '台') : '其他地區';
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
 
@@ -69,6 +83,7 @@ module.exports = async (req, res) => {
   const items = (rows || []).map(p => ({
     id: p.id,
     name: p.code || p.address,
+    city: extractCity(p.address),
     date: p.assignments.trip_date,
     shift: p.assignments?.routes?.shift || null,
     delivered: p.status === 'completed',
