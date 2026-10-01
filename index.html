@@ -2468,11 +2468,10 @@ function renderWeekGrid(containerId, dates){
     // 完全不影響請款/司機費用/公里，那些金額仍然是各自路線（各自版本）原本
     // 存的資料，只是「同一列、不同欄位讀不同路線」而已。
     const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
-    // 每日總額：照「路線設定」本身的星期幾規則去算（跟畫面上每個格子挑哪條
-    // 路線完全同一套邏輯），不是看有沒有實際建立車趟——只要這天符合這條路線
-    // 的版本條件（星期一 or 週二到五），就算進當天總額，不管司機今天實際有
-    // 沒有被排班；黑格（這個車次本來就沒有這個班次，例如只有早上沒有下午）
-    // 才不計入。請款金額一樣套用星期一報價版本的規則。
+    // 每日總額：要看週班表當天那個格子有沒有司機實際被排班（跟畫面上的格子
+    // 一致）——沒有排班，自然沒有費用，不能用路線設定假設「理論上應該出車」
+    // 去算。星期一/週二到五該挑哪條路線，交給下面同一套 routeForDate 處理，
+    // 實際有沒有算進總額則看那條路線這天有沒有真的建立車趟（取消的不算）。
     const dayTotals = {}; dates.forEach(d=>{ dayTotals[d] = {fare:0, billing:0}; });
     const rows = baseSeqs.map(baseSeq=>{
       const family = routesHere.filter(r=>stripWeekdayLabel(r.seq)===baseSeq);
@@ -2486,12 +2485,10 @@ function renderWeekGrid(containerId, dates){
       }
       function addToDayTotal(route, dateStr){
         if(!route) return;
-        const v = getActiveVersion(route, dateStr);
-        if(!v) return;
-        dayTotals[dateStr].fare += Number(v.driverFare||0);
-        const quoteRoute = findMondayQuoteRoute(route) || route;
-        const bv = getActiveVersion(quoteRoute, dateStr) || [...(quoteRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
-        if(bv && bv.billingByChannel) dayTotals[dateStr].billing += Object.values(bv.billingByChannel).reduce((s,x)=>s+(Number(x)||0), 0);
+        const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===dateStr);
+        if(!a || a.status==='cancelled') return;
+        dayTotals[dateStr].fare += Number(a.fare||0);
+        dayTotals[dateStr].billing += Object.values(effectiveByChannelForAssignment(a)).reduce((s,v)=>s+(Number(v)||0), 0);
       }
       const cells = dates.map(d=>{
         const amRoute = routeForDate('AM',d), pmRoute = routeForDate('PM',d);
