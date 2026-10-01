@@ -2501,6 +2501,13 @@ function renderAssignmentDetail(id, box){
   if(!a){ box.innerHTML=''; return; }
   const canReassign = a.status!=='completed';
   const otherDrivers = state.data.drivers.filter(d=>d.status==='active' && d.id!==a.driverId);
+  // 請款總額要跟請款結算/路線管理看到的數字一致：優先用「星期一報價路線」
+  // 當天生效版本手動輸入的拆賬金額，不是車趟完成當下資料庫自動算出來的
+  // a.billingSnapshot（那只是formula估算值，例如第七車/第八車平日是跑
+  // 「週二到五」版本，路線管理裡本來就沒在那個版本填請款金額，不能直接
+  // 顯示資料庫的估算snapshot，否則會跟路線管理顯示的對不起來）。
+  const effByChannel = effectiveByChannelForAssignment(a);
+  const effTotal = Object.values(effByChannel).reduce((s,v)=>s+(Number(v)||0), 0);
   box.innerHTML = `
     <div class="panel">
       <div class="toolbar">
@@ -2511,7 +2518,7 @@ function renderAssignmentDetail(id, box){
         </span>
       </div>
       <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
-      <p style="font-size:12.5px; color:var(--ink-soft);">司機費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${a.billingSnapshot?`$${money(a.billingSnapshot.totalAmount)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">司機費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
       ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
       ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <span>臨時異動（例如司機請假換人）：</span>
@@ -2540,7 +2547,7 @@ function renderAssignmentDetail(id, box){
     const box2 = box.querySelector('#afOverrideBox');
     if(box2.innerHTML){ box2.innerHTML=''; return; }
     const channelIds = [...new Set(a.dropPoints.map(dp=>dp.channelId).filter(Boolean))];
-    const byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || {};
+    const byChannel = effByChannel;
     box2.innerHTML = `
       <div class="grid2" style="margin-top:8px;">
         <div class="field"><label>司機費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
