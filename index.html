@@ -135,6 +135,7 @@
   .origin-title{ background:#EFEEE9; font-weight:600; padding:8px 10px; margin:14px 0 6px; border-radius:var(--radius); }
   table.route-grid tr.assign-detail-row td{ white-space:normal; text-align:left; cursor:default; background:#FAFAF8; padding:10px; }
   table.route-grid tr.assign-detail-row .panel{ margin:0; }
+  tr.route-detail-row td{ background:#FAFAF8; padding:10px; }
   @media print{ nav.tabs,header,.no-print{ display:none !important; } main{ max-width:100%; padding:0; } body{ background:#fff; } }
 </style>
 </head>
@@ -1919,6 +1920,8 @@ function renderRoutes(c){
 }
 let routeDraft = {};
 let expandedRouteId = null;
+let expandedRouteBox = null; // 目前展開中那個「管理」面板實際插入的容器（插在被點的那一列下方），
+// 讓 renderRouteDetail() 內部存檔/刪除後能重新渲染回同一個位置，不會跳回頁面最底部的舊容器。
 let routeListSearch = '';
 let regionExpandedSet = new Set(); // 使用者手動展開過的地區名稱，預設全部收合
 function ensureDraft(route){
@@ -1938,10 +1941,8 @@ function renderRouteList(){
   el.innerHTML = `
     <div class="field" style="max-width:320px;"><label>搜尋路線（依名稱／出發點／車次）</label><input id="routeSearch" value="${routeListSearch}" placeholder="輸入關鍵字篩選，路線多時建議先搜尋"></div>
     <div id="routeTableWrap"></div>
-    <div id="routeDetail"></div>
   `;
   renderRouteTable();
-  if(expandedRouteId){ renderRouteDetail(expandedRouteId); }
   const searchEl = document.getElementById('routeSearch');
   let composing = false;
   searchEl.addEventListener('compositionstart', ()=>{ composing = true; });
@@ -2019,13 +2020,35 @@ function renderRouteTable(){
   wrap.querySelectorAll('[data-toggleroute]').forEach(btn=>{
     btn.onclick = ()=>{
       expandedRouteId = (expandedRouteId===btn.dataset.toggleroute) ? null : btn.dataset.toggleroute;
+      expandedRouteBox = null;
       renderRouteTable();
-      renderRouteDetail(expandedRouteId);
     };
   });
+  // 管理面板改成直接展開在點擊的那一列下方（同一張表格裡插入一列），
+  // 不用再滑到頁面最底部看；同一列再點一次收合。路線只能同時展開一個
+  // （跟 expandedRouteId 本來就是單一值一致），不用擔心多個面板互相干擾。
+  if(expandedRouteId){
+    const btn = wrap.querySelector(`[data-toggleroute="${expandedRouteId}"]`);
+    if(btn){
+      const tr = btn.closest('tr');
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'route-detail-row';
+      const detailTd = document.createElement('td');
+      detailTd.colSpan = tr.children.length;
+      detailTr.appendChild(detailTd);
+      tr.after(detailTr);
+      expandedRouteBox = detailTd;
+      renderRouteDetail(expandedRouteId);
+    } else {
+      // 展開中的路線被搜尋篩掉了，不用維持展開狀態
+      expandedRouteId = null;
+      expandedRouteBox = null;
+    }
+  }
 }
 function renderRouteDetail(rid){
-  const detailEl = document.getElementById('routeDetail');
+  const detailEl = expandedRouteBox;
+  if(!detailEl) return;
   const r = state.data.routes.find(x=>x.id===rid);
   if(!r){ detailEl.innerHTML=''; return; }
   const versions = [...(r.versions||[])].sort((a,b)=>a.start.localeCompare(b.start));
