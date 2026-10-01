@@ -1997,21 +1997,6 @@ function renderRouteTable(){
   wrap.innerHTML = regionKeys.map(region=>{
     const rows = byRegion[region];
     const collapsed = !regionExpandedSet.has(region) && !kw;
-    // 本週實際出車：第七車/第八車這種星期一+週二到五分成兩條路線的車次，
-    // 理論上「每條路線都算一次」的合計會把同一台車重複算兩次（星期一跑一次
-    // 算一次請款、週二到五跑一次又算一次），所以不用那種理論合計，改成只算
-    // 本週（週班表當週，週一到週日）真的有排到車趟、有司機名字的實際數字，
-    // 每一趟車各自算一次，不會有重複計算的問題。
-    const weekDates = getWeekDates(0);
-    const wkStart = weekDates[0], wkEnd = weekDates[6];
-    const routeIdsHere = new Set(rows.map(r=>r.id));
-    let actualFare = 0, actualBilling = 0, actualTrips = 0;
-    state.data.assignments.forEach(a=>{
-      if(a.status==='cancelled' || a.date<wkStart || a.date>wkEnd || !routeIdsHere.has(a.routeId)) return;
-      actualFare += Number(a.fare||0);
-      actualBilling += Object.values(effectiveByChannelForAssignment(a)).reduce((s,v)=>s+(Number(v)||0), 0);
-      actualTrips++;
-    });
     return `<div class="panel" style="overflow-x:auto;">
       <h3 data-regiontoggle="${region}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
         <span>${region}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
@@ -2021,7 +2006,6 @@ function renderRouteTable(){
           <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th>毛利（請款-司機）</th><th></th></tr></thead>
           <tbody>${rows.map(routeRowHtml).join('')}</tbody>
         </table>
-        <p class="note" style="margin-top:8px;">本週實際出車（${wkStart}~${wkEnd}，依週班表排班，不管排定中/進行中/已完成，共${actualTrips}趟）：司機費用 $${money(actualFare)} ・ 請款金額 $${money(actualBilling)} ・ 毛利 $${money(actualBilling-actualFare)}</p>
       </div>
     </div>`;
   }).join('');
