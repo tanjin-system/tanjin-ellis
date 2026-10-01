@@ -1997,20 +1997,12 @@ function renderRouteTable(){
   wrap.innerHTML = regionKeys.map(region=>{
     const rows = byRegion[region];
     const collapsed = !regionExpandedSet.has(region) && !kw;
-    // 底部合計：司機費用是每條路線實際各自的數字，星期一/週二到五是不同天
-    // 各自真的會付給司機的費用，所以每一列都要算；但請款金額兩條路線共用
-    // 同一筆（都是跟著星期一報價版本走），同一個車次只能算一次，不然像
-    // 第七車這種會被星期一、週二到五兩條路線各算一次，請款總額變成重複
-    // 計算、灌水。沒設定金額的路線當0算，不會讓整個合計無法顯示。
+    // 底部合計：直接把畫面上每一列的司機費用/請款費用老實加總，確保合計
+    // 永遠等於把每一列數字自己加起來的答案（不藏任何「同車次只算一次」之
+    // 類的扣重複邏輯，避免跟使用者自己手動加總對不起來）。沒設定金額的
+    // 路線當0算，不會讓整個合計無法顯示。
     const fareSum = rows.reduce((s,r)=>{ const v=(r.versions||[]).find(x=>!x.end); return s+Number(v?.driverFare||0); }, 0);
-    const billedQuoteRouteIds = new Set();
-    const billingSum = rows.reduce((s,r)=>{
-      const quoteRoute = findMondayQuoteRoute(r) || r;
-      if(billedQuoteRouteIds.has(quoteRoute.id)) return s;
-      billedQuoteRouteIds.add(quoteRoute.id);
-      const v = (quoteRoute.versions||[]).find(x=>!x.end);
-      return s + Number(v?.billingTotal||0);
-    }, 0);
+    const billingSum = rows.reduce((s,r)=>{ const bv=billingVersionFor(r); return s+Number(bv?.billingTotal||0); }, 0);
     // 「合計」是假設這個群組每條路線都開一趟的理論值，但有些路線（例如只在
     // 特定星期才排班、或目前根本沒人排班的路線）不是每天都真的出車，理論值
     // 會比實際情況灌水。這裡另外抓本週（週班表當週，週一到週日）這個群組
