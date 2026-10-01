@@ -1997,17 +1997,11 @@ function renderRouteTable(){
   wrap.innerHTML = regionKeys.map(region=>{
     const rows = byRegion[region];
     const collapsed = !regionExpandedSet.has(region) && !kw;
-    // 底部合計：直接把畫面上每一列的司機費用/請款費用老實加總，確保合計
-    // 永遠等於把每一列數字自己加起來的答案（不藏任何「同車次只算一次」之
-    // 類的扣重複邏輯，避免跟使用者自己手動加總對不起來）。沒設定金額的
-    // 路線當0算，不會讓整個合計無法顯示。
-    const fareSum = rows.reduce((s,r)=>{ const v=(r.versions||[]).find(x=>!x.end); return s+Number(v?.driverFare||0); }, 0);
-    const billingSum = rows.reduce((s,r)=>{ const bv=billingVersionFor(r); return s+Number(bv?.billingTotal||0); }, 0);
-    // 「合計」是假設這個群組每條路線都開一趟的理論值，但有些路線（例如只在
-    // 特定星期才排班、或目前根本沒人排班的路線）不是每天都真的出車，理論值
-    // 會比實際情況灌水。這裡另外抓本週（週班表當週，週一到週日）這個群組
-    // 底下的路線實際有排到車趟（不管完成與否，只要不是取消）的真實合計，
-    // 每一趟車各自算一次，不用像理論值那樣擔心家族重複計算的問題。
+    // 本週實際出車：第七車/第八車這種星期一+週二到五分成兩條路線的車次，
+    // 理論上「每條路線都算一次」的合計會把同一台車重複算兩次（星期一跑一次
+    // 算一次請款、週二到五跑一次又算一次），所以不用那種理論合計，改成只算
+    // 本週（週班表當週，週一到週日）真的有排到車趟、有司機名字的實際數字，
+    // 每一趟車各自算一次，不會有重複計算的問題。
     const weekDates = getWeekDates(0);
     const wkStart = weekDates[0], wkEnd = weekDates[6];
     const routeIdsHere = new Set(rows.map(r=>r.id));
@@ -2026,15 +2020,8 @@ function renderRouteTable(){
         <table>
           <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th>毛利（請款-司機）</th><th></th></tr></thead>
           <tbody>${rows.map(routeRowHtml).join('')}</tbody>
-          <tfoot><tr style="font-weight:700; background:#F4F3EF;">
-            <td>合計</td>
-            <td class="amount">$${money(fareSum)}</td>
-            <td class="amount">$${money(billingSum)}</td>
-            <td class="amount">$${money(billingSum-fareSum)}</td>
-            <td></td>
-          </tr></tfoot>
         </table>
-        <p class="note" style="margin-top:8px;">本週實際出車（${wkStart}~${wkEnd}，依週班表排班，不管排定中/進行中/已完成，共${actualTrips}趟）：司機費用 $${money(actualFare)} ・ 請款金額 $${money(actualBilling)} ・ 毛利 $${money(actualBilling-actualFare)}（上面「合計」是假設每條路線都出一趟的理論值，這裡才是本週實際有排到車的真實數字）</p>
+        <p class="note" style="margin-top:8px;">本週實際出車（${wkStart}~${wkEnd}，依週班表排班，不管排定中/進行中/已完成，共${actualTrips}趟）：司機費用 $${money(actualFare)} ・ 請款金額 $${money(actualBilling)} ・ 毛利 $${money(actualBilling-actualFare)}</p>
       </div>
     </div>`;
   }).join('');
