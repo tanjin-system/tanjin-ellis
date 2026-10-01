@@ -2675,7 +2675,7 @@ function renderPayroll(c){
     </div>` : ''}
     <div class="panel">
       <div class="grid2">
-        <div class="field"><label>合併下載月份</label><input id="pAllMonth" type="month" value="${month}"></div>
+        <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
         <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體司機勞報單（合併PDF）</button></div>
       </div>
       <p class="note">只會納入「已完成月結確認」的司機（每人各佔一頁，直式）；當月尚未月結確認的司機不會出現在合併檔案裡。</p>
@@ -2683,7 +2683,7 @@ function renderPayroll(c){
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>司機</label><select id="pDriver">${driverOpts}</select></div>
-        <div class="field"><label>結算月份</label><input id="pMonth" type="month" value="${month}"></div>
+        <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
       <div class="grid3">
         <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option></select></div>
@@ -3688,7 +3688,9 @@ async function renderHistory(c){
     if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
   });
 }
-// 近6個月（含本月）供司機自己查詢月份下拉選單用，由新到舊排序。
+// 近6個月（含本月）供月份下拉選單共用，由新到舊排序。月結算這類表單原本
+// 用 <input type="month">，手機瀏覽器原生的月份選擇器不好點、也容易選到
+// 範圍外的月份；改成固定列出近6個月讓使用者直接選，體驗一致也不會選錯。
 function recentMonthOptions(n){
   const [y0,m0] = todayStr().slice(0,7).split('-').map(Number);
   const months = [];
@@ -3699,15 +3701,18 @@ function recentMonthOptions(n){
   }
   return months;
 }
+function monthOptionsHtml(selected, n=6){
+  const thisMonth = todayStr().slice(0,7);
+  return recentMonthOptions(n).map(m=>`<option value="${m}" ${m===selected?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join('');
+}
 async function renderMyEarnings(c){
   const dId = state.activeDriverId;
   const monthStr = state._myEarningsMonth || todayStr().slice(0,7);
-  const monthOpts = recentMonthOptions(6);
   c.innerHTML = `
     <h2 class="section-title">我的報酬</h2>
     <div class="panel">
       <div class="field" style="max-width:200px;"><label>查詢月份</label>
-        <select id="meMonth">${monthOpts.map(m=>`<option value="${m}" ${m===monthStr?'selected':''}>${m}${m===todayStr().slice(0,7)?'（本月即時）':''}</option>`).join('')}</select>
+        <select id="meMonth">${monthOptionsHtml(monthStr)}</select>
       </div>
     </div>
     <div id="meResult"><div class="empty">載入中...</div></div>
