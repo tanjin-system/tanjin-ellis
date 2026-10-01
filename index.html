@@ -2431,11 +2431,6 @@ function renderWeekGrid(containerId, dates){
     // 完全不影響請款/司機費用/公里，那些金額仍然是各自路線（各自版本）原本
     // 存的資料，只是「同一列、不同欄位讀不同路線」而已。
     const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
-    // 每日總額：要看週班表當天那個格子有沒有司機實際被排班（跟畫面上的格子
-    // 一致）——沒有排班，自然沒有費用，不能用路線設定假設「理論上應該出車」
-    // 去算。星期一/週二到五該挑哪條路線，交給下面同一套 routeForDate 處理，
-    // 實際有沒有算進總額則看那條路線這天有沒有真的建立車趟（取消的不算）。
-    const dayTotals = {}; dates.forEach(d=>{ dayTotals[d] = {fare:0, billing:0}; });
     const rows = baseSeqs.map(baseSeq=>{
       const family = routesHere.filter(r=>stripWeekdayLabel(r.seq)===baseSeq);
       function routeForDate(shift, dateStr){
@@ -2446,30 +2441,12 @@ function renderWeekGrid(containerId, dates){
         const otherRoute = candidates.find(r=>r!==mondayRoute);
         return isMonday ? (mondayRoute||otherRoute) : (otherRoute||mondayRoute);
       }
-      function addToDayTotal(route, dateStr){
-        if(!route) return;
-        const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===dateStr);
-        if(!a || a.status==='cancelled') return;
-        dayTotals[dateStr].fare += Number(a.fare||0);
-        dayTotals[dateStr].billing += Object.values(effectiveByChannelForAssignment(a)).reduce((s,v)=>s+(Number(v)||0), 0);
-      }
-      const cells = dates.map(d=>{
-        const amRoute = routeForDate('AM',d), pmRoute = routeForDate('PM',d);
-        addToDayTotal(amRoute, d); addToDayTotal(pmRoute, d);
-        return cellHtml(amRoute,d) + cellHtml(pmRoute,d);
-      }).join('');
+      const cells = dates.map(d=> cellHtml(routeForDate('AM',d),d) + cellHtml(routeForDate('PM',d),d)).join('');
       return `<tr><td class="row-label">${baseSeq}</td>${cells}</tr>`;
-    }).join('');
-    const dayTotalCells = dates.map(d=>{
-      const t = dayTotals[d];
-      if(!t.fare && !t.billing) return `<td colspan="2">—</td>`;
-      return `<td colspan="2" style="line-height:1.5; font-size:11.5px;">司機$${money(t.fare)}<br>請款$${money(t.billing)}<br>毛利$${money(t.billing-t.fare)}</td>`;
     }).join('');
     return `<div class="origin-title">${og.label||og.address}</div>
       <div class="panel" style="overflow-x:auto; padding:8px;">
-        <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody>
-          <tfoot><tr style="font-weight:700; background:#F4F3EF;"><td class="row-label">當日總額</td>${dayTotalCells}</tr></tfoot>
-        </table>
+        <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody></table>
       </div>`;
   }).join('');
   wrap.innerHTML = blocks || '<div class="empty">此出發點尚無路線，請先到「路線管理」建立</div>';
