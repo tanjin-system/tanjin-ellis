@@ -133,6 +133,8 @@
   table.route-grid td.grid-cell:hover{ background:#FAF2E3; }
   table.route-grid td.row-label{ background:#E7E9EC; font-weight:600; text-align:left; padding-left:8px; }
   .origin-title{ background:#EFEEE9; font-weight:600; padding:8px 10px; margin:14px 0 6px; border-radius:var(--radius); }
+  table.route-grid tr.assign-detail-row td{ white-space:normal; text-align:left; cursor:default; background:#FAFAF8; padding:10px; }
+  table.route-grid tr.assign-detail-row .panel{ margin:0; }
   @media print{ nav.tabs,header,.no-print{ display:none !important; } main{ max-width:100%; padding:0; } body{ background:#fff; } }
 </style>
 </head>
@@ -2436,7 +2438,25 @@ function renderWeekGrid(containerId, dates){
       </div>`;
   }).join('');
   wrap.innerHTML = blocks || '<div class="empty">此出發點尚無路線，請先到「路線管理」建立</div>';
-  wrap.querySelectorAll('[data-viewassign]').forEach(td=>{ td.onclick = ()=> renderAssignmentDetail(td.dataset.viewassign); });
+  // 車趟明細改成直接展開在點擊的那一列下方（同一張表格裡插入一列），不用再滑到
+  // 最底部看；同一列（同一個車次/班次）再點一次收合，點別的車趟就換成顯示那一趟。
+  wrap.querySelectorAll('[data-viewassign]').forEach(td=>{
+    td.onclick = ()=>{
+      const tr = td.closest('tr');
+      const next = tr.nextElementSibling;
+      const alreadyOpenForThis = next && next.classList.contains('assign-detail-row') && next.dataset.forId===td.dataset.viewassign;
+      if(next && next.classList.contains('assign-detail-row')) next.remove();
+      if(alreadyOpenForThis) return;
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'assign-detail-row';
+      detailTr.dataset.forId = td.dataset.viewassign;
+      const detailTd = document.createElement('td');
+      detailTd.colSpan = tr.children.length;
+      detailTr.appendChild(detailTd);
+      tr.after(detailTr);
+      renderAssignmentDetail(td.dataset.viewassign, detailTd);
+    };
+  });
   wrap.querySelectorAll('[data-quickcreate]').forEach(td=>{
     td.onclick = ()=>{
       const [routeId, date] = td.dataset.quickcreate.split('|');
@@ -2476,8 +2496,7 @@ function renderQuickCreate(routeId, date){
     }catch(err){ alert(err.message); }
   };
 }
-function renderAssignmentDetail(id){
-  const box = document.getElementById('assignDetail');
+function renderAssignmentDetail(id, box){
   const a = state.data.assignments.find(x=>x.id===id);
   if(!a){ box.innerHTML=''; return; }
   const canReassign = a.status!=='completed';
@@ -2505,20 +2524,20 @@ function renderAssignmentDetail(id){
       <div id="afOverrideBox"></div>
     </div>
   `;
-  const db = document.getElementById('assignDetail').querySelector('[data-delassign]');
+  const db = box.querySelector('[data-delassign]');
   if(db) db.onclick = async ()=>{
     if(!confirm(`確定要刪除 ${a.date} ${routeName(a.routeId)}（${driverName(a.driverId)}）這趟排定中的車次嗎？刪除後這位司機當天就不會再看到這趟行程，無法復原。`)) return;
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
   };
-  if(canReassign) document.getElementById('afReassignBtn').onclick = async ()=>{
-    const newDriverId = document.getElementById('afReassignDriver').value;
+  if(canReassign) box.querySelector('#afReassignBtn').onclick = async ()=>{
+    const newDriverId = box.querySelector('#afReassignDriver').value;
     if(!newDriverId){ alert('請選擇司機'); return; }
     try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
     catch(err){ alert(err.message); }
   };
-  document.getElementById('afOverrideToggle').onclick = ()=>{
-    const box2 = document.getElementById('afOverrideBox');
+  box.querySelector('#afOverrideToggle').onclick = ()=>{
+    const box2 = box.querySelector('#afOverrideBox');
     if(box2.innerHTML){ box2.innerHTML=''; return; }
     const channelIds = [...new Set(a.dropPoints.map(dp=>dp.channelId).filter(Boolean))];
     const byChannel = (a.billingSnapshot && a.billingSnapshot.byChannel) || {};
@@ -2532,11 +2551,11 @@ function renderAssignmentDetail(id){
       `).join('')}</div>` : '<p class="note">這趟車還沒有下貨點，無法輸入請款金額。</p>'}
       <button class="btn amber" id="afSave">儲存這一趟的費用</button>
     `;
-    document.getElementById('afSave').onclick = async ()=>{
-      const fare = document.getElementById('afFare').value;
-      const distanceKm = document.getElementById('afDistance').value;
+    box2.querySelector('#afSave').onclick = async ()=>{
+      const fare = box2.querySelector('#afFare').value;
+      const distanceKm = box2.querySelector('#afDistance').value;
       const billingByChannel = {};
-      document.querySelectorAll('.afBillingInput').forEach(inp=>{
+      box2.querySelectorAll('.afBillingInput').forEach(inp=>{
         if(inp.value !== '') billingByChannel[inp.dataset.channel] = Number(inp.value)||0;
       });
       try{
