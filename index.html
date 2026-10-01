@@ -358,15 +358,6 @@ async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
   const items = dataUrls.map(dataUrl => ({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' }));
   if(items.length) await uploadDropPointMedia(assignmentId, dropPointId, items);
 }
-function mediaGalleryHtml(media){
-  if(!media || !media.length) return '';
-  return `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
-    ${media.map(m=> m.type==='video'
-      ? `<video src="${m.url||''}" controls style="width:70px; height:70px; border-radius:4px; background:#000;"></video>`
-      : `<img src="${m.url||''}" loading="lazy" decoding="async" style="width:70px; height:70px; object-fit:cover; border-radius:4px; border:1px solid var(--border);">`
-    ).join('')}
-  </div>`;
-}
 // 直接產生真正的PDF檔案（不再是HTML檔案要求使用者自己用瀏覽器列印另存），
 // 用 html2pdf.js（內部是 html2canvas 把畫面截成圖＋jsPDF 排版成PDF）。
 // PDF 實際做好是非同步的（要等畫面渲染成圖片），很多瀏覽器（尤其手機版）會擋掉
@@ -3452,10 +3443,14 @@ function renderTodayDetail(todays){
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
         ${a.dropPoints.map(dp=>{
           const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
+          const photoUrls = dpPhotoUrls(dp);
+          const statusBadge = dp.status==='completed'
+            ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已送達${photoUrls.length?'・點擊看照片':''}</span>`
+            : '<span class="badge pending">待送達</span>';
           return `
-          <div class="drop-point-driver">
+          <div class="drop-point-driver" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
-            ${dp.status==='completed'?'<span class="badge completed">已送達</span>':'<span class="badge pending">待送達</span>'}
+            ${statusBadge}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未配達：${dp.issueReason}</span>` : ''}
             <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
               ${photoCount<3 ? `
@@ -3466,8 +3461,7 @@ function renderTodayDetail(todays){
               ` : '<span style="font-size:11.5px; color:var(--ink-soft);">已達3張上限</span>'}
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
             </div>
-            ${dp.status==='completed' ? (dp.photo?`<img src="${dp.photo}" loading="lazy" decoding="async">`: dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':'') : ''}
-            ${mediaGalleryHtml(dp.media)}
+            ${!dp.photo && dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
             ${dp.status!=='completed' ? `<div style="margin-top:8px;">
               <label style="font-size:12px; color:var(--ink-soft); display:block; margin-bottom:3px;">若無法送達，請選擇原因：</label>
               <select data-issue="${a.id}|${dp.id}" style="width:100%;">
@@ -3482,6 +3476,16 @@ function renderTodayDetail(todays){
       `}
     </div>`;
   }).join('');
+  // 照片改成跟歷史班表一樣，點擊「已送達」才載入——手機背景切換常把頁面砍掉
+  // 重開，之前「一開頁面就自動載入當天所有已送達照片」會讓同一批照片被
+  // 重複下載很多次，是 Storage 流量爆量的主因之一。
+  const dpById = {};
+  todays.forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
+  box.querySelectorAll('[data-dpid]').forEach(el=>{
+    const dp = dpById[el.dataset.dpid];
+    const urls = dp ? dpPhotoUrls(dp) : [];
+    if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
+  });
   box.querySelectorAll('[data-start]').forEach(btn=>{
     btn.onclick = async ()=>{
       try{ await markAssignmentDeparted(btn.dataset.start); renderContent(); }
