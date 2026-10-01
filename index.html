@@ -2412,12 +2412,23 @@ function renderWeekGrid(containerId, dates){
   const blocks = origins.map(og=>{
     const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
     if(!routesHere.length) return '';
-    const seqs = [...new Set(routesHere.map(r=>r.seq))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
-    const rows = seqs.map(seq=>{
-      const amRoute = routesHere.find(r=>r.seq===seq && r.shift==='AM');
-      const pmRoute = routesHere.find(r=>r.seq===seq && r.shift==='PM');
-      const cells = dates.map(d=> cellHtml(amRoute,d) + cellHtml(pmRoute,d)).join('');
-      return `<tr><td class="row-label">${seq}</td>${cells}</tr>`;
+    // 第七車/第八車這種「星期一報價」跟「週二到五」分成兩條路線的車次，週班表
+    // 這裡只是顯示合併成一列，依每個日期欄位實際的星期幾去挑對應的那條路線——
+    // 完全不影響請款/司機費用/公里，那些金額仍然是各自路線（各自版本）原本
+    // 存的資料，只是「同一列、不同欄位讀不同路線」而已。
+    const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
+    const rows = baseSeqs.map(baseSeq=>{
+      const family = routesHere.filter(r=>stripWeekdayLabel(r.seq)===baseSeq);
+      function routeForDate(shift, dateStr){
+        const candidates = family.filter(r=>r.shift===shift);
+        if(candidates.length<=1) return candidates[0]||null;
+        const isMonday = new Date(dateStr+'T00:00:00').getDay()===1;
+        const mondayRoute = candidates.find(r=>/星期一|週一/.test(r.seq));
+        const otherRoute = candidates.find(r=>r!==mondayRoute);
+        return isMonday ? (mondayRoute||otherRoute) : (otherRoute||mondayRoute);
+      }
+      const cells = dates.map(d=> cellHtml(routeForDate('AM',d),d) + cellHtml(routeForDate('PM',d),d)).join('');
+      return `<tr><td class="row-label">${baseSeq}</td>${cells}</tr>`;
     }).join('');
     return `<div class="origin-title">${og.label||og.address}</div>
       <div class="panel" style="overflow-x:auto; padding:8px;">
