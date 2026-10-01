@@ -1958,10 +1958,13 @@ function routeRowHtml(r){
   const openVersion = (r.versions||[]).find(v=>!v.end);
   const fareText = openVersion && openVersion.driverFare != null ? `$${money(openVersion.driverFare)}` : '尚未設定';
   const billingText = openVersion && openVersion.billingTotal != null ? `$${money(openVersion.billingTotal)}` : '尚未設定';
+  const hasBoth = openVersion && openVersion.driverFare != null && openVersion.billingTotal != null;
+  const marginText = hasBoth ? `$${money(openVersion.billingTotal - openVersion.driverFare)}` : '—';
   return `<tr>
     <td>${r.name}</td>
     <td class="amount">${fareText}</td>
     <td class="amount">${billingText}</td>
+    <td class="amount">${marginText}</td>
     <td><button class="btn ${expandedRouteId===r.id?'amber':'ghost'}" data-toggleroute="${r.id}">${expandedRouteId===r.id?'收合':'管理'}</button></td>
   </tr>`;
 }
@@ -1991,7 +1994,7 @@ function renderRouteTable(){
       </h3>
       <div style="${collapsed?'display:none;':''}">
         <table>
-          <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th></th></tr></thead>
+          <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th>毛利（請款-司機）</th><th></th></tr></thead>
           <tbody>${rows.map(routeRowHtml).join('')}</tbody>
         </table>
       </div>
