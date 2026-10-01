@@ -2481,26 +2481,9 @@ function renderWeekGrid(containerId, dates){
       const cells = dates.map(d=> cellHtml(routeForDate('AM',d),d) + cellHtml(routeForDate('PM',d),d)).join('');
       return `<tr><td class="row-label">${baseSeq}</td>${cells}</tr>`;
     }).join('');
-    // 每日總額：跟週班表畫面上看到的一樣，只算「這一天實際有排到車趟」的部分，
-    // 沒有排的格子（黑格或還沒指派）不計入——不是看路線設定理論上應該出幾趟車。
-    const routeIdSet = new Set(routesHere.map(r=>r.id));
-    const assignmentsByDate = {};
-    state.data.assignments.forEach(a=>{
-      if(a.status==='cancelled' || !routeIdSet.has(a.routeId)) return;
-      (assignmentsByDate[a.date] = assignmentsByDate[a.date]||[]).push(a);
-    });
-    const dayTotalCells = dates.map(d=>{
-      const dayAssignments = assignmentsByDate[d]||[];
-      if(!dayAssignments.length) return `<td colspan="2">—</td>`;
-      const fareSum = dayAssignments.reduce((s,a)=>s+Number(a.fare||0), 0);
-      const billingSum = dayAssignments.reduce((s,a)=>s+Object.values(effectiveByChannelForAssignment(a)).reduce((x,v)=>x+(Number(v)||0), 0), 0);
-      return `<td colspan="2" style="line-height:1.5; font-size:11.5px;">司機$${money(fareSum)}<br>請款$${money(billingSum)}<br>毛利$${money(billingSum-fareSum)}</td>`;
-    }).join('');
     return `<div class="origin-title">${og.label||og.address}</div>
       <div class="panel" style="overflow-x:auto; padding:8px;">
-        <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody>
-          <tfoot><tr style="font-weight:700; background:#F4F3EF;"><td class="row-label">當日總額</td>${dayTotalCells}</tr></tfoot>
-        </table>
+        <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody></table>
       </div>`;
   }).join('');
   wrap.innerHTML = blocks || '<div class="empty">此出發點尚無路線，請先到「路線管理」建立</div>';
