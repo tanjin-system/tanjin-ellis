@@ -2097,18 +2097,14 @@ function renderRouteDetail(rid){
       <input id="dpSearchInput" value="${draft.dpSearch||''}" placeholder="例：忠孝東路，或代號A">
       <div id="dpSearchResults" style="margin-top:6px;"></div>
 
-      <label style="margin-top:10px; display:block;">目前順序（可用↑↓調整，實際跑車順序以此為準）</label>
+      <label style="margin-top:10px; display:block;">目前順序（可拖曳調整，實際跑車順序以此為準）</label>
       ${(()=>{ const link = buildMultiStopMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航（依下面目前順序）</a>` : ''; })()}
       <div data-orderlist="${r.id}">
         ${draft.order.map((id,i)=>{
           const dp = state.data.dropPoints.find(x=>x.id===id);
-          return `<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
-            <span>${i+1}. ${dp?dpLabel(dp):'（已刪除的下貨點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
-            <span>
-              <button class="btn ghost" data-up="${r.id}|${i}" ${i===0?'disabled':''}>↑</button>
-              <button class="btn ghost" data-down="${r.id}|${i}" ${i===draft.order.length-1?'disabled':''}>↓</button>
-              <button class="btn danger" data-remove="${r.id}|${i}">移除</button>
-            </span>
+          return `<div class="drop-point" draggable="true" data-dpdrag="${i}" style="display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none;">
+            <span>⠿ ${i+1}. ${dp?dpLabel(dp):'（已刪除的下貨點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
+            <button class="btn danger" data-remove="${r.id}|${i}">移除</button>
           </div>`;
         }).join('') || '<div class="empty">尚未加入任何下貨點</div>'}
       </div>
@@ -2177,20 +2173,23 @@ function renderRouteDetail(rid){
       }catch(err){ alert(err.message); }
     };
   });
-  detailEl.querySelectorAll('[data-up]').forEach(btn=>{
-    btn.onclick = ()=>{
-      const [rid2, idx] = btn.dataset.up.split('|').map((v,i)=> i===1?Number(v):v);
-      const order = routeDraft[rid2].order;
-      [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
-      renderRouteDetail(rid2);
-    };
-  });
-  detailEl.querySelectorAll('[data-down]').forEach(btn=>{
-    btn.onclick = ()=>{
-      const [rid2, idx] = btn.dataset.down.split('|').map((v,i)=> i===1?Number(v):v);
-      const order = routeDraft[rid2].order;
-      [order[idx+1], order[idx]] = [order[idx], order[idx+1]];
-      renderRouteDetail(rid2);
+  // 下貨點順序改成拖曳調整（取代原本的↑↓按鈕）：dragstart記住拖的是哪一個
+  // index，drop時把該筆從原位置移到放開的那個位置，直接改 routeDraft 的
+  // order陣列再重新渲染，邏輯跟原本↑↓按鈕的陣列操作是同一套。
+  let dpDragFromIndex = null;
+  detailEl.querySelectorAll('[data-dpdrag]').forEach(row=>{
+    row.ondragstart = ()=>{ dpDragFromIndex = Number(row.dataset.dpdrag); row.style.opacity = '0.4'; };
+    row.ondragend = ()=>{ row.style.opacity = ''; };
+    row.ondragover = (e)=>{ e.preventDefault(); };
+    row.ondrop = (e)=>{
+      e.preventDefault();
+      const toIndex = Number(row.dataset.dpdrag);
+      if(dpDragFromIndex===null || dpDragFromIndex===toIndex) return;
+      const order = routeDraft[r.id].order;
+      const [moved] = order.splice(dpDragFromIndex, 1);
+      order.splice(toIndex, 0, moved);
+      dpDragFromIndex = null;
+      renderRouteDetail(r.id);
     };
   });
   detailEl.querySelectorAll('[data-remove]').forEach(btn=>{
