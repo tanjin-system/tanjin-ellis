@@ -2011,6 +2011,21 @@ function renderRouteTable(){
       const v = (quoteRoute.versions||[]).find(x=>!x.end);
       return s + Number(v?.billingTotal||0);
     }, 0);
+    // 「合計」是假設這個群組每條路線都開一趟的理論值，但有些路線（例如只在
+    // 特定星期才排班、或目前根本沒人排班的路線）不是每天都真的出車，理論值
+    // 會比實際情況灌水。這裡另外抓本週（週班表當週，週一到週日）這個群組
+    // 底下的路線實際有排到車趟（不管完成與否，只要不是取消）的真實合計，
+    // 每一趟車各自算一次，不用像理論值那樣擔心家族重複計算的問題。
+    const weekDates = getWeekDates(0);
+    const wkStart = weekDates[0], wkEnd = weekDates[6];
+    const routeIdsHere = new Set(rows.map(r=>r.id));
+    let actualFare = 0, actualBilling = 0, actualTrips = 0;
+    state.data.assignments.forEach(a=>{
+      if(a.status==='cancelled' || a.date<wkStart || a.date>wkEnd || !routeIdsHere.has(a.routeId)) return;
+      actualFare += Number(a.fare||0);
+      actualBilling += Object.values(effectiveByChannelForAssignment(a)).reduce((s,v)=>s+(Number(v)||0), 0);
+      actualTrips++;
+    });
     return `<div class="panel" style="overflow-x:auto;">
       <h3 data-regiontoggle="${region}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
         <span>${region}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
@@ -2027,6 +2042,7 @@ function renderRouteTable(){
             <td></td>
           </tr></tfoot>
         </table>
+        <p class="note" style="margin-top:8px;">本週實際出車（${wkStart}~${wkEnd}，依週班表排班，不管排定中/進行中/已完成，共${actualTrips}趟）：司機費用 $${money(actualFare)} ・ 請款金額 $${money(actualBilling)} ・ 毛利 $${money(actualBilling-actualFare)}（上面「合計」是假設每條路線都出一趟的理論值，這裡才是本週實際有排到車的真實數字）</p>
       </div>
     </div>`;
   }).join('');
