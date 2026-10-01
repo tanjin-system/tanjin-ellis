@@ -4025,7 +4025,13 @@ async function bootApp(){
   try{
     state.data = await loadAllData();
   }catch(e){
-    alert('讀取資料失敗，請重新登入：' + e.message);
+    // 登入憑證過期（主控12小時、司機30天）是正常的工作流程，不是系統壞掉，
+    // 跳出一堆技術性錯誤訊息（JWT expired之類）只會讓人誤以為系統出問題。
+    // 只有這個情況顯示單純的「請重新登入」；其他真的意料之外的錯誤（網路、
+    // 伺服器異常等）還是把完整錯誤訊息顯示出來，方便回報問題時能看出到底
+    // 是哪裡壞了。
+    const isExpired = /jwt expired/i.test(e.message || '');
+    alert(isExpired ? '登入已過期，請重新登入。' : ('讀取資料失敗，請重新登入：' + e.message));
     clearAuth(); renderLoginGate();
     return;
   }
