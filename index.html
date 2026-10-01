@@ -1026,6 +1026,10 @@ function undeliveredTodayGroups(shifts){
     .map(({a})=>({
       // 車次名稱後面直接帶出當班司機名字，不用另外切到週班表查是誰在跑。
       routeLabel: `${routeName(a.routeId)} ${driverName(a.driverId)}`,
+      // 司機按過「開始行程」後狀態會變成 in_progress（還沒按之前是
+      // scheduled）——畫面前面打一個勾，讓主控一眼看出「這台已經出發在跑了」
+      // 跟「還沒出發」的差別，不用一個一個點進週班表確認。
+      started: a.status==='in_progress',
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
       // 監控清單裡，避免主控一直看到其實司機已經回報過原因的店。
       // 店名不再加通路名稱前綴（畫面上已經夠擠了，通路名稱對主控來說不是
@@ -1187,7 +1191,7 @@ async function renderHomeAdmin(c){
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
       </div>
-      ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);"><strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
+      ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);">${g.started?'<span style="color:var(--teal);" title="已出發">✅</span> ':''}<strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
