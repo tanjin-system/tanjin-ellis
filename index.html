@@ -1952,14 +1952,23 @@ function renderRouteList(){
     renderRouteTable();
   });
 }
+// 第七車/第八車這種「星期一報價、週二到五實跑」分成兩條路線的車次，請款
+// 金額一律跟著星期一報價版本走（跟 effectiveByChannelForAssignment() 同一套
+// 規則）——週二到五那條路線自己的版本本來就不會填請款金額，不能直接讀
+// 自己的 billingTotal，不然會變成0，跟司機費用相減還會出現莫名其妙的負數。
+function billingVersionFor(r){
+  const quoteRoute = findMondayQuoteRoute(r) || r;
+  return (quoteRoute.versions||[]).find(v=>!v.end);
+}
 function routeRowHtml(r){
   // 司機費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
   // （見路線管理下方的版本設定），不再是每趟臨時填的。
   const openVersion = (r.versions||[]).find(v=>!v.end);
+  const billingVersion = billingVersionFor(r);
   const fareText = openVersion && openVersion.driverFare != null ? `$${money(openVersion.driverFare)}` : '尚未設定';
-  const billingText = openVersion && openVersion.billingTotal != null ? `$${money(openVersion.billingTotal)}` : '尚未設定';
-  const hasBoth = openVersion && openVersion.driverFare != null && openVersion.billingTotal != null;
-  const marginText = hasBoth ? `$${money(openVersion.billingTotal - openVersion.driverFare)}` : '—';
+  const billingText = billingVersion && billingVersion.billingTotal != null ? `$${money(billingVersion.billingTotal)}` : '尚未設定';
+  const hasBoth = openVersion && openVersion.driverFare != null && billingVersion && billingVersion.billingTotal != null;
+  const marginText = hasBoth ? `$${money(billingVersion.billingTotal - openVersion.driverFare)}` : '—';
   return `<tr>
     <td>${r.name}</td>
     <td class="amount">${fareText}</td>
@@ -1988,10 +1997,20 @@ function renderRouteTable(){
   wrap.innerHTML = regionKeys.map(region=>{
     const rows = byRegion[region];
     const collapsed = !regionExpandedSet.has(region) && !kw;
-    // 底部合計：各路線目前生效版本的司機費用/請款費用加總，沒設定的路線當0算，
-    // 不會因為某條路線還沒設定金額就讓整個合計無法顯示。
+    // 底部合計：司機費用是每條路線實際各自的數字，星期一/週二到五是不同天
+    // 各自真的會付給司機的費用，所以每一列都要算；但請款金額兩條路線共用
+    // 同一筆（都是跟著星期一報價版本走），同一個車次只能算一次，不然像
+    // 第七車這種會被星期一、週二到五兩條路線各算一次，請款總額變成重複
+    // 計算、灌水。沒設定金額的路線當0算，不會讓整個合計無法顯示。
     const fareSum = rows.reduce((s,r)=>{ const v=(r.versions||[]).find(x=>!x.end); return s+Number(v?.driverFare||0); }, 0);
-    const billingSum = rows.reduce((s,r)=>{ const v=(r.versions||[]).find(x=>!x.end); return s+Number(v?.billingTotal||0); }, 0);
+    const billedQuoteRouteIds = new Set();
+    const billingSum = rows.reduce((s,r)=>{
+      const quoteRoute = findMondayQuoteRoute(r) || r;
+      if(billedQuoteRouteIds.has(quoteRoute.id)) return s;
+      billedQuoteRouteIds.add(quoteRoute.id);
+      const v = (quoteRoute.versions||[]).find(x=>!x.end);
+      return s + Number(v?.billingTotal||0);
+    }, 0);
     return `<div class="panel" style="overflow-x:auto;">
       <h3 data-regiontoggle="${region}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
         <span>${region}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
