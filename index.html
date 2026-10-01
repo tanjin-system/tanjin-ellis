@@ -3688,34 +3688,70 @@ async function renderHistory(c){
     if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
   });
 }
-function renderMyEarnings(c){
+// 近6個月（含本月）供司機自己查詢月份下拉選單用，由新到舊排序。
+function recentMonthOptions(n){
+  const [y0,m0] = todayStr().slice(0,7).split('-').map(Number);
+  const months = [];
+  for(let i=0;i<n;i++){
+    let y=y0, m=m0-i;
+    while(m<=0){ m+=12; y--; }
+    months.push(`${y}-${pad(m)}`);
+  }
+  return months;
+}
+async function renderMyEarnings(c){
   const dId = state.activeDriverId;
-  const monthStr = todayStr().slice(0,7);
-  const r = driverMonthly(dId, monthStr);
+  const monthStr = state._myEarningsMonth || todayStr().slice(0,7);
+  const monthOpts = recentMonthOptions(6);
   c.innerHTML = `
-    <h2 class="section-title">我的報酬（本月即時）</h2>
+    <h2 class="section-title">我的報酬</h2>
     <div class="panel">
-      <table>
-        <tr><td>已完成車趟數</td><td class="amount">${r.trips.length}</td></tr>
-        <tr><td>車趟報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
-        <tr><td>本月調整項</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
-        <tr><td><strong>目前預估淨額</strong></td><td class="amount"><strong>$${money(r.net)}</strong></td></tr>
-      </table>
+      <div class="field" style="max-width:200px;"><label>查詢月份</label>
+        <select id="meMonth">${monthOpts.map(m=>`<option value="${m}" ${m===monthStr?'selected':''}>${m}${m===todayStr().slice(0,7)?'（本月即時）':''}</option>`).join('')}</select>
+      </div>
     </div>
-    <div class="panel">
-      <h3 style="margin-top:0;">已完成任務</h3>
-      <table>
-        <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
-        <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(a.fare)}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月尚無已完成車趟</div></td></tr>'}</tbody>
-      </table>
-      ${r.adjustments.length ? `
-        <h3>本月調整項明細</h3>
+    <div id="meResult"><div class="empty">載入中...</div></div>
+  `;
+  document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; refresh(); };
+  // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的車趟，
+  // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列
+  // 越查越大（司機身份本來就受RLS限制只看得到自己的車趟，查6個月內任一個月
+  // 都很輕量）。
+  async function refresh(){
+    const m = state._myEarningsMonth || monthStr;
+    const resultEl = document.getElementById('meResult');
+    resultEl.innerHTML = '<div class="empty">載入中...</div>';
+    let monthAssignments;
+    try{ monthAssignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m)); }
+    catch(err){ resultEl.innerHTML = `<div class="empty">載入失敗：${err.message}</div>`; return; }
+    if(state.tab!=='my-earnings') return; // 使用者可能已經切走這一頁
+    const r = driverMonthly(dId, m, monthAssignments);
+    const isCurrent = m===todayStr().slice(0,7);
+    resultEl.innerHTML = `
+      <div class="panel">
         <table>
-          <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
-          <tbody>${r.adjustments.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+          <tr><td>已完成車趟數</td><td class="amount">${r.trips.length}</td></tr>
+          <tr><td>車趟報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
+          <tr><td>${m}調整項</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
+          <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(r.net)}</strong></td></tr>
         </table>
-      ` : ''}
-    </div>`;
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">已完成任務</h3>
+        <table>
+          <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
+          <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(a.fare)}</td></tr>`).join('') || `<tr><td colspan="3"><div class="empty">${m}尚無已完成車趟</div></td></tr>`}</tbody>
+        </table>
+        ${r.adjustments.length ? `
+          <h3>${m}調整項明細</h3>
+          <table>
+            <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
+            <tbody>${r.adjustments.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+          </table>
+        ` : ''}
+      </div>`;
+  }
+  await refresh();
 }
 // ---------- 司機端：我的資料 ----------
 function renderMyProfile(c){
