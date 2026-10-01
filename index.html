@@ -768,14 +768,23 @@ function statementNetFromAdjustments(tripTotal, adjustments){
   const adjTotal = adjustments.reduce((s,a)=> a.type==='advance' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
   return { adjTotal, net: tripTotal+adjTotal };
 }
+// 首頁「即時利潤」只是給主控一眼看大概損益的參考數字，不是正式請款/薪資
+// 文件（那兩個分別在請款結算、薪資結算，各自照自己的規則精確計算，完全
+// 不受這裡影響）。故意統一用「自然月（1號至今天）」同一個時間範圍去算
+// 收入(請款)跟支出(薪資)，而不是讓每個通路各自套用自己的請款週期——
+// 薪資本來就是固定自然月結算，如果收入那邊各通路分別用自己的週期（例如
+// 7-11是每月27日到次月26日），兩邊時間範圍對不起來，相減出來的「利潤」
+// 數字會是兩個不同時間區間硬湊出來的，看起來像損益、其實沒有真正對應到
+// 同一段時間，容易誤判。統一成自然月之後，這裡顯示的各通路金額會跟
+// 「請款結算」裡那個通路自己週期算出來的正式金額有落差，是刻意的
+// （快速參考 vs 正式請款單，本來就不需要一致）。
 function computeProfitSnapshot(){
   const monthStr = todayStr().slice(0,7);
   const today = todayStr();
+  const calStart = monthStr + '-01';
   const perChannel = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>{
-    const period = defaultPeriod(ch, monthStr);
-    const end = period.end > today ? today : period.end;
-    const { total } = channelBillingTotal(ch.id, period.start, end);
-    return { channel: ch, total, period: { start: period.start, end } };
+    const { total } = channelBillingTotal(ch.id, calStart, today);
+    return { channel: ch, total, period: { start: calStart, end: today } };
   });
   const revenueTotal = perChannel.reduce((s,x)=>s+x.total, 0);
   let expenseTotal = 0;
@@ -1170,7 +1179,7 @@ async function renderHomeAdmin(c){
         <tr><td>司機薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
         <tr><td><strong>利潤總額</strong></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
       </table>
-      <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">依各通路目前的請款週期規則，估算本月至今（未到週期結束日者以今天為止）；支出為司機當月已完成車趟的應付淨額。</p>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟薪資結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3>
