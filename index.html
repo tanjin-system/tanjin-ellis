@@ -784,7 +784,9 @@ function computeProfitSnapshot(){
   let expenseTotal = 0;
   state.data.drivers.forEach(d=>{
     const r = driverMonthly(d.id, monthStr);
-    expenseTotal += r.net;
+    // 預支只是提前發放薪資、不是公司少付一筆錢，不能從支出扣掉，否則預支
+    // 越多利潤就被灌水越多；沿用勞報單的算法（車趟報酬＋加減項，不含預支）。
+    expenseTotal += statementNetFromAdjustments(r.tripTotal, r.adjustments).net;
   });
   return { perChannel, revenueTotal, expenseTotal, profit: revenueTotal-expenseTotal, monthStr };
 }
