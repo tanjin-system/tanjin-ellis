@@ -3412,7 +3412,7 @@ function renderToday(c){
       ${weekDates.map(d=>{
         const items = state.data.assignments.filter(a=>a.driverId===dId && a.date===d)
           .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
-        return `<div class="day-card"><div class="day-label">${d.slice(5)}${d===today?'・今天':''}</div>
+        return `<div class="day-card"><div class="day-label">${d.slice(5)}（星期${WEEKDAY_ZH[(new Date(d+'T00:00:00').getDay()+6)%7]}）${d===today?'・今天':''}</div>
           ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待出發</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
         </div>`;
       }).join('')}
