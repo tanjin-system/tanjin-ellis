@@ -2768,6 +2768,9 @@ function renderPayroll(c){
       signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
+    // 可領淨額＝勞報單實領金額（已扣稅／補充保費）再扣掉預支，即這個月還要實際匯給司機的現金。
+    const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+    const payable = ded.actualNet - advanceTotal;
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <h3 style="margin-top:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
@@ -2786,6 +2789,12 @@ function renderPayroll(c){
         <table>
           <thead><tr><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
           <tbody>${r.adjustments.map(a=>`<tr><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
+        </table>
+        <table style="margin-top:10px;">
+          <tr><td>報酬總額（車趟＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
+          ${ded.taxAmount||ded.nhiAmount ? `<tr><td>扣稅／補充保費</td><td class="amount">-$${money(ded.taxAmount+ded.nhiAmount)}</td></tr>` : ''}
+          ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
+          <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
         </table>
       </div>
       <div id="payrollSlipArea">${slipHtml}</div>
