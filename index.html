@@ -2480,9 +2480,17 @@ function renderWeekGrid(containerId, dates){
       detailTr.dataset.forId = td.dataset.viewassign;
       const detailTd = document.createElement('td');
       detailTd.colSpan = tr.children.length;
+      // 這一列橫跨整張週班表（7天×2班，比螢幕寬很多），明細面板如果跟著撐滿，
+      // 右上角的「刪除」跟狀態標籤會被擠到畫面外看不到；限制成可視寬度並固定在
+      // 左邊（sticky），表格橫向捲動時面板也不會跟著跑掉。
+      const holder = document.createElement('div');
+      const scroller = tr.closest('.panel') || wrap;
+      holder.style.cssText = 'position:sticky; left:0; box-sizing:border-box;';
+      holder.style.width = Math.max(300, scroller.clientWidth - 36) + 'px';
+      detailTd.appendChild(holder);
       detailTr.appendChild(detailTd);
       tr.after(detailTr);
-      renderAssignmentDetail(td.dataset.viewassign, detailTd);
+      renderAssignmentDetail(td.dataset.viewassign, holder);
     };
   });
   wrap.querySelectorAll('[data-quickcreate]').forEach(td=>{
