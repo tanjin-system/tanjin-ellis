@@ -2694,7 +2694,6 @@ function renderPayroll(c){
       </div>
       <button class="btn ghost" id="addAdj">新增調整項</button>
     </div>
-    <div id="payrollSummary"></div>
     <div id="payrollResult"></div>
   `;
   c.querySelectorAll('[data-ack]').forEach(btn=>{
@@ -2740,48 +2739,6 @@ function renderPayroll(c){
     }).filter(Boolean);
     exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
   };
-  // 全體司機當月「可領淨額」總表：報酬總額（勞報單淨額）扣掉稅/補充保費後
-  // 的實領金額，再扣掉已預支的錢，就是這個月還要實際匯給司機的現金。已月結
-  // 確認的司機用凍結數字，還沒的用即時預覽，跟下方個別司機的勞報單同一套算法。
-  function payrollSummaryHtml(monthStr, monthAssignments){
-    const rows = state.data.drivers.map(d=>{
-      const live = driverMonthly(d.id, monthStr, monthAssignments);
-      const record = state.data.statements.find(x=>x.driverId===d.id && x.month===monthStr);
-      if(d.status!=='active' && !live.trips.length && !live.adjustments.length && !record) return null;
-      const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
-      const tripTotal = record ? record.tripTotal : live.tripTotal;
-      const adjTotal = record ? record.adjTotal : calc.adjTotal;
-      const net = record ? record.net : calc.net;
-      const ded = record ? { taxAmount:record.taxAmount, nhiAmount:record.nhiAmount, actualNet:record.actualNet } : computePayrollDeductions(net);
-      const advance = live.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
-      return { d, trips:live.trips.length, tripTotal, adjTotal, net, deduct:ded.taxAmount+ded.nhiAmount, advance, payable:ded.actualNet-advance, record };
-    }).filter(Boolean);
-    const sum = k => rows.reduce((s,r)=>s+r[k], 0);
-    const signed = n => `${n<0?'-':''}$${money(Math.abs(n))}`;
-    return `<div class="panel no-print">
-      <h3 style="margin-top:0;">${monthStr} 全體司機可領淨額</h3>
-      <p class="note" style="margin-top:0;">可領淨額 ＝ 報酬總額 − 扣稅／補充保費 − 預支（即這個月還要實際匯給司機的金額）。點司機姓名可切換到該司機的明細。</p>
-      <div style="overflow-x:auto;">
-      <table>
-        <thead><tr><th>司機</th><th>趟數</th><th>車趟報酬</th><th>加減項</th><th>報酬總額</th><th>扣稅／補充保費</th><th>預支</th><th>可領淨額</th><th>狀態</th></tr></thead>
-        <tbody>${rows.map(r=>`<tr>
-          <td><a class="link" href="#" data-pickdriver="${r.d.id}">${r.d.name}</a></td>
-          <td class="amount">${r.trips}</td>
-          <td class="amount">$${money(r.tripTotal)}</td>
-          <td class="amount">${signed(r.adjTotal)}</td>
-          <td class="amount">$${money(r.net)}</td>
-          <td class="amount">${r.deduct?'-$'+money(r.deduct):'—'}</td>
-          <td class="amount">${r.advance?'-$'+money(r.advance):'—'}</td>
-          <td class="amount"><strong>${signed(r.payable)}</strong></td>
-          <td>${r.record?(r.record.status==='awaiting_signature'?'待回簽':'已回簽'):'未月結'}</td>
-        </tr>`).join('') || '<tr><td colspan="9"><div class="empty">這個月沒有司機資料</div></td></tr>'}
-        ${rows.length ? `<tr style="font-weight:700; background:#F4F3EF;">
-          <td>合計</td><td class="amount">${sum('trips')}</td><td class="amount">$${money(sum('tripTotal'))}</td><td class="amount">${signed(sum('adjTotal'))}</td><td class="amount">$${money(sum('net'))}</td><td class="amount">${sum('deduct')?'-$'+money(sum('deduct')):'—'}</td><td class="amount">${sum('advance')?'-$'+money(sum('advance')):'—'}</td><td class="amount">${signed(sum('payable'))}</td><td></td>
-        </tr>` : ''}</tbody>
-      </table>
-      </div>
-    </div>`;
-  }
   async function refresh(){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
@@ -2795,11 +2752,6 @@ function renderPayroll(c){
     try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
     catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
-    const summaryEl = document.getElementById('payrollSummary');
-    summaryEl.innerHTML = payrollSummaryHtml(monthStr, monthAssignments);
-    summaryEl.querySelectorAll('[data-pickdriver]').forEach(a=>{
-      a.onclick = (e)=>{ e.preventDefault(); document.getElementById('pDriver').value = a.dataset.pickdriver; refresh(); };
-    });
     const live = driverMonthly(driverId, monthStr, monthAssignments);
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
     const isFrozen = !!record;
