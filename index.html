@@ -1161,11 +1161,13 @@ async function renderHomeAdmin(c){
     if(daysLeft>3 || daysLeft<-1) return null;
     return { name: ch.name, end, daysLeft };
   }).filter(Boolean);
+  const pendingFuelCount = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').length;
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${backupReminder || periodReminders.length || pendingFuelCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
+      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機加油申報待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
     </div>` : ''}
@@ -4234,7 +4236,7 @@ async function refreshHomeDataIfIdle(){
     // 都重抓一次是不必要的資料庫負擔（見 refreshAssignmentsRange 說明）。
     // 主控要看到「本月至今」的即時利潤，司機首頁只需要「今天」的行程數字。
     const today = todayStr();
-    if(state.role==='admin') await refreshAssignmentsRange(today.slice(0,7)+'-01', today);
+    if(state.role==='admin'){ await refreshAssignmentsRange(today.slice(0,7)+'-01', today); await refreshFuelClaims(); }
     else await refreshAssignmentsRange(today, today);
     // 司機首頁的「同出發點今日出發狀況」是另外呼叫loadDepotOverview()
     // 查的（司機身份是走RPC，不在loadAllData()裡），有自己的一層快取

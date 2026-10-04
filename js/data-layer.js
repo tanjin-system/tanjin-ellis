@@ -1439,3 +1439,12 @@ async function confirmFuelClaim(id) {
   claim.status = 'confirmed';
   claim.adjustmentId = adj.id;
 }
+
+// 首頁背景刷新用：司機隨時可能新增申報，主控停在首頁時要能看到最新的待確認數量
+// （fuel_claims 沒有訂閱 Realtime，資料量也很小，直接整張重抓）。
+async function refreshFuelClaims() {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('fuel_claims').select('*').order('fuel_date', { ascending: false });
+  if (error) throw new Error('重新整理加油申報失敗：' + error.message);
+  state.data.fuelClaims = (data || []).map(mapFuelClaim);
+}
