@@ -116,10 +116,14 @@ function mapAdjustment(row) {
   };
 }
 
+// 司機代墊申報的類別：加油、車輛保養（資料表沿用 fuel_claims 名稱，category 欄位區分）。
+const CLAIM_CATEGORY_LABEL = { fuel: '加油', maintenance: '車輛保養' };
+
 function mapFuelClaim(row) {
   return {
     id: row.id, driverId: row.driver_id, date: row.fuel_date, amount: Number(row.amount),
-    invoiceNo: row.invoice_no, status: row.status, adjustmentId: row.adjustment_id || null
+    invoiceNo: row.invoice_no, status: row.status, adjustmentId: row.adjustment_id || null,
+    category: row.category || 'fuel', note: row.note || ''
   };
 }
 
@@ -1369,29 +1373,34 @@ function normalizeInvoiceNo(raw) {
 
 function validateFuelClaimInput(input, excludeId) {
   const date = String(input.date || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('請選擇加油日期');
-  if (date > todayStr()) throw new Error('加油日期不能是未來的日期');
+  const category = input.category || 'fuel';
+  if (!CLAIM_CATEGORY_LABEL[category]) throw new Error('請選擇申報類別');
+  const label = CLAIM_CATEGORY_LABEL[category];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`請選擇${label}日期`);
+  if (date > todayStr()) throw new Error(`${label}日期不能是未來的日期`);
   const amount = Number(input.amount);
-  if (!Number.isFinite(amount) || amount <= 0) throw new Error('請輸入正確的加油金額');
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('請輸入正確的金額');
   const invoiceNo = normalizeInvoiceNo(input.invoiceNo);
   if (!/^[A-Z]{2}[0-9]{8}$/.test(invoiceNo)) throw new Error('發票號碼格式不正確，應為2碼英文＋8碼數字（例如 AB12345678）');
   const month = date.slice(0, 7);
   if (state.data.statements.some(s => s.driverId === input.driverId && s.month === month)) {
-    throw new Error(`${month} 已經月結確認，無法再申報這個月的加油，請聯絡主控。`);
+    throw new Error(`${month} 已經月結確認，無法再申報這個月的代墊費用，請聯絡主控。`);
   }
   if ((state.data.fuelClaims || []).some(c => c.invoiceNo === invoiceNo && c.id !== excludeId)) {
     throw new Error('這張發票號碼已經申報過了');
   }
-  return { date, amount, invoiceNo };
+  const note = String(input.note || '').trim();
+  if (note.length > 60) throw new Error('備註請控制在60字以內');
+  return { date, amount, invoiceNo, category, note: note || null };
 }
 
 async function createFuelClaim(input) {
   const v = validateFuelClaimInput(input);
   const supabase = getSupabase();
   const { data, error } = await supabase.from('fuel_claims').insert({
-    driver_id: input.driverId, fuel_date: v.date, amount: v.amount, invoice_no: v.invoiceNo
+    driver_id: input.driverId, fuel_date: v.date, amount: v.amount, invoice_no: v.invoiceNo, category: v.category, note: v.note
   }).select().single();
-  if (error) throw new Error(error.code === '23505' ? '這張發票號碼已經申報過了' : '送出加油申報失敗：' + error.message);
+  if (error) throw new Error(error.code === '23505' ? '這張發票號碼已經申報過了' : '送出申報失敗：' + error.message);
   const claim = mapFuelClaim(data);
   state.data.fuelClaims.unshift(claim);
   return claim;
@@ -1403,9 +1412,9 @@ async function updateFuelClaim(id, input) {
   const v = validateFuelClaimInput({ ...input, driverId: existing.driverId }, id);
   const supabase = getSupabase();
   const { data, error } = await supabase.from('fuel_claims').update({
-    fuel_date: v.date, amount: v.amount, invoice_no: v.invoiceNo
+    fuel_date: v.date, amount: v.amount, invoice_no: v.invoiceNo, category: v.category, note: v.note
   }).eq('id', id).eq('status', 'pending').select().single();
-  if (error) throw new Error(error.code === '23505' ? '這張發票號碼已經申報過了' : '修改加油申報失敗：' + error.message);
+  if (error) throw new Error(error.code === '23505' ? '這張發票號碼已經申報過了' : '修改申報失敗：' + error.message);
   Object.assign(existing, mapFuelClaim(data));
   return existing;
 }
@@ -1415,7 +1424,7 @@ async function deleteFuelClaim(id) {
   if (existing && existing.status !== 'pending') throw new Error('這筆申報已經確認，無法刪除');
   const supabase = getSupabase();
   const { error } = await supabase.from('fuel_claims').delete().eq('id', id).eq('status', 'pending');
-  if (error) throw new Error('刪除加油申報失敗：' + error.message);
+  if (error) throw new Error('刪除申報失敗：' + error.message);
   state.data.fuelClaims = state.data.fuelClaims.filter(c => c.id !== id);
 }
 
@@ -1427,14 +1436,14 @@ async function confirmFuelClaim(id) {
   if (!claim || claim.status !== 'pending') throw new Error('這筆申報已經處理過了');
   const adj = await createAdjustment({
     driverId: claim.driverId, month: claim.date.slice(0, 7), type: 'reimbursement',
-    amount: claim.amount, note: `加油 ${claim.date} 發票${claim.invoiceNo}`
+    amount: claim.amount, note: `${CLAIM_CATEGORY_LABEL[claim.category] || '代墊'} ${claim.date} 發票${claim.invoiceNo}${claim.note ? ' ' + claim.note : ''}`
   });
   const supabase = getSupabase();
   const { error } = await supabase.from('fuel_claims').update({ status: 'confirmed', adjustment_id: adj.id }).eq('id', id);
   if (error) {
     await supabase.from('adjustments').delete().eq('id', adj.id);
     state.data.adjustments = state.data.adjustments.filter(a => a.id !== adj.id);
-    throw new Error('確認加油申報失敗：' + error.message);
+    throw new Error('確認申報失敗：' + error.message);
   }
   claim.status = 'confirmed';
   claim.adjustmentId = adj.id;

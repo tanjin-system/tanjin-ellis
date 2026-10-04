@@ -1169,7 +1169,7 @@ async function renderHomeAdmin(c){
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${backupReminder || periodReminders.length || pendingFuelCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
-      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機加油申報待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
+      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
     </div>` : ''}
@@ -2631,7 +2631,7 @@ const PAYROLL_PAYER_TAX_ID = '62091835';
 function payrollAttachmentHtml(driver, monthStr, r){
   const items = (r.adjustments||[]).filter(a=>a.type==='reimbursement').map(a=>{
     const claim = (state.data.fuelClaims||[]).find(c=>c.adjustmentId===a.id);
-    return { date: claim?claim.date:'—', invoice: claim?claim.invoiceNo:'—', amount: Math.abs(Number(a.amount)||0), note: claim?'':(a.note||'') };
+    return { kind: claim?(CLAIM_CATEGORY_LABEL[claim.category]||'代墊'):'—', date: claim?claim.date:'—', invoice: claim?claim.invoiceNo:'—', amount: Math.abs(Number(a.amount)||0), note: claim?(claim.note||''):(a.note||'') };
   }).sort((x,y)=>(x.date==='—'?'9999':x.date).localeCompare(y.date==='—'?'9999':y.date));
   if(!items.length) return '';
   const total = items.reduce((sum,i)=>sum+i.amount, 0);
@@ -2643,11 +2643,11 @@ function payrollAttachmentHtml(driver, monthStr, r){
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
         <tr><td>所得人姓名</td><td>${driver.bank.holder||driver.name}</td><td>所屬月份</td><td>${monthStr}</td></tr>
       </table>
-      <p style="font-size:12px; margin:12px 0 4px;">以下為司機代墊、發票憑證開立公司統編之款項，已包含在本月報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
+      <p style="font-size:12px; margin:12px 0 4px;">以下為司機代墊（加油、車輛保養等）、發票憑證開立公司統編之款項，已包含在本月報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
       <table>
-        <thead><tr><th style="width:8%;">序號</th><th>加油日期</th><th>發票號碼</th><th>金額</th><th>備註</th></tr></thead>
-        <tbody>${items.map((i,idx)=>`<tr><td>${idx+1}</td><td>${i.date}</td><td>${i.invoice}</td><td class="amount">$${money(i.amount)}</td><td>${escapeHtml(i.note)||'—'}</td></tr>`).join('')}
-        <tr><td colspan="3"><strong>代墊款合計（共 ${items.length} 筆）</strong></td><td class="amount"><strong>$${money(total)}</strong></td><td></td></tr></tbody>
+        <thead><tr><th style="width:8%;">序號</th><th>項目</th><th>日期</th><th>發票號碼</th><th>金額</th><th>備註</th></tr></thead>
+        <tbody>${items.map((i,idx)=>`<tr><td>${idx+1}</td><td>${i.kind}</td><td>${i.date}</td><td>${i.invoice}</td><td class="amount">$${money(i.amount)}</td><td>${escapeHtml(i.note)||'—'}</td></tr>`).join('')}
+        <tr><td colspan="4"><strong>代墊款合計（共 ${items.length} 筆）</strong></td><td class="amount"><strong>$${money(total)}</strong></td><td></td></tr></tbody>
       </table>
     </div>`;
 }
@@ -2729,11 +2729,11 @@ function renderPayroll(c){
       const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
       if(!pending.length) return '';
       return `<div class="panel">
-        <h3 style="margin-top:0;">司機加油申報待確認（${pending.length}）</h3>
-        <p class="note" style="margin-top:0;">請核對司機交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該加油日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
+        <h3 style="margin-top:0;">司機代墊申報待確認（${pending.length}）</h3>
+        <p class="note" style="margin-top:0;">請核對司機交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
         <table>
-          <thead><tr><th>司機</th><th>加油日期</th><th>金額</th><th>發票號碼</th><th></th></tr></thead>
-          <tbody>${pending.map(f=>`<tr><td>${driverName(f.driverId)}</td><td>${f.date}</td><td class="amount">$${money(f.amount)}</td><td>${f.invoiceNo}</td>
+          <thead><tr><th>司機</th><th>類別</th><th>日期</th><th>金額</th><th>發票號碼</th><th>備註</th><th></th></tr></thead>
+          <tbody>${pending.map(f=>`<tr><td>${driverName(f.driverId)}</td><td>${CLAIM_CATEGORY_LABEL[f.category]||'—'}</td><td>${f.date}</td><td class="amount">$${money(f.amount)}</td><td>${f.invoiceNo}</td><td>${escapeHtml(f.note)||'—'}</td>
             <td><button class="btn amber" data-fcconfirm="${f.id}">確認（轉為代墊款）</button> <button class="btn danger" data-fcreject="${f.id}">刪除</button></td></tr>`).join('')}</tbody>
         </table>
       </div>`;
@@ -2763,7 +2763,7 @@ function renderPayroll(c){
     btn.onclick = async ()=>{
       const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcconfirm);
       if(!f) return;
-      if(!confirm(`確認 ${driverName(f.driverId)} 的加油申報？\n日期 ${f.date}、金額 $${money(f.amount)}、發票號碼 ${f.invoiceNo}\n確認後會轉成 ${f.date.slice(0,7)} 的代墊款。`)) return;
+      if(!confirm(`確認 ${driverName(f.driverId)} 的${CLAIM_CATEGORY_LABEL[f.category]||'代墊'}申報？\n日期 ${f.date}、金額 $${money(f.amount)}、發票號碼 ${f.invoiceNo}\n確認後會轉成 ${f.date.slice(0,7)} 的代墊款。`)) return;
       try{ await confirmFuelClaim(f.id); renderContent(); }
       catch(err){ alert(err.message); }
     };
@@ -2771,7 +2771,7 @@ function renderPayroll(c){
   c.querySelectorAll('[data-fcreject]').forEach(btn=>{
     btn.onclick = async ()=>{
       const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcreject);
-      if(!f || !confirm(`確定要刪除 ${driverName(f.driverId)} ${f.date} 的這筆加油申報嗎？司機會看不到這筆紀錄，需要重新申報。`)) return;
+      if(!f || !confirm(`確定要刪除 ${driverName(f.driverId)} ${f.date} 的這筆代墊申報嗎？司機會看不到這筆紀錄，需要重新申報。`)) return;
       try{ await deleteFuelClaim(f.id); renderContent(); }
       catch(err){ alert(err.message); }
     };
@@ -3816,28 +3816,32 @@ function renderFuelPanel(){
   const editing = claims.find(c=>c.id===editingFuelClaimId && c.status==='pending');
   box.innerHTML = `
     <div class="panel">
-      <h3 style="margin-top:0;">加油代墊申報</h3>
-      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：司機本人登入後才能填寫申報；待確認的申報請到「薪資結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油時請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
+      <h3 style="margin-top:0;">代墊費用申報（加油／車輛保養）</h3>
+      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：司機本人登入後才能填寫申報；待確認的申報請到「薪資結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油或車輛保養時，請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
       <div class="grid3">
-        <div class="field"><label>加油日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
+        <div class="field"><label>類別</label><select id="fcCategory">${Object.entries(CLAIM_CATEGORY_LABEL).map(([k,v])=>`<option value="${k}" ${(editing?editing.category:'fuel')===k?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="field"><label>日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
         <div class="field"><label>金額（元）</label><input id="fcAmount" type="number" inputmode="numeric" min="1" value="${editing?editing.amount:''}"></div>
+      </div>
+      <div class="grid2">
         <div class="field"><label>發票號碼</label><input id="fcInvoice" placeholder="AB12345678" maxlength="12" value="${editing?editing.invoiceNo:''}"></div>
+        <div class="field"><label>備註（選填，例如保養項目）</label><input id="fcNote" maxlength="60" value="${editing?escapeHtml(editing.note):''}"></div>
       </div>
       <button class="btn amber" id="fcSubmit">${editing?'儲存修改':'送出申報'}</button>
       ${editing?'<button class="btn ghost" id="fcCancel">取消修改</button>':''}`}
       <h4 style="margin:${readOnly?'0':'16px'} 0 6px;">${readOnly?'申報紀錄':'我的申報紀錄'}</h4>
       <table>
-        <thead><tr><th>加油日期</th><th>金額</th><th>發票號碼</th><th>狀態</th><th></th></tr></thead>
+        <thead><tr><th>類別</th><th>日期</th><th>金額</th><th>發票號碼</th><th>備註</th><th>狀態</th><th></th></tr></thead>
         <tbody>${claims.map(c=>`<tr>
-          <td>${c.date}</td><td class="amount">$${money(c.amount)}</td><td>${c.invoiceNo}</td>
+          <td>${CLAIM_CATEGORY_LABEL[c.category]||'—'}</td><td>${c.date}</td><td class="amount">$${money(c.amount)}</td><td>${c.invoiceNo}</td><td>${escapeHtml(c.note)||'—'}</td>
           <td>${c.status==='confirmed'?'<span class="badge completed">已確認</span>':'<span class="badge pending">待確認</span>'}</td>
           <td>${!readOnly && c.status==='pending'?`<button class="btn ghost" data-fcedit="${c.id}">修改</button> <button class="btn danger" data-fcdel="${c.id}">刪除</button>`:''}</td>
-        </tr>`).join('') || '<tr><td colspan="5"><div class="empty">尚無申報紀錄</div></td></tr>'}</tbody>
+        </tr>`).join('') || '<tr><td colspan="7"><div class="empty">尚無申報紀錄</div></td></tr>'}</tbody>
       </table>
     </div>`;
   if(readOnly) return;
   document.getElementById('fcSubmit').onclick = async ()=>{
-    const input = { driverId:dId, date:document.getElementById('fcDate').value, amount:document.getElementById('fcAmount').value, invoiceNo:document.getElementById('fcInvoice').value };
+    const input = { driverId:dId, category:document.getElementById('fcCategory').value, date:document.getElementById('fcDate').value, amount:document.getElementById('fcAmount').value, invoiceNo:document.getElementById('fcInvoice').value, note:document.getElementById('fcNote').value };
     try{
       if(editing) await updateFuelClaim(editing.id, input); else await createFuelClaim(input);
       editingFuelClaimId = null; renderFuelPanel();
@@ -3848,7 +3852,7 @@ function renderFuelPanel(){
   box.querySelectorAll('[data-fcedit]').forEach(b=>{ b.onclick = ()=>{ editingFuelClaimId = b.dataset.fcedit; renderFuelPanel(); }; });
   box.querySelectorAll('[data-fcdel]').forEach(b=>{
     b.onclick = async ()=>{
-      if(!confirm('確定要刪除這筆加油申報嗎？')) return;
+      if(!confirm('確定要刪除這筆申報嗎？')) return;
       try{ await deleteFuelClaim(b.dataset.fcdel); if(editingFuelClaimId===b.dataset.fcdel) editingFuelClaimId=null; renderFuelPanel(); }
       catch(err){ alert(err.message); }
     };

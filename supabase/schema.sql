@@ -966,3 +966,9 @@ create policy driver_update_own on fuel_claims for update to app_driver
   using (driver_id = auth_driver_id() and status = 'pending') with check (driver_id = auth_driver_id() and status = 'pending');
 create policy driver_delete_own on fuel_claims for delete to app_driver
   using (driver_id = auth_driver_id() and status = 'pending');
+
+-- 司機代墊申報加入類別（加油／車輛保養）與選填備註（2026-10-04，已在線上資料庫直接執行過）：
+--   alter table fuel_claims add column category text not null default 'fuel' check (category in ('fuel','maintenance'));
+--   alter table fuel_claims add column note text check (note is null or char_length(note) <= 60);
+--   grant insert (category, note) on fuel_claims to app_driver;
+--   grant update (category, note) on fuel_claims to app_driver;
