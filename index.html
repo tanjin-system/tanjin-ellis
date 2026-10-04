@@ -3773,31 +3773,35 @@ function monthOptionsHtml(selected, n=6){
 let editingFuelClaimId = null;
 function renderFuelPanel(){
   const box = document.getElementById('meFuel');
-  if(!box || state.role!=='driver' || state.adminViewDriver) return;
+  if(!box) return;
+  // 主控「檢視司機」模式只讀：看得到司機填的申報紀錄，但不能代填，也不能在這裡改／刪
+  // （待確認的請到薪資結算處理）。
+  const readOnly = state.role!=='driver' || !!state.adminViewDriver;
   const dId = state.activeDriverId;
   const claims = state.data.fuelClaims.filter(c=>c.driverId===dId);
   const editing = claims.find(c=>c.id===editingFuelClaimId && c.status==='pending');
   box.innerHTML = `
     <div class="panel">
       <h3 style="margin-top:0;">加油代墊申報</h3>
-      <p class="note" style="margin-top:0;">加油時請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
+      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：司機本人登入後才能填寫申報；待確認的申報請到「薪資結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油時請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
       <div class="grid3">
         <div class="field"><label>加油日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
         <div class="field"><label>金額（元）</label><input id="fcAmount" type="number" inputmode="numeric" min="1" value="${editing?editing.amount:''}"></div>
         <div class="field"><label>發票號碼</label><input id="fcInvoice" placeholder="AB12345678" maxlength="12" value="${editing?editing.invoiceNo:''}"></div>
       </div>
       <button class="btn amber" id="fcSubmit">${editing?'儲存修改':'送出申報'}</button>
-      ${editing?'<button class="btn ghost" id="fcCancel">取消修改</button>':''}
-      <h4 style="margin:16px 0 6px;">我的申報紀錄</h4>
+      ${editing?'<button class="btn ghost" id="fcCancel">取消修改</button>':''}`}
+      <h4 style="margin:${readOnly?'0':'16px'} 0 6px;">${readOnly?'申報紀錄':'我的申報紀錄'}</h4>
       <table>
         <thead><tr><th>加油日期</th><th>金額</th><th>發票號碼</th><th>狀態</th><th></th></tr></thead>
         <tbody>${claims.map(c=>`<tr>
           <td>${c.date}</td><td class="amount">$${money(c.amount)}</td><td>${c.invoiceNo}</td>
           <td>${c.status==='confirmed'?'<span class="badge completed">已確認</span>':'<span class="badge pending">待確認</span>'}</td>
-          <td>${c.status==='pending'?`<button class="btn ghost" data-fcedit="${c.id}">修改</button> <button class="btn danger" data-fcdel="${c.id}">刪除</button>`:''}</td>
+          <td>${!readOnly && c.status==='pending'?`<button class="btn ghost" data-fcedit="${c.id}">修改</button> <button class="btn danger" data-fcdel="${c.id}">刪除</button>`:''}</td>
         </tr>`).join('') || '<tr><td colspan="5"><div class="empty">尚無申報紀錄</div></td></tr>'}</tbody>
       </table>
     </div>`;
+  if(readOnly) return;
   document.getElementById('fcSubmit').onclick = async ()=>{
     const input = { driverId:dId, date:document.getElementById('fcDate').value, amount:document.getElementById('fcAmount').value, invoiceNo:document.getElementById('fcInvoice').value };
     try{
