@@ -748,8 +748,11 @@ function driverMonthly(driverId, monthStr, assignmentsList = state.data.assignme
   const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
   const tripTotal = trips.reduce((s,a)=> s+(Number(a.payrollFareSnapshot ?? a.fare)||0), 0);
   const adjustments = state.data.adjustments.filter(a=> a.driverId===driverId && a.month===monthStr);
-  const adjTotal = adjustments.reduce((s,a)=> s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
-  return { trips, tripTotal, adjustments, adjTotal, net: tripTotal+adjTotal };
+  // 代墊款（reimbursement）已經包含在車趟報酬裡一起付給司機，只是勞報單要拆出來
+  // 不算所得，不影響報酬總額，所以不計入加減項。
+  const adjTotal = adjustments.reduce((s,a)=> a.type==='reimbursement' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  const reimbursement = adjustments.filter(a=>a.type==='reimbursement').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+  return { trips, tripTotal, adjustments, adjTotal, reimbursement, net: tripTotal+adjTotal };
 }
 // 勞報單（正式稅務/勞務文件）月結確認時要用的淨額，跟上面driverMonthly()
 // 算給「我的報酬/薪資結算」即時參考用的net故意不一樣：預支是薪資提前
@@ -757,9 +760,9 @@ function driverMonthly(driverId, monthStr, assignmentsList = state.data.assignme
 // 等於同一筆錢被扣兩次）；一般加項/減項不受影響，照樣計入。「我的報酬」
 // 那邊維持原本邏輯（含預支扣減），是為了讓司機/主控隨時看到「實際還能
 // 拿到多少現金」的即時參考數字，跟這裡刻意不同、不用同步。
-function adjTypeLabel(type){ return type==='advance' ? '預支' : type==='add' ? '加項' : '減項'; }
+function adjTypeLabel(type){ return type==='advance' ? '預支' : type==='reimbursement' ? '代墊款（憑證開公司）' : type==='add' ? '加項' : '減項'; }
 function statementNetFromAdjustments(tripTotal, adjustments){
-  const adjTotal = adjustments.reduce((s,a)=> a.type==='advance' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  const adjTotal = adjustments.reduce((s,a)=> (a.type==='advance' || a.type==='reimbursement') ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
   return { adjTotal, net: tripTotal+adjTotal };
 }
 // 首頁「即時利潤」只是給主控一眼看大概損益的參考數字，不是正式請款/薪資
@@ -2633,10 +2636,19 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   if(r.trips.length){
     contentRows.push(`<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
   }
-  r.adjustments.filter(a=>a.type!=='advance').forEach(a=>{
+  r.adjustments.filter(a=>a.type!=='advance' && a.type!=='reimbursement').forEach(a=>{
     const amt = a.type==='deduct' ? -Math.abs(Number(a.amount)) : Number(a.amount);
     contentRows.push(`<tr><td>${monthStr}</td><td>${adjTypeLabel(a.type)}</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">${amt>=0?'':'-'}$${money(Math.abs(amt))}</td><td>—</td></tr>`);
   });
+  // 代墊款（例如油資，憑證開公司統編）：這筆錢已經包含在車趟報酬裡一起付給
+  // 司機，但屬於代墊還款、不是所得，所以在這裡逐筆列為「減項」拆出來，所得額
+  // 才是扣稅／補充保費的計算基礎；報酬總額與司機實際拿到的錢都不受影響。
+  const reimb = Number(r.reimbursement)||0;
+  if(reimb>0){
+    r.adjustments.filter(a=>a.type==='reimbursement').forEach(a=>{
+      contentRows.push(`<tr><td>${monthStr}</td><td>減：代墊款（憑證歸公司，非所得）</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">-$${money(Math.abs(Number(a.amount)||0))}</td><td>—</td></tr>`);
+    });
+  }
   const sigCell = opts.signatureDataUrl
     ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
     : '<div style="height:56px;"></div>';
@@ -2657,6 +2669,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       <h4 style="margin:14px 0 6px;">扣款與實領</h4>
       <table>
         <tr><td style="width:18%;">報酬總額</td><td style="width:32%;" class="amount">$${money(r.net)}</td><td style="width:18%;">是否扣所得稅</td><td>${ded.withholdTax?'是':'否'}</td></tr>
+        ${reimb>0 ? `<tr><td>其中代墊款（非所得）</td><td class="amount">-$${money(reimb)}</td><td>所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-reimb)}</td></tr>` : ''}
         <tr><td>參考稅率</td><td>${(PAYROLL_TAX_RATE*100).toFixed(0)}%</td><td>實際扣繳稅率</td><td>${(ded.taxRate*100).toFixed(2)}%</td></tr>
         <tr><td>所得稅額</td><td class="amount">$${money(ded.taxAmount)}</td><td>是否扣補充保費</td><td>${ded.withholdNhi?'是':'否'}</td></tr>
         <tr><td>補充保費率</td><td>${(PAYROLL_NHI_RATE*100).toFixed(2)}%</td><td>補充保費</td><td class="amount">$${money(ded.nhiAmount)}</td></tr>
@@ -2696,7 +2709,7 @@ function renderPayroll(c){
         <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
       <div class="grid3">
-        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option></select></div>
+        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option></select></div>
         <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
         <div class="field"><label>備註</label><input id="aNote"></div>
       </div>
@@ -2739,7 +2752,7 @@ function renderPayroll(c){
       const driver = state.data.drivers.find(d=>d.id===record.driverId);
       if(!driver) return null;
       const r = driverMonthly(record.driverId, monthStr, monthAssignments);
-      const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
+      const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount };
       const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
       return payrollSlipHtml(driver, monthStr, merged, ded, {
         signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
@@ -2766,10 +2779,10 @@ function renderPayroll(c){
     // 還沒月結確認的預覽，要用「排除預支」的淨額（跟confirmMonthlyStatement()
     // 存檔時算的邏輯一致），不能直接用live.net（那個是含預支扣減的即時參考值）。
     const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
-    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
+    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
     const ded = isFrozen
       ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
-      : computePayrollDeductions(r.net);
+      : computePayrollDeductions(r.net, r.reimbursement);
     const driver = state.data.drivers.find(d=>d.id===driverId);
     const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">司機已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">司機已回簽（未鎖定）</span>' : '<span class="badge progress">等待司機回簽</span>';
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
@@ -2800,6 +2813,7 @@ function renderPayroll(c){
         </table>
         <table style="margin-top:10px;">
           <tr><td>報酬總額（車趟＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
+          ${r.reimbursement ? `<tr><td>　其中代墊款（憑證開公司，非所得，不扣稅）</td><td class="amount">$${money(r.reimbursement)}</td></tr><tr><td>　所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-r.reimbursement)}</td></tr>` : ''}
           ${ded.taxAmount||ded.nhiAmount ? `<tr><td>扣稅／補充保費</td><td class="amount">-$${money(ded.taxAmount+ded.nhiAmount)}</td></tr>` : ''}
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
@@ -3757,8 +3771,10 @@ async function renderMyEarnings(c){
           <tr><td>已完成車趟數</td><td class="amount">${r.trips.length}</td></tr>
           <tr><td>車趟報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
           <tr><td>${m}調整項</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
+          ${r.reimbursement ? `<tr><td>　其中含代墊款（憑證開公司）</td><td class="amount">$${money(r.reimbursement)}</td></tr>` : ''}
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(r.net)}</strong></td></tr>
         </table>
+        ${r.reimbursement ? `<p class="note" style="margin:8px 0 0;">代墊款（例如油資）已包含在上面的報酬裡一起付給您，不屬於所得，勞報單的扣稅／補充保費只用「報酬 − 代墊款」計算，所以扣的稅會比較少。</p>` : ''}
       </div>
       <div class="panel">
         <h3 style="margin-top:0;">已完成任務</h3>
@@ -3770,7 +3786,7 @@ async function renderMyEarnings(c){
           <h3>${m}調整項明細</h3>
           <table>
             <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
-            <tbody>${r.adjustments.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+            <tbody>${r.adjustments.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='reimbursement'?'':adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
           </table>
         ` : ''}
       </div>`;
@@ -3974,7 +3990,7 @@ function renderMyStatement(c){
     }
     const driver = state.data.drivers.find(d=>d.id===dId);
     const r = driverMonthly(dId, m);
-    const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net };
+    const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount };
     const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
     const slipHtml = payrollSlipHtml(driver, m, merged, ded, {
       signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null

@@ -124,6 +124,7 @@ function mapStatement(row) {
     withholdTax: !!row.withhold_tax, taxRate: Number(row.tax_rate || 0), taxAmount: Number(row.tax_amount || 0),
     withholdNhi: !!row.withhold_nhi, nhiRate: Number(row.nhi_rate || 0), nhiAmount: Number(row.nhi_amount || 0),
     actualNet: Number(row.actual_net_amount || 0),
+    reimbursementAmount: Number(row.reimbursement_amount || 0),
     status: row.status, confirmedAt: row.confirmed_at, signedAt: row.signed_at,
     signatureDataUrl: null, adminAcked: row.admin_acked
   };
@@ -1181,15 +1182,22 @@ const PAYROLL_INCOME_TYPE = '執行業務所得';
 const PAYROLL_TAX_RATE = 0.10;
 const PAYROLL_NHI_RATE = 0.0211;
 const PAYROLL_WITHHOLD_THRESHOLD = 20000;
-function computePayrollDeductions(grossAmount) {
+// reimbursement＝司機代墊款（例如油資，憑證開公司統編）：這筆錢已經包含在
+// 報酬總額裡一起付給司機，但屬於代墊還款、不是所得，扣稅／補充保費的門檻
+// 判斷跟計算基礎只用「報酬總額 − 代墊款」（所得額）；實領金額＝報酬總額 −
+// 稅 − 補充保費，司機實際收到的錢跟沒有代墊時的算法一致。
+function computePayrollDeductions(grossAmount, reimbursement = 0) {
   const amt = Math.round(Number(grossAmount) || 0);
-  const withhold = amt >= PAYROLL_WITHHOLD_THRESHOLD;
-  const taxAmount = withhold ? Math.round(amt * PAYROLL_TAX_RATE) : 0;
-  const nhiAmount = withhold ? Math.round(amt * PAYROLL_NHI_RATE) : 0;
+  const reimb = Math.min(Math.max(Math.round(Number(reimbursement) || 0), 0), Math.max(amt, 0));
+  const taxable = amt - reimb;
+  const withhold = taxable >= PAYROLL_WITHHOLD_THRESHOLD;
+  const taxAmount = withhold ? Math.round(taxable * PAYROLL_TAX_RATE) : 0;
+  const nhiAmount = withhold ? Math.round(taxable * PAYROLL_NHI_RATE) : 0;
   return {
     incomeType: PAYROLL_INCOME_TYPE,
     withholdTax: withhold, taxRate: withhold ? PAYROLL_TAX_RATE : 0, taxAmount,
     withholdNhi: withhold, nhiRate: withhold ? PAYROLL_NHI_RATE : 0, nhiAmount,
+    taxableAmount: taxable, reimbursement: reimb,
     actualNet: amt - taxAmount - nhiAmount
   };
 }
@@ -1201,14 +1209,15 @@ function computePayrollDeductions(grossAmount) {
 async function confirmMonthlyStatement(driverId, month, live) {
   const supabase = getSupabase();
   const { adjTotal, net } = statementNetFromAdjustments(live.tripTotal, live.adjustments);
-  const ded = computePayrollDeductions(net);
+  const reimbursement = live.adjustments.filter(a => a.type === 'reimbursement').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
+  const ded = computePayrollDeductions(net, reimbursement);
   const { data, error } = await supabase.from('statements').insert({
     driver_id: driverId, statement_month: `${month}-01`,
     trip_total: live.tripTotal, adj_total: adjTotal, net_amount: net,
     income_type: ded.incomeType,
     withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
     withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
-    actual_net_amount: ded.actualNet,
+    actual_net_amount: ded.actualNet, reimbursement_amount: ded.reimbursement,
     status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
   }).select().single();
   if (error) throw new Error('月結確認失敗：' + error.message);

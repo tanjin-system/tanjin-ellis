@@ -207,7 +207,9 @@ create table adjustments (
   id uuid primary key default gen_random_uuid(),
   driver_id uuid not null references drivers(id),
   adjustment_month date not null,
-  adjustment_type text not null check (adjustment_type in ('advance','add','deduct')),
+  -- reimbursement＝司機代墊款（例如油資，憑證開公司統編）：已包含在車趟報酬裡一起付給司機，
+  -- 勞報單要拆出來不算所得（不扣稅／補充保費），不影響報酬總額與毛利。
+  adjustment_type text not null check (adjustment_type in ('advance','add','deduct','reimbursement')),
   amount numeric not null,
   note text,
   created_at timestamptz not null default now()
@@ -249,6 +251,7 @@ create table statements (
   nhi_rate numeric not null default 0,
   nhi_amount numeric not null default 0,
   actual_net_amount numeric not null default 0, -- 實領金額 = net_amount − tax_amount − nhi_amount
+  reimbursement_amount numeric not null default 0, -- 代墊款（非所得）凍結金額，稅／補充保費基礎＝net_amount − reimbursement_amount
   -- signed：司機已簽名，但還能自己重新簽名改掉；confirmed：司機自己點過
   -- 「確認簽名」，正式鎖定不能再改（例如主控已經拿去申報國稅局之後）。
   -- 主控的「退回簽名」不受這個狀態限制，隨時可以退回 awaiting_signature。
@@ -923,3 +926,11 @@ create trigger trg_catalog_version_route_versions after insert or update or dele
   for each statement execute function bump_catalog_version();
 create trigger trg_catalog_version_route_version_points after insert or update or delete on route_version_points
   for each statement execute function bump_catalog_version();
+
+-- ============================================================
+-- PART 10：司機代墊款（2026-10-04）
+-- 已在線上資料庫直接執行過（見 adjustments 的 check 與 statements.reimbursement_amount）：
+--   alter table adjustments drop constraint adjustments_adjustment_type_check;
+--   alter table adjustments add constraint adjustments_adjustment_type_check check (adjustment_type in ('advance','add','deduct','reimbursement'));
+--   alter table statements add column reimbursement_amount numeric not null default 0;
+-- ============================================================
