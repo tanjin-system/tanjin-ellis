@@ -1167,6 +1167,7 @@ async function renderHomeAdmin(c){
   // 上個月還沒月結確認的司機：只抓「有已完成車趟的司機id」（很輕量），同一個月在這個
   // session 只查一次；查詢失敗不影響首頁其他內容。
   const prevMonthStr = (()=>{ const [y,m]=today.slice(0,7).split('-').map(Number); return m===1 ? `${y-1}-12` : `${y}-${pad(m-1)}`; })();
+  const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
   let unsettledNames = [];
   try{
     if(!state._settleCache || state._settleCache.month!==prevMonthStr){
@@ -1179,8 +1180,9 @@ async function renderHomeAdmin(c){
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
+      ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單司機尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${x.month}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往薪資結算</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
@@ -2740,6 +2742,21 @@ function renderPayroll(c){
       </div>`).join('')}
     </div>` : ''}
     ${(()=>{
+      // 月結確認後、司機還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
+      const unsigned = state.data.statements.filter(x=>x.status==='awaiting_signature')
+        .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
+      if(!unsigned.length) return `<div class="panel"><h3 style="margin:0;">司機回簽狀況</h3><div style="font-size:13px; margin-top:6px;">✅ 所有已月結確認的勞報單，司機都已回簽。</div></div>`;
+      const days = x=> x.confirmedAt ? Math.max(0, Math.floor((Date.now()-new Date(x.confirmedAt).getTime())/86400000)) : null;
+      return `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+        <h3 style="margin-top:0;">尚未回簽（${unsigned.length} 位）</h3>
+        <p class="note" style="margin-top:0;">已月結確認、但司機還沒在系統上簽名的勞報單。</p>
+        <table>
+          <thead><tr><th>司機</th><th>月份</th><th>實領金額</th><th>已等待</th><th></th></tr></thead>
+          <tbody>${unsigned.map(x=>`<tr><td>${driverName(x.driverId)}</td><td>${x.month}</td><td class="amount">$${money(x.actualNet)}</td><td>${days(x)===null?'—':days(x)===0?'今天確認':days(x)+' 天'}</td><td><button class="btn ghost" data-unsignedpick="${x.driverId}|${x.month}">查看</button></td></tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    })()}
+    ${(()=>{
       const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
       if(!pending.length) return '';
       return `<div class="panel">
@@ -2774,6 +2791,16 @@ function renderPayroll(c){
     <div id="payrollPending"></div>
     <div id="payrollResult"></div>
   `;
+  c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [dId, mon] = btn.dataset.unsignedpick.split('|');
+      const monthSel = document.getElementById('pMonth');
+      if(![...monthSel.options].some(o=>o.value===mon)) monthSel.add(new Option(mon, mon));
+      monthSel.value = mon;
+      document.getElementById('pDriver').value = dId;
+      refresh().then(()=>{ const el=document.getElementById('payrollResult'); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); });
+    };
+  });
   c.querySelectorAll('[data-fcconfirm]').forEach(btn=>{
     btn.onclick = async ()=>{
       const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcconfirm);
