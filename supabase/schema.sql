@@ -934,3 +934,35 @@ create trigger trg_catalog_version_route_version_points after insert or update o
 --   alter table adjustments add constraint adjustments_adjustment_type_check check (adjustment_type in ('advance','add','deduct','reimbursement'));
 --   alter table statements add column reimbursement_amount numeric not null default 0;
 -- ============================================================
+
+
+-- ============================================================
+-- PART 11：司機加油申報（2026-10-04，已在線上資料庫直接執行過）
+-- 司機只能填日期/金額/發票號碼，狀態固定是 pending（待確認）；主控核對憑證後
+-- 「確認」才會轉成 adjustments 的 reimbursement（代墊款）並把狀態改成 confirmed，
+-- 確認後司機就不能再改或刪除。status/adjustment_id 司機端沒有寫入權限。
+-- ============================================================
+create table fuel_claims (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references drivers(id),
+  fuel_date date not null,
+  amount numeric not null check (amount > 0),
+  invoice_no text not null check (invoice_no ~ '^[A-Z]{2}[0-9]{8}$'),
+  status text not null default 'pending' check (status in ('pending','confirmed')),
+  adjustment_id uuid references adjustments(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint fuel_claims_invoice_unique unique (invoice_no)
+);
+create index idx_fuel_claims_driver on fuel_claims(driver_id, fuel_date);
+alter table fuel_claims enable row level security;
+grant select, insert, update, delete on fuel_claims to app_admin;
+grant select, delete on fuel_claims to app_driver;
+grant insert (driver_id, fuel_date, amount, invoice_no) on fuel_claims to app_driver;
+grant update (fuel_date, amount, invoice_no) on fuel_claims to app_driver;
+create policy admin_all on fuel_claims for all to app_admin using (true) with check (true);
+create policy driver_select_own on fuel_claims for select to app_driver using (driver_id = auth_driver_id());
+create policy driver_insert_own on fuel_claims for insert to app_driver with check (driver_id = auth_driver_id());
+create policy driver_update_own on fuel_claims for update to app_driver
+  using (driver_id = auth_driver_id() and status = 'pending') with check (driver_id = auth_driver_id() and status = 'pending');
+create policy driver_delete_own on fuel_claims for delete to app_driver
+  using (driver_id = auth_driver_id() and status = 'pending');

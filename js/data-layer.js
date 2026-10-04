@@ -116,6 +116,13 @@ function mapAdjustment(row) {
   };
 }
 
+function mapFuelClaim(row) {
+  return {
+    id: row.id, driverId: row.driver_id, date: row.fuel_date, amount: Number(row.amount),
+    invoiceNo: row.invoice_no, status: row.status, adjustmentId: row.adjustment_id || null
+  };
+}
+
 function mapStatement(row) {
   return {
     id: row.id, driverId: row.driver_id, month: row.statement_month.slice(0, 7),
@@ -270,7 +277,9 @@ async function loadAllData() {
     ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
     // 公告：admin/driver 都能查，driver 只查得到 active=true 的（RLS擋掉下架的），
     // 不需要另外分身份寫兩個查詢。
-    announcementsRes: supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false })
+    announcementsRes: supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false }),
+    // 司機加油申報：司機只查得到自己的（RLS），主控看全部。
+    fuelClaimsRes: supabase.from('fuel_claims').select('*').order('fuel_date', { ascending: false })
   };
   const keys = Object.keys(queries);
   const results = await Promise.all(Object.values(queries));
@@ -292,7 +301,8 @@ async function loadAllData() {
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
     statements: (byKey.statementsRes.data || []).map(mapStatement),
     billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment),
-    announcements: (byKey.announcementsRes.data || []).map(mapAnnouncement)
+    announcements: (byKey.announcementsRes.data || []).map(mapAnnouncement),
+    fuelClaims: (byKey.fuelClaimsRes.data || []).map(mapFuelClaim)
   };
 
   if (!cachedCatalog && remoteCatalogVersion) {
@@ -1074,7 +1084,19 @@ async function createAdjustment(input) {
   return adj;
 }
 
+// 這筆調整項如果是由加油申報確認轉進來的，刪掉前先把那筆申報退回「待確認」，
+// 不然申報會一直顯示已確認、但代墊款其實已經不存在。
+async function revertFuelClaimsOfAdjustments(adjustmentIds) {
+  const claims = (state.data.fuelClaims || []).filter(c => adjustmentIds.includes(c.adjustmentId));
+  if (!claims.length) return;
+  const supabase = getSupabase();
+  const { error } = await supabase.from('fuel_claims').update({ status: 'pending', adjustment_id: null }).in('id', claims.map(c => c.id));
+  if (error) throw new Error('退回加油申報失敗：' + error.message);
+  claims.forEach(c => { c.status = 'pending'; c.adjustmentId = null; });
+}
+
 async function deleteAdjustment(adjustmentId) {
+  await revertFuelClaimsOfAdjustments([adjustmentId]);
   const supabase = getSupabase();
   const { error } = await supabase.from('adjustments').delete().eq('id', adjustmentId);
   if (error) throw new Error('刪除調整項失敗：' + error.message);
@@ -1082,6 +1104,7 @@ async function deleteAdjustment(adjustmentId) {
 }
 
 async function bulkDeleteAdjustments(ids) {
+  await revertFuelClaimsOfAdjustments(ids);
   const supabase = getSupabase();
   const { error } = await supabase.from('adjustments').delete().in('id', ids);
   if (error) throw new Error('刪除資料失敗：' + error.message);
@@ -1336,4 +1359,83 @@ async function fetchUsageStats() {
   if (storageRes.error) console.error('取得檔案儲存用量失敗', storageRes.error.message);
   const storageTotalBytes = storageBuckets ? storageBuckets.reduce((s, b) => s + Number(b.total_bytes || 0), 0) : null;
   return { dbSizeBytes, storageBuckets, storageTotalBytes };
+}
+
+// ---------------- 司機加油申報（司機填、主控確認後轉成代墊款） ----------------
+
+function normalizeInvoiceNo(raw) {
+  return String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function validateFuelClaimInput(input, excludeId) {
+  const date = String(input.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('請選擇加油日期');
+  if (date > todayStr()) throw new Error('加油日期不能是未來的日期');
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('請輸入正確的加油金額');
+  const invoiceNo = normalizeInvoiceNo(input.invoiceNo);
+  if (!/^[A-Z]{2}[0-9]{8}$/.test(invoiceNo)) throw new Error('發票號碼格式不正確，應為2碼英文＋8碼數字（例如 AB12345678）');
+  const month = date.slice(0, 7);
+  if (state.data.statements.some(s => s.driverId === input.driverId && s.month === month)) {
+    throw new Error(`${month} 已經月結確認，無法再申報這個月的加油，請聯絡主控。`);
+  }
+  if ((state.data.fuelClaims || []).some(c => c.invoiceNo === invoiceNo && c.id !== excludeId)) {
+    throw new Error('這張發票號碼已經申報過了');
+  }
+  return { date, amount, invoiceNo };
+}
+
+async function createFuelClaim(input) {
+  const v = validateFuelClaimInput(input);
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('fuel_claims').insert({
+    driver_id: input.driverId, fuel_date: v.date, amount: v.amount, invoice_no: v.invoiceNo
+  }).select().single();
+  if (error) throw new Error(error.code === '23505' ? '這張發票號碼已經申報過了' : '送出加油申報失敗：' + error.message);
+  const claim = mapFuelClaim(data);
+  state.data.fuelClaims.unshift(claim);
+  return claim;
+}
+
+async function updateFuelClaim(id, input) {
+  const existing = state.data.fuelClaims.find(c => c.id === id);
+  if (!existing || existing.status !== 'pending') throw new Error('這筆申報已經確認，無法修改');
+  const v = validateFuelClaimInput({ ...input, driverId: existing.driverId }, id);
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('fuel_claims').update({
+    fuel_date: v.date, amount: v.amount, invoice_no: v.invoiceNo
+  }).eq('id', id).eq('status', 'pending').select().single();
+  if (error) throw new Error(error.code === '23505' ? '這張發票號碼已經申報過了' : '修改加油申報失敗：' + error.message);
+  Object.assign(existing, mapFuelClaim(data));
+  return existing;
+}
+
+async function deleteFuelClaim(id) {
+  const existing = state.data.fuelClaims.find(c => c.id === id);
+  if (existing && existing.status !== 'pending') throw new Error('這筆申報已經確認，無法刪除');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('fuel_claims').delete().eq('id', id).eq('status', 'pending');
+  if (error) throw new Error('刪除加油申報失敗：' + error.message);
+  state.data.fuelClaims = state.data.fuelClaims.filter(c => c.id !== id);
+}
+
+// 主控核對憑證後確認：轉成該加油日期所屬月份的代墊款（createAdjustment 會擋掉
+// 已經月結凍結的月份），再把申報標記為已確認；第二步失敗就把剛建的代墊款刪回去，
+// 避免兩邊不一致。
+async function confirmFuelClaim(id) {
+  const claim = state.data.fuelClaims.find(c => c.id === id);
+  if (!claim || claim.status !== 'pending') throw new Error('這筆申報已經處理過了');
+  const adj = await createAdjustment({
+    driverId: claim.driverId, month: claim.date.slice(0, 7), type: 'reimbursement',
+    amount: claim.amount, note: `加油 ${claim.date} 發票${claim.invoiceNo}`
+  });
+  const supabase = getSupabase();
+  const { error } = await supabase.from('fuel_claims').update({ status: 'confirmed', adjustment_id: adj.id }).eq('id', id);
+  if (error) {
+    await supabase.from('adjustments').delete().eq('id', adj.id);
+    state.data.adjustments = state.data.adjustments.filter(a => a.id !== adj.id);
+    throw new Error('確認加油申報失敗：' + error.message);
+  }
+  claim.status = 'confirmed';
+  claim.adjustmentId = adj.id;
 }

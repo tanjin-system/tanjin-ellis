@@ -2696,6 +2696,19 @@ function renderPayroll(c){
         <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn danger" data-reject="${s.id}">退回簽名</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
       </div>`).join('')}
     </div>` : ''}
+    ${(()=>{
+      const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
+      if(!pending.length) return '';
+      return `<div class="panel">
+        <h3 style="margin-top:0;">司機加油申報待確認（${pending.length}）</h3>
+        <p class="note" style="margin-top:0;">請核對司機交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該加油日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
+        <table>
+          <thead><tr><th>司機</th><th>加油日期</th><th>金額</th><th>發票號碼</th><th></th></tr></thead>
+          <tbody>${pending.map(f=>`<tr><td>${driverName(f.driverId)}</td><td>${f.date}</td><td class="amount">$${money(f.amount)}</td><td>${f.invoiceNo}</td>
+            <td><button class="btn amber" data-fcconfirm="${f.id}">確認（轉為代墊款）</button> <button class="btn danger" data-fcreject="${f.id}">刪除</button></td></tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    })()}
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
@@ -2717,6 +2730,23 @@ function renderPayroll(c){
     </div>
     <div id="payrollResult"></div>
   `;
+  c.querySelectorAll('[data-fcconfirm]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcconfirm);
+      if(!f) return;
+      if(!confirm(`確認 ${driverName(f.driverId)} 的加油申報？\n日期 ${f.date}、金額 $${money(f.amount)}、發票號碼 ${f.invoiceNo}\n確認後會轉成 ${f.date.slice(0,7)} 的代墊款。`)) return;
+      try{ await confirmFuelClaim(f.id); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-fcreject]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcreject);
+      if(!f || !confirm(`確定要刪除 ${driverName(f.driverId)} ${f.date} 的這筆加油申報嗎？司機會看不到這筆紀錄，需要重新申報。`)) return;
+      try{ await deleteFuelClaim(f.id); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
   c.querySelectorAll('[data-ack]').forEach(btn=>{
     btn.onclick = async ()=>{
       try{ await ackStatement(btn.dataset.ack); renderContent(); }
@@ -3738,6 +3768,54 @@ function monthOptionsHtml(selected, n=6){
   const thisMonth = todayStr().slice(0,7);
   return recentMonthOptions(n).map(m=>`<option value="${m}" ${m===selected?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join('');
 }
+// 司機端「加油代墊申報」：只能填日期／金額／發票號碼，送出後是「待確認」，
+// 主控核對憑證確認後才會轉成代墊款；確認前司機可以修改或刪除，確認後鎖定。
+let editingFuelClaimId = null;
+function renderFuelPanel(){
+  const box = document.getElementById('meFuel');
+  if(!box || state.role!=='driver' || state.adminViewDriver) return;
+  const dId = state.activeDriverId;
+  const claims = state.data.fuelClaims.filter(c=>c.driverId===dId);
+  const editing = claims.find(c=>c.id===editingFuelClaimId && c.status==='pending');
+  box.innerHTML = `
+    <div class="panel">
+      <h3 style="margin-top:0;">加油代墊申報</h3>
+      <p class="note" style="margin-top:0;">加油時請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
+      <div class="grid3">
+        <div class="field"><label>加油日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
+        <div class="field"><label>金額（元）</label><input id="fcAmount" type="number" inputmode="numeric" min="1" value="${editing?editing.amount:''}"></div>
+        <div class="field"><label>發票號碼</label><input id="fcInvoice" placeholder="AB12345678" maxlength="12" value="${editing?editing.invoiceNo:''}"></div>
+      </div>
+      <button class="btn amber" id="fcSubmit">${editing?'儲存修改':'送出申報'}</button>
+      ${editing?'<button class="btn ghost" id="fcCancel">取消修改</button>':''}
+      <h4 style="margin:16px 0 6px;">我的申報紀錄</h4>
+      <table>
+        <thead><tr><th>加油日期</th><th>金額</th><th>發票號碼</th><th>狀態</th><th></th></tr></thead>
+        <tbody>${claims.map(c=>`<tr>
+          <td>${c.date}</td><td class="amount">$${money(c.amount)}</td><td>${c.invoiceNo}</td>
+          <td>${c.status==='confirmed'?'<span class="badge completed">已確認</span>':'<span class="badge pending">待確認</span>'}</td>
+          <td>${c.status==='pending'?`<button class="btn ghost" data-fcedit="${c.id}">修改</button> <button class="btn danger" data-fcdel="${c.id}">刪除</button>`:''}</td>
+        </tr>`).join('') || '<tr><td colspan="5"><div class="empty">尚無申報紀錄</div></td></tr>'}</tbody>
+      </table>
+    </div>`;
+  document.getElementById('fcSubmit').onclick = async ()=>{
+    const input = { driverId:dId, date:document.getElementById('fcDate').value, amount:document.getElementById('fcAmount').value, invoiceNo:document.getElementById('fcInvoice').value };
+    try{
+      if(editing) await updateFuelClaim(editing.id, input); else await createFuelClaim(input);
+      editingFuelClaimId = null; renderFuelPanel();
+    }catch(err){ alert(err.message); }
+  };
+  const cancel = document.getElementById('fcCancel');
+  if(cancel) cancel.onclick = ()=>{ editingFuelClaimId = null; renderFuelPanel(); };
+  box.querySelectorAll('[data-fcedit]').forEach(b=>{ b.onclick = ()=>{ editingFuelClaimId = b.dataset.fcedit; renderFuelPanel(); }; });
+  box.querySelectorAll('[data-fcdel]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm('確定要刪除這筆加油申報嗎？')) return;
+      try{ await deleteFuelClaim(b.dataset.fcdel); if(editingFuelClaimId===b.dataset.fcdel) editingFuelClaimId=null; renderFuelPanel(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+}
 async function renderMyEarnings(c){
   const dId = state.activeDriverId;
   const monthStr = state._myEarningsMonth || todayStr().slice(0,7);
@@ -3749,7 +3827,9 @@ async function renderMyEarnings(c){
       </div>
     </div>
     <div id="meResult"><div class="empty">載入中...</div></div>
+    <div id="meFuel"></div>
   `;
+  renderFuelPanel();
   document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; refresh(); };
   // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的車趟，
   // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列
