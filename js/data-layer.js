@@ -254,11 +254,22 @@ async function fetchAllAssignmentPages(buildQuery) {
   return { data: all, error: null };
 }
 
-const CATALOG_CACHE_KEY = 'fleet_catalog_cache_v1';
-const CATALOG_VERSION_KEY = 'fleet_catalog_version_v1';
+// 目錄快取必須依「登入身份」分開存：資料庫權限（RLS）讓司機只看得到自己的司機資料等，
+// 司機登入抓回來的目錄是「縮水版」；如果跟主控共用同一份快取，同一個瀏覽器先用司機
+// 身份測試、再用主控登入，只要目錄版本沒變，主控就會拿到只有1位司機的縮水快取，
+// 看起來像司機資料全部不見（實際資料庫完好）。主控一份，每位司機各自一份。
+// 版本號碼後綴 v2：舊版（沒分身份）的快取直接作廢，不再被讀取。
+function catalogCacheSuffix() {
+  const driverId = state.role === 'driver' ? (state.activeDriverId || 'unknown') : null;
+  return driverId ? `driver_${driverId}` : 'admin';
+}
+const catalogCacheKey = () => `fleet_catalog_cache_v2_${catalogCacheSuffix()}`;
+const catalogVersionKey = () => `fleet_catalog_version_v2_${catalogCacheSuffix()}`;
 
 async function loadAllData() {
   const supabase = getSupabase();
+  // 清掉舊版（沒分身份）的目錄快取，避免佔著空間；新版快取用不同的 key，不受影響。
+  try { localStorage.removeItem('fleet_catalog_cache_v1'); localStorage.removeItem('fleet_catalog_version_v1'); } catch (e) { /* 忽略 */ }
 
   let cachedCatalog = null;
   let remoteCatalogVersion = null;
@@ -266,8 +277,8 @@ async function loadAllData() {
     const { data: meta, error: metaErr } = await supabase.from('catalog_meta').select('version').eq('id', 1).maybeSingle();
     if (!metaErr && meta?.version) {
       remoteCatalogVersion = meta.version;
-      if (remoteCatalogVersion === localStorage.getItem(CATALOG_VERSION_KEY)) {
-        const cachedJson = localStorage.getItem(CATALOG_CACHE_KEY);
+      if (remoteCatalogVersion === localStorage.getItem(catalogVersionKey())) {
+        const cachedJson = localStorage.getItem(catalogCacheKey());
         if (cachedJson) cachedCatalog = JSON.parse(cachedJson);
       }
     }
@@ -330,8 +341,8 @@ async function loadAllData() {
     // 登入版本沒變就吃得到——寫入失敗（例如瀏覽器localStorage被塞滿）不影響
     // 正常運作，純粹放棄這次快取，下次登入照樣會走一樣的判斷、不會壞掉。
     try {
-      localStorage.setItem(CATALOG_VERSION_KEY, remoteCatalogVersion);
-      localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({
+      localStorage.setItem(catalogVersionKey(), remoteCatalogVersion);
+      localStorage.setItem(catalogCacheKey(), JSON.stringify({
         drivers: data.drivers, channels: data.channels, origins: data.origins,
         dropPoints: data.dropPoints, routes: data.routes
       }));
