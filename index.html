@@ -1164,11 +1164,24 @@ async function renderHomeAdmin(c){
     return { name: ch.name, end, daysLeft };
   }).filter(Boolean);
   const pendingFuelCount = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').length;
+  // 上個月還沒月結確認的司機：只抓「有已完成車趟的司機id」（很輕量），同一個月在這個
+  // session 只查一次；查詢失敗不影響首頁其他內容。
+  const prevMonthStr = (()=>{ const [y,m]=today.slice(0,7).split('-').map(Number); return m===1 ? `${y-1}-12` : `${y}-${pad(m-1)}`; })();
+  let unsettledNames = [];
+  try{
+    if(!state._settleCache || state._settleCache.month!==prevMonthStr){
+      state._settleCache = { month: prevMonthStr, ids: await fetchDriverIdsWithCompletedTrips(prevMonthStr) };
+    }
+    unsettledNames = state.data.drivers
+      .filter(d=>state._settleCache.ids.has(d.id) && !state.data.statements.some(x=>x.driverId===d.id && x.month===prevMonthStr))
+      .map(d=>d.name);
+  }catch(e){ console.error('讀取月結名單失敗', e); }
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length || pendingFuelCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
+      ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往薪資結算</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
@@ -1198,6 +1211,7 @@ async function renderHomeAdmin(c){
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
+  c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('payroll'); }; });
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
   const manualRefreshBtn = document.getElementById('manualRefreshBtn');
   if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
@@ -2757,6 +2771,7 @@ function renderPayroll(c){
       </div>
       <button class="btn ghost" id="addAdj">新增調整項</button>
     </div>
+    <div id="payrollPending"></div>
     <div id="payrollResult"></div>
   `;
   c.querySelectorAll('[data-fcconfirm]').forEach(btn=>{
@@ -2823,6 +2838,26 @@ function renderPayroll(c){
     }).filter(Boolean).flat();
     exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
   };
+  // 這個月有已完成車趟、但還沒按「月結確認」的司機名單；點「查看並月結」直接切到
+  // 該司機的明細。已確認過的不列出，全部確認完會顯示打勾提示。
+  function pendingSettleHtml(monthStr, monthAssignments){
+    const rows = state.data.drivers.map(d=>{
+      if(state.data.statements.some(x=>x.driverId===d.id && x.month===monthStr)) return null;
+      const live = driverMonthly(d.id, monthStr, monthAssignments);
+      if(!live.trips.length) return null;
+      const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+      return { d, trips:live.trips.length, net:calc.net };
+    }).filter(Boolean);
+    const total = rows.reduce((sum,r)=>sum+r.net, 0);
+    return `<div class="panel no-print" ${rows.length?'style="border-color:var(--amber); border-width:2px;"':''}>
+      <h3 style="margin-top:0;">${monthStr} 尚未月結確認${rows.length?`（${rows.length} 位）`:''}</h3>
+      ${rows.length ? `<table>
+        <thead><tr><th>司機</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r.d.name}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">查看並月結</button></td></tr>`).join('')}
+        <tr style="font-weight:700; background:#F4F3EF;"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
+      </table>` : '<div style="font-size:13px;">✅ 這個月所有有完成車趟的司機都已月結確認。</div>'}
+    </div>`;
+  }
   async function refresh(){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
@@ -2836,6 +2871,14 @@ function renderPayroll(c){
     try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
     catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
+    const pendingEl = document.getElementById('payrollPending');
+    pendingEl.innerHTML = pendingSettleHtml(monthStr, monthAssignments);
+    pendingEl.querySelectorAll('[data-settlepick]').forEach(b=>{
+      b.onclick = ()=>{
+        document.getElementById('pDriver').value = b.dataset.settlepick;
+        refresh().then(()=>{ const el=document.getElementById('payrollResult'); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); });
+      };
+    });
     const live = driverMonthly(driverId, monthStr, monthAssignments);
     const record = state.data.statements.find(s=>s.driverId===driverId && s.month===monthStr);
     const isFrozen = !!record;

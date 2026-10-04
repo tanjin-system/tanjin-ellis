@@ -238,6 +238,22 @@ const ASSIGNMENTS_WINDOW_DAYS = 14;
 // localStorage 存的版本比對——一樣就直接用本地快取，完全跳過這5支查詢；
 // 版本查詢本身失敗（例如舊版資料庫還沒跑 migration）就當作沒快取，照原本
 // 方式整包重抓，不影響既有行為。
+// Supabase(PostgREST) 單次查詢最多回傳 1000 筆（Max Rows），超過會悄悄截斷、不報錯。
+// 一個月的車趟數已經接近這個量，薪資/請款/首頁利潤如果只抓一頁就會少算，所以所有
+// 抓整段車趟的查詢都改成這個分頁函式：buildQuery 回傳尚未排序的查詢，這裡依
+// trip_date、id 排序後每次抓1000筆，抓到不足一頁為止。
+async function fetchAllAssignmentPages(buildQuery) {
+  const PAGE = 1000;
+  let all = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await buildQuery().order('trip_date').order('id').range(from, from + PAGE - 1);
+    if (error) return { data: null, error };
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE) break;
+  }
+  return { data: all, error: null };
+}
+
 const CATALOG_CACHE_KEY = 'fleet_catalog_cache_v1';
 const CATALOG_VERSION_KEY = 'fleet_catalog_version_v1';
 
@@ -274,7 +290,7 @@ async function loadAllData() {
       dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
       routesRes: supabase.from('routes').select('*, origins(address), route_versions(*, route_version_points(*))')
     }),
-    assignmentsRes: supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', assignmentsWindowStart).order('trip_date'),
+    assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', assignmentsWindowStart)),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
     // billing_adjustments 只 grant app_admin，司機身份查會 permission denied，只有 admin 才查。
@@ -337,12 +353,11 @@ async function ensureAssignmentsRange(startDate) {
   const windowStart = state.data.assignmentsWindowStart;
   if (!windowStart || startDate >= windowStart) return;
   const supabase = getSupabase();
-  const { data, error } = await supabase
+  const { data, error } = await fetchAllAssignmentPages(() => supabase
     .from('assignments')
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
     .gte('trip_date', startDate)
-    .lt('trip_date', windowStart)
-    .order('trip_date');
+    .lt('trip_date', windowStart));
   if (error) throw new Error('讀取較早的車趟資料失敗：' + error.message);
   const extra = (data || []).map(mapAssignment);
   await resolvePhotoUrls(extra);
@@ -363,12 +378,11 @@ async function ensureAssignmentsRange(startDate) {
 // 完全不動。
 async function refreshAssignmentsRange(start, end) {
   const supabase = getSupabase();
-  const { data, error } = await supabase
+  const { data, error } = await fetchAllAssignmentPages(() => supabase
     .from('assignments')
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
     .gte('trip_date', start)
-    .lte('trip_date', end)
-    .order('trip_date');
+    .lte('trip_date', end));
   if (error) throw new Error('重新整理車趟資料失敗：' + error.message);
   const fresh = (data || []).map(mapAssignment);
   await resolvePhotoUrls(fresh);
@@ -388,12 +402,11 @@ async function refreshAssignmentsRange(start, end) {
 // 簽名連結請求。
 async function fetchAssignmentsInRange(start, end) {
   const supabase = getSupabase();
-  const { data, error } = await supabase
+  const { data, error } = await fetchAllAssignmentPages(() => supabase
     .from('assignments')
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
     .gte('trip_date', start)
-    .lte('trip_date', end)
-    .order('trip_date');
+    .lte('trip_date', end));
   if (error) throw new Error('讀取車趟資料失敗：' + error.message);
   return (data || []).map(mapAssignment);
 }
@@ -1456,4 +1469,21 @@ async function refreshFuelClaims() {
   const { data, error } = await supabase.from('fuel_claims').select('*').order('fuel_date', { ascending: false });
   if (error) throw new Error('重新整理加油申報失敗：' + error.message);
   state.data.fuelClaims = (data || []).map(mapFuelClaim);
+}
+
+// 「尚未月結確認」名單用：只抓指定月份有已完成車趟的司機 id（欄位只有 driver_id，
+// 很輕量），一樣分頁避開1000筆上限。
+async function fetchDriverIdsWithCompletedTrips(monthStr) {
+  const supabase = getSupabase();
+  const PAGE = 1000;
+  const ids = new Set();
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase.from('assignments').select('driver_id')
+      .eq('status', 'completed').gte('trip_date', monthStr + '-01').lte('trip_date', monthEndStr(monthStr))
+      .order('id').range(from, from + PAGE - 1);
+    if (error) throw new Error('讀取月結名單失敗：' + error.message);
+    (data || []).forEach(r => ids.add(r.driver_id));
+    if (!data || data.length < PAGE) break;
+  }
+  return ids;
 }
