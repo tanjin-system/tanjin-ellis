@@ -2748,11 +2748,11 @@ function renderPayroll(c){
       if(!unsigned.length) return `<div class="panel"><h3 style="margin:0;">司機回簽狀況</h3><div style="font-size:13px; margin-top:6px;">✅ 所有已月結確認的勞報單，司機都已回簽。</div></div>`;
       const days = x=> x.confirmedAt ? Math.max(0, Math.floor((Date.now()-new Date(x.confirmedAt).getTime())/86400000)) : null;
       return `<div class="panel" style="border-color:var(--amber); border-width:2px;">
-        <h3 style="margin-top:0;">尚未回簽（${unsigned.length} 位）</h3>
-        <p class="note" style="margin-top:0;">已月結確認、但司機還沒在系統上簽名的勞報單。</p>
+        <div class="toolbar"><h3 style="margin:0;">尚未回簽（${unsigned.length} 位）</h3><button class="btn danger" id="revokeAllUnsigned">全部收回（${unsigned.length} 份）</button></div>
+        <p class="note" style="margin-top:8px;">已月結確認、但司機還沒在系統上簽名的勞報單。帳務有問題時可以「收回」，月份會回到尚未月結確認，修正後再重新月結。</p>
         <table>
           <thead><tr><th>司機</th><th>月份</th><th>實領金額</th><th>已等待</th><th></th></tr></thead>
-          <tbody>${unsigned.map(x=>`<tr><td>${driverName(x.driverId)}</td><td>${x.month}</td><td class="amount">$${money(x.actualNet)}</td><td>${days(x)===null?'—':days(x)===0?'今天確認':days(x)+' 天'}</td><td><button class="btn ghost" data-unsignedpick="${x.driverId}|${x.month}">查看</button></td></tr>`).join('')}</tbody>
+          <tbody>${unsigned.map(x=>`<tr><td>${driverName(x.driverId)}</td><td>${x.month}</td><td class="amount">$${money(x.actualNet)}</td><td>${days(x)===null?'—':days(x)===0?'今天確認':days(x)+' 天'}</td><td><button class="btn ghost" data-unsignedpick="${x.driverId}|${x.month}">查看</button> <button class="btn danger" data-revoke="${x.id}">收回</button></td></tr>`).join('')}</tbody>
         </table>
       </div>`;
     })()}
@@ -2791,6 +2791,21 @@ function renderPayroll(c){
     <div id="payrollPending"></div>
     <div id="payrollResult"></div>
   `;
+  // 收回月結（單筆／全部）：確認文字會寫清楚後果，已經簽名的特別提醒。
+  async function doRevoke(list){
+    const signedCount = list.filter(x=>x.status!=='awaiting_signature').length;
+    const names = list.map(x=>`${driverName(x.driverId)}（${x.month}）`).join('、');
+    const msg = `確定要收回 ${list.length} 份月結嗎？\n${names}\n\n收回後這些勞報單會被刪除，司機看不到；對應月份回到「尚未月結確認」，可以重新新增／刪除調整項、修正帳務後再月結確認。`
+      + (signedCount ? `\n\n⚠️ 其中 ${signedCount} 份司機已經簽名，簽名會作廢，需要重新簽名。` : '');
+    if(!confirm(msg)) return;
+    try{ await revokeStatements(list.map(x=>x.id)); renderContent(); }
+    catch(err){ alert(err.message); }
+  }
+  c.querySelectorAll('[data-revoke]').forEach(btn=>{
+    btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.revoke); if(x) doRevoke([x]); };
+  });
+  const revokeAllBtn = document.getElementById('revokeAllUnsigned');
+  if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>x.status==='awaiting_signature'));
   c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{
     btn.onclick = ()=>{
       const [dId, mon] = btn.dataset.unsignedpick.split('|');
@@ -2958,6 +2973,7 @@ function renderPayroll(c){
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
         ${!record ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
+        ${record ? `<button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>` : ''}
       </div>`;
     document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
     const tripsToggle = document.querySelector('[data-tripstoggle]');
@@ -2976,6 +2992,8 @@ function renderPayroll(c){
       try{ await rejectStatementSignature(record.id); refresh(); }
       catch(err){ alert(err.message); }
     };
+    const revokeBtn = document.getElementById('revokeBtn');
+    if(revokeBtn) revokeBtn.onclick = ()=> doRevoke([record]);
     const confirmBtn = document.getElementById('confirmMonth');
     if(confirmBtn) confirmBtn.onclick = async ()=>{
       if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放司機回簽？凍結後車趟報酬不會再變動。`)) return;

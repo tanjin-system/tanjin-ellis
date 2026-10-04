@@ -1315,6 +1315,20 @@ async function rejectStatementSignature(statementId) {
   if (s) { s.status = 'awaiting_signature'; s.signedAt = null; s.signatureDataUrl = null; s.adminAcked = false; }
 }
 
+// 收回月結：帳務有問題時，把已經月結確認的勞報單整份刪除，那個月份回到「尚未月結
+// 確認」，就可以重新新增／刪除調整項、修正後再月結確認一次。跟「退回簽名」不同：
+// 退回簽名只是讓司機重簽，金額仍是凍結的；收回是連凍結金額一起作廢。司機端會
+// 看不到這份勞報單；已簽名的簽名圖檔不刪（路徑是舊的狀態id，重新月結後不會被用到，
+// 檔案很小、在私有bucket裡，留著不影響）。
+async function revokeStatements(ids) {
+  if (!ids || !ids.length) return;
+  const supabase = getSupabase();
+  const { error } = await supabase.from('statements').delete().in('id', ids);
+  if (error) throw new Error('收回月結失敗：' + error.message);
+  const idSet = new Set(ids);
+  state.data.statements = state.data.statements.filter(x => !idSet.has(x.id));
+}
+
 // 司機首頁「同出發點今日出發狀況」：呼叫 schema.sql 裡的
 // security definer 函式 driver_depot_overview()，只回傳沒有金額的窄
 // 欄位（車次名稱/司機姓名/狀態），繞過司機只能查自己車趟的RLS限制，
