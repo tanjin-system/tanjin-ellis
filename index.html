@@ -131,6 +131,11 @@
   table.route-grid td.grid-black{ background:#15181D; }
   table.route-grid td.grid-cell{ cursor:pointer; background:#fff; }
   table.route-grid td.grid-cell:hover{ background:#FAF2E3; }
+  table.route-grid td.grid-multi{ padding:0; }
+  table.route-grid .grid-sub{ padding:6px 10px; cursor:pointer; }
+  table.route-grid .grid-sub + .grid-sub{ border-top:1px solid #B9BEC6; }
+  table.route-grid .grid-sub:hover{ background:#FAF2E3; }
+  table.route-grid .grid-sub-label{ font-weight:400; font-size:10px; color:var(--amber); }
   table.route-grid td.row-label{ background:#E7E9EC; font-weight:600; text-align:left; padding-left:8px; }
   .origin-title{ background:#EFEEE9; font-weight:600; padding:8px 10px; margin:14px 0 6px; border-radius:var(--radius); }
   table.route-grid tr.assign-detail-row td{ white-space:normal; text-align:left; cursor:default; background:#FAFAF8; padding:10px; }
@@ -2442,11 +2447,30 @@ function renderWeekGrid(containerId, dates){
     // 會漏掉「司機把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
     // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的車趟明細顯示，
     // 這裡週班表格子維持簡單，不重複塞理由文字）。
+    return `<td class="grid-cell" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
+  }
+  function assignmentInner(a){
     const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
     const issue = (a.hasIssue || anyUndelivered) ? ' ⚠️' : '';
     const tag = a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '';
     const feeLine = (a.fare || a.distanceKm) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(a.fare)}・${a.distanceKm||0}km</span>` : '';
-    return `<td class="grid-cell" data-viewassign="${a.id}">${driverName(a.driverId)}${tag}${issue}${feeLine}</td>`;
+    return `${driverName(a.driverId)}${tag}${issue}${feeLine}`;
+  }
+  // 「星期一」／「週二到五」這種分成兩條路線、但在週班表合併成同一格的車次：不能只看
+  // 依星期幾挑中的那一條路線，如果同一天同一班另一條路線底下也有車趟（例如星期一那天
+  // 實際用了「週二到五」版本，或同一位司機兩條路線都排了），也要一起列出來，不然點
+  // 司機名字只看得到其中一趟、另一趟被藏起來。同一格有多趟時，每趟各自可以點擊，
+  // 並標出是哪一條路線版本。
+  function slotCellHtml(candidates, preferred, date){
+    if(!preferred) return cellHtml(preferred, date);
+    const byId = new Map(candidates.map(r=>[r.id, r]));
+    const list = state.data.assignments.filter(x=>x.date===date && byId.has(x.routeId));
+    if(list.length===0) return cellHtml(preferred, date);
+    if(list.length===1) return cellHtml(byId.get(list[0].routeId), date);
+    return `<td class="grid-cell grid-multi">${list.map(a=>{
+      const label = (byId.get(a.routeId).seq.match(/[（(]([^）)]*)[）)]/)||[])[1] || '';
+      return `<div class="grid-sub" data-viewassign="${a.id}">${label?`<span class="grid-sub-label">${escapeHtml(label)}</span><br>`:''}${assignmentInner(a)}</div>`;
+    }).join('')}</td>`;
   }
   function headerHtml(){
     const dateRow = dates.map(d=>{
@@ -2480,7 +2504,8 @@ function renderWeekGrid(containerId, dates){
         const otherRoute = candidates.find(r=>r!==mondayRoute);
         return isMonday ? (mondayRoute||otherRoute) : (otherRoute||mondayRoute);
       }
-      const cells = dates.map(d=> cellHtml(routeForDate('AM',d),d) + cellHtml(routeForDate('PM',d),d)).join('');
+      const candidatesOf = shift => family.filter(r=>r.shift===shift);
+      const cells = dates.map(d=> slotCellHtml(candidatesOf('AM'), routeForDate('AM',d), d) + slotCellHtml(candidatesOf('PM'), routeForDate('PM',d), d)).join('');
       return `<tr><td class="row-label">${baseSeq}</td>${cells}</tr>`;
     }).join('');
     return `<div class="origin-title">${og.label||og.address}</div>
