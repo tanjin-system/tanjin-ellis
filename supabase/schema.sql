@@ -983,3 +983,12 @@ alter table drivers add column if not exists union_proof_path text;
 insert into storage.buckets (id, name, public) values ('driver-docs', 'driver-docs', false) on conflict (id) do nothing;
 create policy admin_all_driver_docs on storage.objects for all to app_admin
   using (bucket_id = 'driver-docs') with check (bucket_id = 'driver-docs');
+
+-- ============================================================
+-- PART 13：勞報單勞務名稱（2026-10-06，已在線上資料庫直接執行過）
+-- drivers.service_name：主控設定的該司機勞務名稱（空白＝預設「貨物配送及到店協助理貨勞務」）；
+-- statements.service_name：月結確認當下凍結的名稱。司機欄位權限沒有開放 drivers.service_name，
+-- 只有主控能改。程式規則（data-layer.js validateServiceName）：當月有完成車趟時名稱必須含「配送」。
+-- ============================================================
+alter table drivers add column if not exists service_name text check (service_name is null or char_length(service_name) <= 30);
+alter table statements add column if not exists service_name text check (service_name is null or char_length(service_name) <= 30);

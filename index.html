@@ -1382,6 +1382,11 @@ function renderDrivers(c){
           <select id="eStatus"><option value="active" ${d.status==='active'?'selected':''}>在職</option><option value="inactive" ${d.status!=='active'?'selected':''}>停用</option></select>
         </div>
         <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
+          <label>勞報單勞務名稱（僅主控可設定）</label>
+          <input id="eServiceName" maxlength="30" placeholder="${DEFAULT_SERVICE_NAME}" value="${escapeHtml(d.serviceName||'')}">
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">空白＝預設名稱。名稱必須符合實際工作：當月有完成車趟的，名稱要含「配送」，否則月結確認會被擋下；已月結確認的勞報單不受影響（名稱在月結當下凍結）。</div>
+        </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
           <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="eUnion" style="width:auto;" ${d.unionInsured?'checked':''}> 已投保職業工會（僅主控可設定）</label>
           <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">勾選後請上傳工會證明圖檔（例如會員證、投保證明），待逐一確認身分後再作為依據。</div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -1494,6 +1499,7 @@ function renderDrivers(c){
           }
           await updateDriverProfile(id, {
             unionInsured: document.getElementById('eUnion').checked,
+            serviceName: document.getElementById('eServiceName').value,
             unionProofPath,
             name,
             status: document.getElementById('eStatus').value,
@@ -2755,9 +2761,10 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   // 新版勞報單文字：勞務名稱「貨物配送及到店協助理貨勞務」共1式，聲明段落改成獨立承攬＋代墊費用
   // 由公司依憑證支付；呼叫端用 slipUsesV2(record) 決定要不要用新版（opts.v2）。
   const v2 = opts.v2 !== false;
+  const svcName = escapeHtml(opts.serviceName || DEFAULT_SERVICE_NAME);
   if(r.trips.length){
     contentRows.push(v2
-      ? `<tr><td>${monthStr}</td><td>貨物配送及到店協助理貨勞務</td><td>本月完成指定據點之貨物配送及到店協助理貨勞務（共計 1 式）</td><td>1</td><td>式</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`
+      ? `<tr><td>${monthStr}</td><td>${svcName}</td><td>本月完成指定據點之${svcName}（共計 1 式）</td><td>1</td><td>式</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`
       : `<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
   }
   r.adjustments.filter(a=>a.type!=='advance' && a.type!=='reimbursement').forEach(a=>{
@@ -2799,7 +2806,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
         <tr><td>其他扣款</td><td class="amount">$0</td><td><strong>實領金額</strong></td><td class="amount"><strong>$${money(ded.actualNet)}</strong></td></tr>
       </table>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:12px 0;">${v2
-        ? `本人確認上述勞務內容及金額無誤。本單據所列報酬係本人以獨立承攬關係提供之貨物配送及到店協助理貨勞務。雙方之法律關係與所得類別，悉依實質勞務事實與中華民國相關稅法規定認定辦理。本報酬不包含執行上述勞務所衍生之必要交通與車輛代墊費用，${reimb>0 ? '相關代墊費用悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，並詳列於附件代墊款明細。' : '如有代墊費用，悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，另列代墊款明細。'}`
+        ? `本人確認上述勞務內容及金額無誤。本單據所列報酬係本人以獨立承攬關係提供之${svcName}。雙方之法律關係與所得類別，悉依實質勞務事實與中華民國相關稅法規定認定辦理。本報酬不包含執行上述勞務所衍生之必要交通與車輛代墊費用，${reimb>0 ? '相關代墊費用悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，並詳列於附件代墊款明細。' : '如有代墊費用，悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，另列代墊款明細。'}`
         : '本人確認上述勞務內容及金額無誤，並同意給付單位依法應適用之所得類別、扣繳率及補充保費規定辦理。所得類別與勞雇關係仍以實際事實認定。'}</p>
       <table>
         <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${payDateStr}</td></tr>
@@ -2973,7 +2980,7 @@ function renderPayroll(c){
       // 一位司機勞報單第1頁＋（有代墊款才有的）第2頁明細附件，依序放在一起。
       return [
         payrollSlipHtml(driver, monthStr, merged, ded, {
-          v2: slipUsesV2(record),
+          v2: slipUsesV2(record), serviceName: record.serviceName,
           signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
         }),
         payrollAttachmentHtml(driver, monthStr, merged)
@@ -3035,7 +3042,7 @@ function renderPayroll(c){
     const driver = state.data.drivers.find(d=>d.id===driverId);
     const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">司機已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">司機已回簽（未鎖定）</span>' : '<span class="badge progress">等待司機回簽</span>';
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
-      v2: slipUsesV2(record),
+      v2: slipUsesV2(record), serviceName: record ? record.serviceName : (driver && driver.serviceName),
       signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     const attHtml = payrollAttachmentHtml(driver, monthStr, r);
@@ -4313,7 +4320,7 @@ function renderMyStatement(c){
     const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount };
     const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
     const slipHtml = payrollSlipHtml(driver, m, merged, ded, {
-      v2: slipUsesV2(record),
+      v2: slipUsesV2(record), serviceName: record.serviceName,
       signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     const attHtml = payrollAttachmentHtml(driver, m, merged);

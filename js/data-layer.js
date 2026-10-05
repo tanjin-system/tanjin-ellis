@@ -21,7 +21,8 @@ function mapDriver(row) {
     vehicle: { plate: row.vehicle_plate || '', type: row.vehicle_type || '', load: row.vehicle_load ?? '' },
     bank: { bankName: row.bank_name || '', branch: row.bank_branch || '', account: row.bank_account || '', holder: row.bank_holder || '' },
     idNumber: row.id_number || '',
-    unionInsured: !!row.union_insured, unionProofPath: row.union_proof_path || ''
+    unionInsured: !!row.union_insured, unionProofPath: row.union_proof_path || '',
+    serviceName: row.service_name || ''
   };
 }
 
@@ -137,6 +138,7 @@ function mapStatement(row) {
     withholdNhi: !!row.withhold_nhi, nhiRate: Number(row.nhi_rate || 0), nhiAmount: Number(row.nhi_amount || 0),
     actualNet: Number(row.actual_net_amount || 0),
     reimbursementAmount: Number(row.reimbursement_amount || 0),
+    serviceName: row.service_name || '',
     status: row.status, confirmedAt: row.confirmed_at, signedAt: row.signed_at,
     signatureDataUrl: null, adminAcked: row.admin_acked
   };
@@ -528,6 +530,8 @@ async function updateDriverProfile(driverId, fields) {
   // 職業工會欄位只有主控（admin）能改，司機端欄位權限（schema.sql）沒有開放這兩欄。
   if ('unionInsured' in fields) payload.union_insured = !!fields.unionInsured;
   if ('unionProofPath' in fields) payload.union_proof_path = fields.unionProofPath || null;
+  // 勞報單勞務名稱（空白＝用預設）：只有主控能改，月結確認時才凍結進 statements.service_name。
+  if ('serviceName' in fields) payload.service_name = (fields.serviceName || '').trim() || null;
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers').update(payload).eq('id', driverId).select().single();
   if (error) throw new Error('更新資料失敗：' + error.message);
@@ -1261,8 +1265,23 @@ function computePayrollDeductions(grossAmount, reimbursement = 0) {
 // 不直接用live.adjTotal/live.net——那是含預支扣減的即時參考值，勞報單是
 // 正式文件，預支不算扣款，凍結存檔時要用statementNetFromAdjustments()
 // 重新排除預支再算一次（見index.html該函式旁邊的說明）。
+// 勞報單勞務名稱：預設「貨物配送及到店協助理貨勞務」。主控可以依司機改名稱，但規則是名稱
+// 要符合系統記錄的實際工作——當月有完成車趟時，名稱必須含「配送」；當月沒有車趟才可自由填寫。
+const DEFAULT_SERVICE_NAME = '貨物配送及到店協助理貨勞務';
+function validateServiceName(name, tripCount) {
+  name = (name || '').trim();
+  if (!name) return;
+  if (name.length > 30) throw new Error('勞務名稱最多 30 個字');
+  if (tripCount > 0 && !name.includes('配送')) {
+    throw new Error(`勞務名稱「${name}」沒有寫到「配送」，但這位司機本月在系統裡有 ${tripCount} 趟完成的車趟。名稱必須符合實際工作，請修改司機資料裡的勞務名稱（需含「配送」）。`);
+  }
+}
+
 async function confirmMonthlyStatement(driverId, month, live) {
   const supabase = getSupabase();
+  const driver = (state.data.drivers || []).find(d => d.id === driverId);
+  const serviceName = ((driver && driver.serviceName) || '').trim();
+  validateServiceName(serviceName, (live.trips || []).length);
   const { adjTotal, net } = statementNetFromAdjustments(live.tripTotal, live.adjustments);
   const reimbursement = live.adjustments.filter(a => a.type === 'reimbursement').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
   const ded = computePayrollDeductions(net, reimbursement);
@@ -1273,6 +1292,7 @@ async function confirmMonthlyStatement(driverId, month, live) {
     withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
     withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
     actual_net_amount: ded.actualNet, reimbursement_amount: ded.reimbursement,
+    service_name: serviceName || null,
     status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
   }).select().single();
   if (error) throw new Error('月結確認失敗：' + error.message);
