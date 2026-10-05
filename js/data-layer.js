@@ -20,7 +20,8 @@ function mapDriver(row) {
     inactiveAt: row.inactive_at,
     vehicle: { plate: row.vehicle_plate || '', type: row.vehicle_type || '', load: row.vehicle_load ?? '' },
     bank: { bankName: row.bank_name || '', branch: row.bank_branch || '', account: row.bank_account || '', holder: row.bank_holder || '' },
-    idNumber: row.id_number || ''
+    idNumber: row.id_number || '',
+    unionInsured: !!row.union_insured, unionProofPath: row.union_proof_path || ''
   };
 }
 
@@ -524,6 +525,9 @@ async function updateDriverProfile(driverId, fields) {
   if ('account' in fields) payload.bank_account = fields.account || null;
   if ('holder' in fields) payload.bank_holder = fields.holder || null;
   if ('idNumber' in fields) payload.id_number = fields.idNumber || null;
+  // 職業工會欄位只有主控（admin）能改，司機端欄位權限（schema.sql）沒有開放這兩欄。
+  if ('unionInsured' in fields) payload.union_insured = !!fields.unionInsured;
+  if ('unionProofPath' in fields) payload.union_proof_path = fields.unionProofPath || null;
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers').update(payload).eq('id', driverId).select().single();
   if (error) throw new Error('更新資料失敗：' + error.message);
@@ -1511,4 +1515,30 @@ async function fetchDriverIdsWithCompletedTrips(monthStr) {
     if (!data || data.length < PAGE) break;
   }
   return ids;
+}
+
+// ---------------- 司機「已投保職業工會」證明圖檔（僅主控可上傳／查看） ----------------
+
+// 私有 bucket driver-docs，只有 app_admin 有權限（見 schema.sql PART 12），路徑
+// {driverId}/union-{時間}.jpg。回傳儲存路徑，由呼叫端寫進 drivers.union_proof_path。
+async function uploadDriverUnionProof(driverId, dataUrl) {
+  const { bytes, contentType } = dataUrlToBytesAndType(dataUrl);
+  const path = `${driverId}/union-${Date.now()}.jpg`;
+  const supabase = getSupabase();
+  const { error } = await supabase.storage.from('driver-docs').upload(path, bytes, { contentType, upsert: false });
+  if (error) throw new Error('上傳工會證明失敗：' + error.message);
+  return path;
+}
+
+async function getDriverUnionProofUrl(path) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.storage.from('driver-docs').createSignedUrl(path, 300);
+  if (error) throw new Error('讀取工會證明失敗：' + error.message);
+  return data.signedUrl;
+}
+
+async function removeDriverUnionProofFile(path) {
+  if (!path) return;
+  const supabase = getSupabase();
+  await supabase.storage.from('driver-docs').remove([path]);
 }

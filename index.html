@@ -1381,6 +1381,14 @@ function renderDrivers(c){
         <div class="field" style="max-width:160px;"><label>狀態</label>
           <select id="eStatus"><option value="active" ${d.status==='active'?'selected':''}>在職</option><option value="inactive" ${d.status!=='active'?'selected':''}>停用</option></select>
         </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
+          <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="eUnion" style="width:auto;" ${d.unionInsured?'checked':''}> 已投保職業工會（僅主控可設定）</label>
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">勾選後請上傳工會證明圖檔（例如會員證、投保證明），待逐一確認身分後再作為依據。</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            ${d.unionProofPath ? `<span class="badge completed">已上傳證明</span> <button type="button" class="btn ghost" data-unionview="${d.id}">查看</button> <button type="button" class="btn danger" data-unionremove="${d.id}">移除</button>` : '<span class="badge pending">尚未上傳證明</span>'}
+            <input type="file" id="eUnionFile" accept="image/*" style="max-width:260px;">
+          </div>
+        </div>
       </div>
       <div data-etapage="finance" hidden>
         <div class="grid4">
@@ -1407,6 +1415,7 @@ function renderDrivers(c){
           <div class="driver-card-sub">
             電話：${d.phone||'—'}　車牌：${d.vehicle.plate||'—'}<br>
             登入代碼：<span class="mono">${d.accessCode}</span>
+            ${d.unionInsured ? (d.unionProofPath ? '<span class="badge completed" style="margin-left:6px;">已投保職業工會</span>' : '<span class="badge pending" style="margin-left:6px;">工會：已勾選・缺證明圖檔</span>') : ''}
             ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
           </div>
         </div>
@@ -1473,7 +1482,19 @@ function renderDrivers(c){
         const name = document.getElementById('eName').value.trim();
         if(!name){ alert('請輸入姓名'); return; }
         try{
+          // 先處理工會證明圖檔（有選新檔才上傳，舊檔順便刪掉），再一起寫進司機資料。
+          const cur = state.data.drivers.find(x=>x.id===id);
+          let unionProofPath = cur ? cur.unionProofPath : '';
+          const unionFile = document.getElementById('eUnionFile').files[0];
+          if(unionFile){
+            const dataUrl = await compressImageFile(unionFile, 1600, 0.8);
+            const newPath = await uploadDriverUnionProof(id, dataUrl);
+            if(unionProofPath) removeDriverUnionProofFile(unionProofPath).catch(()=>{});
+            unionProofPath = newPath;
+          }
           await updateDriverProfile(id, {
+            unionInsured: document.getElementById('eUnion').checked,
+            unionProofPath,
             name,
             status: document.getElementById('eStatus').value,
             phone: document.getElementById('ePhone').value.trim(),
@@ -1488,6 +1509,25 @@ function renderDrivers(c){
             holder: document.getElementById('eHolder').value.trim()
           });
           editingDriverId = null;
+          renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-unionview]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.unionview);
+        try{ openPhotoLightbox([await getDriverUnionProofUrl(driver.unionProofPath)]); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-unionremove]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.unionremove);
+        if(!confirm(`確定要移除「${driver.name}」的工會證明圖檔嗎？`)) return;
+        try{
+          const old = driver.unionProofPath;
+          await updateDriverProfile(driver.id, { unionProofPath:'' });
+          removeDriverUnionProofFile(old).catch(()=>{});
           renderContent();
         }catch(err){ alert(err.message); }
       };
@@ -2710,13 +2750,13 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   // 不列出來，因為預支不算扣款、也不影響這裡的金額（是薪資提前請領，
   // 不該在這張正式文件上再處理一次）。
   const contentRows = [];
-  // 新版勞報單文字（預覽中）：勞務名稱「貨物配送勞務」共1式，聲明段落改成獨立承攬＋代墊費用
+  // 新版勞報單文字（預覽中）：勞務名稱「貨物配送及到店協助理貨勞務」共1式，聲明段落改成獨立承攬＋代墊費用
   // 由公司依憑證支付。目前只套用在 PAYROLL_SLIP_V2_PREVIEW_DRIVER_IDS 名單內的司機，確認沒問題
   // 後再拿掉名單判斷，改成全體司機共用。
   const v2 = PAYROLL_SLIP_V2_PREVIEW_DRIVER_IDS.includes(driver.id);
   if(r.trips.length){
     contentRows.push(v2
-      ? `<tr><td>${monthStr}</td><td>貨物配送勞務</td><td>本月完成指定據點之貨物配送勞務（共計 1 式）</td><td>1</td><td>式</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`
+      ? `<tr><td>${monthStr}</td><td>貨物配送及到店協助理貨勞務</td><td>本月完成指定據點之貨物配送及到店協助理貨勞務（共計 1 式）</td><td>1</td><td>式</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`
       : `<tr><td>${monthStr}</td><td>車趟服務報酬</td><td>本月共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
   }
   r.adjustments.filter(a=>a.type!=='advance' && a.type!=='reimbursement').forEach(a=>{
@@ -2758,7 +2798,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
         <tr><td>其他扣款</td><td class="amount">$0</td><td><strong>實領金額</strong></td><td class="amount"><strong>$${money(ded.actualNet)}</strong></td></tr>
       </table>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:12px 0;">${v2
-        ? `本人確認上述勞務內容及金額無誤。本單據所列報酬係本人以獨立承攬關係提供之貨物配送勞務。雙方之法律關係與所得類別，悉依實質勞務事實與中華民國相關稅法規定認定辦理。本報酬不包含執行上述勞務所衍生之必要交通與車輛代墊費用，${reimb>0 ? '相關代墊費用悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，並詳列於附件代墊款明細。' : '如有代墊費用，悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，另列代墊款明細。'}`
+        ? `本人確認上述勞務內容及金額無誤。本單據所列報酬係本人以獨立承攬關係提供之貨物配送及到店協助理貨勞務。雙方之法律關係與所得類別，悉依實質勞務事實與中華民國相關稅法規定認定辦理。本報酬不包含執行上述勞務所衍生之必要交通與車輛代墊費用，${reimb>0 ? '相關代墊費用悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，並詳列於附件代墊款明細。' : '如有代墊費用，悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，另列代墊款明細。'}`
         : '本人確認上述勞務內容及金額無誤，並同意給付單位依法應適用之所得類別、扣繳率及補充保費規定辦理。所得類別與勞雇關係仍以實際事實認定。'}</p>
       <table>
         <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${payDateStr}</td></tr>

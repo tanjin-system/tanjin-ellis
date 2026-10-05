@@ -972,3 +972,14 @@ create policy driver_delete_own on fuel_claims for delete to app_driver
 --   alter table fuel_claims add column note text check (note is null or char_length(note) <= 60);
 --   grant insert (category, note) on fuel_claims to app_driver;
 --   grant update (category, note) on fuel_claims to app_driver;
+
+-- ============================================================
+-- PART 12：司機「已投保職業工會」勾選＋證明圖檔（2026-10-06，已在線上資料庫直接執行過）
+-- 只有主控（app_admin）能設定／上傳／查看；司機端欄位權限沒有開放這兩欄。
+-- 證明圖檔放私有 bucket driver-docs，路徑 {driver_id}/union-{時間}.jpg。
+-- ============================================================
+alter table drivers add column if not exists union_insured boolean not null default false;
+alter table drivers add column if not exists union_proof_path text;
+insert into storage.buckets (id, name, public) values ('driver-docs', 'driver-docs', false) on conflict (id) do nothing;
+create policy admin_all_driver_docs on storage.objects for all to app_admin
+  using (bucket_id = 'driver-docs') with check (bucket_id = 'driver-docs');
