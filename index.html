@@ -2730,7 +2730,7 @@ function payrollAttachmentHtml(driver, monthStr, r){
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
         <tr><td>所得人姓名</td><td>${driver.bank.holder||driver.name}</td><td>所屬月份</td><td>${monthStr}</td></tr>
       </table>
-      <p style="font-size:12px; margin:12px 0 4px;">以下為司機代墊（加油、車輛保養等）、發票憑證開立公司統編之款項，已包含在本月報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
+      <p style="font-size:12px; margin:12px 0 4px;">以下為所得人代墊（加油、車輛保養等）、發票憑證開立公司統編之款項，已包含在本月報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
       <table>
         <thead><tr><th style="width:8%;">序號</th><th>項目</th><th>日期</th><th>發票號碼</th><th>金額</th><th>備註</th></tr></thead>
         <tbody>${items.map((i,idx)=>`<tr><td>${idx+1}</td><td>${i.kind}</td><td>${i.date}</td><td>${i.invoice}</td><td class="amount">$${money(i.amount)}</td><td>${escapeHtml(i.note)||'—'}</td></tr>`).join('')}
