@@ -2670,7 +2670,11 @@ const PAYROLL_PAYER_TAX_ID = '62091835';
 // 發票號碼、金額；由加油申報確認轉進來的有完整日期／發票號碼，主控手動輸入的
 // 代墊款沒有這兩項就顯示「—」並把備註列出來。沒有代墊款回傳空字串（不產生第2頁）。
 // 新版勞報單文字預覽名單（依司機姓名）；確認沒問題後整個拿掉，改成全體共用。
-const PAYROLL_SLIP_V2_PREVIEW_NAMES = ['顏凱禾','陳漢祥'];
+// 用司機id比對（系統裡的司機名稱是簡稱「凱禾」「漢祥」，全名只存在戶名欄位，用名字會對不上）。
+const PAYROLL_SLIP_V2_PREVIEW_DRIVER_IDS = [
+  '9e83c7c8-7f6c-439c-8905-3a4da7821375', // 凱禾（顏凱禾）
+  '05b70ef3-6a37-4a57-a88f-9c83180c6d74'  // 漢祥（陳漢祥）
+];
 function payrollAttachmentHtml(driver, monthStr, r){
   const items = (r.adjustments||[]).filter(a=>a.type==='reimbursement').map(a=>{
     const claim = (state.data.fuelClaims||[]).find(c=>c.adjustmentId===a.id);
@@ -2707,9 +2711,9 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   // 不該在這張正式文件上再處理一次）。
   const contentRows = [];
   // 新版勞報單文字（預覽中）：勞務名稱「貨物配送勞務」共1式，聲明段落改成獨立承攬＋代墊費用
-  // 由公司依憑證支付。目前只套用在 PAYROLL_SLIP_V2_PREVIEW_NAMES 名單內的司機，確認沒問題
+  // 由公司依憑證支付。目前只套用在 PAYROLL_SLIP_V2_PREVIEW_DRIVER_IDS 名單內的司機，確認沒問題
   // 後再拿掉名單判斷，改成全體司機共用。
-  const v2 = PAYROLL_SLIP_V2_PREVIEW_NAMES.includes(driver.name);
+  const v2 = PAYROLL_SLIP_V2_PREVIEW_DRIVER_IDS.includes(driver.id);
   if(r.trips.length){
     contentRows.push(v2
       ? `<tr><td>${monthStr}</td><td>貨物配送勞務</td><td>本月完成指定據點之貨物配送勞務（共計 1 式）</td><td>1</td><td>式</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`
