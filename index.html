@@ -4188,7 +4188,7 @@ function renderMyStatement(c){
     <h2 class="section-title">對帳單 / 勞報單</h2>
     <div class="panel"><div class="field" style="max-width:200px;"><label>月份</label><input id="smMonth" type="month" value="${monthStr}"></div></div>
     <div id="statementBox"></div>`;
-  function refresh(){
+  async function refresh(){
     const m = document.getElementById('smMonth').value;
     state._myStatementMonth = m;
     const record = state.data.statements.find(s=>s.driverId===dId && s.month===m);
@@ -4199,7 +4199,15 @@ function renderMyStatement(c){
       return;
     }
     const driver = state.data.drivers.find(d=>d.id===dId);
-    const r = driverMonthly(dId, m);
+    // 勞報單上的「共完成N趟」要以整個月為準：state.data.assignments 預設只載入最近14天，
+    // 查上個月就會少算趟數（金額是月結凍結的所以不受影響，但跟主控看到的趟數會對不起來），
+    // 所以跟薪資結算、我的報酬一樣，直接跟資料庫要這個月的車趟。
+    box.innerHTML = '<div class="empty">載入中...</div>';
+    let monthAssignments;
+    try{ monthAssignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m)); }
+    catch(err){ box.innerHTML = `<div class="panel"><div class="empty">載入失敗：${err.message}</div></div>`; return; }
+    if(document.getElementById('smMonth')?.value!==m) return; // 使用者可能已經改選別的月份
+    const r = driverMonthly(dId, m, monthAssignments);
     const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount };
     const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
     const slipHtml = payrollSlipHtml(driver, m, merged, ded, {
