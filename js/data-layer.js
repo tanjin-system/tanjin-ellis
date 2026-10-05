@@ -114,7 +114,8 @@ function dpLabel(dp) {
 function mapAdjustment(row) {
   return {
     id: row.id, driverId: row.driver_id, month: row.adjustment_month.slice(0, 7),
-    type: row.adjustment_type, amount: Number(row.amount), note: row.note || ''
+    type: row.adjustment_type, amount: Number(row.amount), note: row.note || '',
+    date: row.adjustment_date || null
   };
 }
 
@@ -139,6 +140,7 @@ function mapStatement(row) {
     actualNet: Number(row.actual_net_amount || 0),
     reimbursementAmount: Number(row.reimbursement_amount || 0),
     serviceName: row.service_name || '',
+    periodStart: row.period_start || null, periodEnd: row.period_end || null, payDate: row.pay_date || null,
     status: row.status, confirmedAt: row.confirmed_at, signedAt: row.signed_at,
     signatureDataUrl: null, adminAcked: row.admin_acked
   };
@@ -1106,12 +1108,16 @@ async function bulkDeleteRouteVersions(ids) {
 
 // ---------------- 薪資調整項 / 月結對帳單 ----------------
 
+// 調整項可以帶日期（input.date）：區間勞報單依日期把調整項歸入期間；沒帶日期的（舊資料或
+// 純月結用）視為該月1日。已被任何勞報單（月結或區間）涵蓋的日期不能再新增調整項。
 async function createAdjustment(input) {
-  const already = state.data.statements.find(s => s.driverId === input.driverId && s.month === input.month);
-  if (already) throw new Error('這個月份已經月結確認過，如需調整請先處理下個月，或聯絡開發者協助修正已結算資料。');
+  const date = input.date || null;
+  const month = date ? date.slice(0, 7) : input.month;
+  const covered = findCoveringStatement(input.driverId, date || (month + '-01'));
+  if (covered) throw new Error(`${date || month} 已經被勞報單（${statementLabel(covered)}）涵蓋並凍結，無法再新增調整項。如需調整請先收回那份勞報單。`);
   const supabase = getSupabase();
   const { data, error } = await supabase.from('adjustments').insert({
-    driver_id: input.driverId, adjustment_month: `${input.month}-01`,
+    driver_id: input.driverId, adjustment_month: `${month}-01`, adjustment_date: date,
     adjustment_type: input.type, amount: input.amount, note: input.note || null
   }).select().single();
   if (error) throw new Error('新增調整項失敗：' + error.message);
@@ -1282,6 +1288,8 @@ async function confirmMonthlyStatement(driverId, month, live) {
   const driver = (state.data.drivers || []).find(d => d.id === driverId);
   const serviceName = ((driver && driver.serviceName) || '').trim();
   validateServiceName(serviceName, (live.trips || []).length);
+  const overlap = findOverlappingStatement(driverId, `${month}-01`, monthEndStr(month));
+  if (overlap) throw new Error(`${month} 這個月份已經有勞報單（${statementLabel(overlap)}）涵蓋，不能再整月月結，避免同一段期間重複開單。`);
   const { adjTotal, net } = statementNetFromAdjustments(live.tripTotal, live.adjustments);
   const reimbursement = live.adjustments.filter(a => a.type === 'reimbursement').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
   const ded = computePayrollDeductions(net, reimbursement);
@@ -1296,6 +1304,63 @@ async function confirmMonthlyStatement(driverId, month, live) {
     status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
   }).select().single();
   if (error) throw new Error('月結確認失敗：' + error.message);
+  const st = mapStatement(data);
+  state.data.statements.push(st);
+  return st;
+}
+
+// ---------------- 區間勞報單（依實際付款期間開單） ----------------
+// 司機每週（或每次付款）請款時，主控可以自選日期區間開一張勞報單：金額由系統裡該區間的
+// 完成車趟與調整項（依調整項日期）算出來，不能手動改；給付日期記錄實際轉帳日。
+// 區間不可跟同一位司機的其他勞報單（月結或區間）重疊，避免同一段期間重複開單。
+
+function statementRange(s) {
+  return s.periodStart ? [s.periodStart, s.periodEnd] : [s.month + '-01', monthEndStr(s.month)];
+}
+function statementLabel(s) {
+  return s.periodStart ? `${s.periodStart}～${s.periodEnd}` : s.month;
+}
+function findOverlappingStatement(driverId, start, end, excludeId) {
+  return state.data.statements.find(s => {
+    if (s.driverId !== driverId || s.id === excludeId) return false;
+    const [a, b] = statementRange(s);
+    return a <= end && b >= start;
+  });
+}
+function findCoveringStatement(driverId, date) {
+  return findOverlappingStatement(driverId, date, date);
+}
+// 調整項的有效日期：有日期用日期，舊資料沒日期的視為該月1日。
+function adjustmentEffectiveDate(a) {
+  return a.date || (a.month + '-01');
+}
+
+async function confirmPeriodStatement(driverId, start, end, payDate, live) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) throw new Error('請選擇正確的起訖日期');
+  if (end < start) throw new Error('結束日期不能早於開始日期');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate || '')) throw new Error('請填寫實際給付日期');
+  if (end > todayStr()) throw new Error('結束日期不能是未來的日期（期間內的車趟要已經完成）');
+  const overlap = findOverlappingStatement(driverId, start, end);
+  if (overlap) throw new Error(`這段期間跟已存在的勞報單（${statementLabel(overlap)}）重疊，不能重複開單。`);
+  const supabase = getSupabase();
+  const driver = (state.data.drivers || []).find(d => d.id === driverId);
+  const serviceName = ((driver && driver.serviceName) || '').trim();
+  validateServiceName(serviceName, (live.trips || []).length);
+  const { adjTotal, net } = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+  const reimbursement = live.adjustments.filter(a => a.type === 'reimbursement').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
+  const ded = computePayrollDeductions(net, reimbursement);
+  const { data, error } = await supabase.from('statements').insert({
+    driver_id: driverId, statement_month: `${end.slice(0, 7)}-01`,
+    period_start: start, period_end: end, pay_date: payDate,
+    trip_total: live.tripTotal, adj_total: adjTotal, net_amount: net,
+    income_type: ded.incomeType,
+    withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
+    withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
+    actual_net_amount: ded.actualNet, reimbursement_amount: ded.reimbursement,
+    service_name: serviceName || null,
+    status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
+  }).select().single();
+  if (error) throw new Error('區間勞報單建立失敗：' + error.message);
   const st = mapStatement(data);
   state.data.statements.push(st);
   return st;
@@ -1458,9 +1523,9 @@ function validateFuelClaimInput(input, excludeId) {
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('請輸入正確的金額');
   const invoiceNo = normalizeInvoiceNo(input.invoiceNo);
   if (!/^[A-Z]{2}[0-9]{8}$/.test(invoiceNo)) throw new Error('發票號碼格式不正確，應為2碼英文＋8碼數字（例如 AB12345678）');
-  const month = date.slice(0, 7);
-  if (state.data.statements.some(s => s.driverId === input.driverId && s.month === month)) {
-    throw new Error(`${month} 已經月結確認，無法再申報這個月的代墊費用，請聯絡主控。`);
+  const covered = findCoveringStatement(input.driverId, date);
+  if (covered) {
+    throw new Error(`${date} 已經被勞報單（${statementLabel(covered)}）涵蓋，無法再申報這段期間的代墊費用，請聯絡主控。`);
   }
   if ((state.data.fuelClaims || []).some(c => c.invoiceNo === invoiceNo && c.id !== excludeId)) {
     throw new Error('這張發票號碼已經申報過了');
@@ -1511,7 +1576,7 @@ async function confirmFuelClaim(id) {
   const claim = state.data.fuelClaims.find(c => c.id === id);
   if (!claim || claim.status !== 'pending') throw new Error('這筆申報已經處理過了');
   const adj = await createAdjustment({
-    driverId: claim.driverId, month: claim.date.slice(0, 7), type: 'reimbursement',
+    driverId: claim.driverId, month: claim.date.slice(0, 7), date: claim.date, type: 'reimbursement',
     amount: claim.amount, note: `${CLAIM_CATEGORY_LABEL[claim.category] || '代墊'} ${claim.date} 發票${claim.invoiceNo}${claim.note ? ' ' + claim.note : ''}`
   });
   const supabase = getSupabase();
@@ -1540,12 +1605,17 @@ async function fetchDriverIdsWithCompletedTrips(monthStr) {
   const supabase = getSupabase();
   const PAGE = 1000;
   const ids = new Set();
+  ids.dates = new Map(); // driverId -> 有完成車趟的日期集合（判斷有沒有被勞報單涵蓋用）
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase.from('assignments').select('driver_id')
+    const { data, error } = await supabase.from('assignments').select('driver_id, trip_date')
       .eq('status', 'completed').gte('trip_date', monthStr + '-01').lte('trip_date', monthEndStr(monthStr))
       .order('id').range(from, from + PAGE - 1);
     if (error) throw new Error('讀取月結名單失敗：' + error.message);
-    (data || []).forEach(r => ids.add(r.driver_id));
+    (data || []).forEach(r => {
+      ids.add(r.driver_id);
+      if (!ids.dates.has(r.driver_id)) ids.dates.set(r.driver_id, new Set());
+      ids.dates.get(r.driver_id).add(r.trip_date);
+    });
     if (!data || data.length < PAGE) break;
   }
   return ids;

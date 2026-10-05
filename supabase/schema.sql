@@ -992,3 +992,20 @@ create policy admin_all_driver_docs on storage.objects for all to app_admin
 -- ============================================================
 alter table drivers add column if not exists service_name text check (service_name is null or char_length(service_name) <= 30);
 alter table statements add column if not exists service_name text check (service_name is null or char_length(service_name) <= 30);
+
+-- ============================================================
+-- PART 14：區間勞報單（依實際付款期間開單，2026-10-06）
+-- statements 多了 period_start/period_end/pay_date：有值＝區間勞報單（期間不可跟同司機其他勞報單
+-- 重疊，由程式 findOverlappingStatement 把關），空＝原本的月結。statement_month 區間單存結束日所屬月份。
+-- 原本 unique(driver_id, statement_month) 改成只限月結（period_start is null）的 partial unique index，
+-- 區間單另有 (driver_id, period_start, period_end) 唯一。
+-- adjustments.adjustment_date：調整項日期，區間勞報單依此歸入期間（舊資料為空，視為該月1日）。
+-- ============================================================
+alter table statements add column if not exists period_start date;
+alter table statements add column if not exists period_end date;
+alter table statements add column if not exists pay_date date;
+alter table statements add constraint statements_period_chk check ((period_start is null and period_end is null) or (period_start is not null and period_end is not null and period_end >= period_start));
+alter table statements drop constraint if exists statements_driver_id_statement_month_key;
+create unique index if not exists statements_monthly_uq on statements(driver_id, statement_month) where period_start is null;
+create unique index if not exists statements_period_uq on statements(driver_id, period_start, period_end) where period_start is not null;
+alter table adjustments add column if not exists adjustment_date date;
