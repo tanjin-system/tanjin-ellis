@@ -2837,6 +2837,17 @@ function renderPayroll(c){
       </div>`;
     })()}
     ${(()=>{
+      // 新版文字上線前就簽回的勞報單，內容還是舊文字；要換成新版只能退回簽名讓司機重簽。
+      const oldSigned = state.data.statements.filter(x=>(x.status==='signed'||x.status==='confirmed') && !slipUsesV2(x))
+        .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
+      if(!oldSigned.length) return '';
+      return `<div class="panel">
+        <div class="toolbar"><h3 style="margin:0;">已簽回但仍是舊版文字（${oldSigned.length} 份）</h3><button class="btn danger" id="rejectAllOldSigned">全部退回重簽（${oldSigned.length} 份）</button></div>
+        <p class="note" style="margin-top:8px;">這些勞報單是新版文字上線前簽的，內容維持舊文字。全部退回後，司機要重新簽名，重簽後就會是新版文字；金額不變。</p>
+        <div style="font-size:13px;">${oldSigned.map(x=>`${driverName(x.driverId)}（${x.month}）`).join('、')}</div>
+      </div>`;
+    })()}
+    ${(()=>{
       const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
       if(!pending.length) return '';
       return `<div class="panel">
@@ -2884,6 +2895,15 @@ function renderPayroll(c){
   c.querySelectorAll('[data-revoke]').forEach(btn=>{
     btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.revoke); if(x) doRevoke([x]); };
   });
+  const rejectAllOldBtn = document.getElementById('rejectAllOldSigned');
+  if(rejectAllOldBtn) rejectAllOldBtn.onclick = async ()=>{
+    const list = state.data.statements.filter(x=>(x.status==='signed'||x.status==='confirmed') && !slipUsesV2(x));
+    if(!list.length) return;
+    const names = list.map(x=>`${driverName(x.driverId)}（${x.month}）`).join('、');
+    if(!confirm(`確定要把 ${list.length} 份已簽回的勞報單全部退回簽名嗎？\n${names}\n\n退回後司機需要重新簽名（重簽後為新版文字），金額不變。`)) return;
+    try{ await rejectStatementSignatures(list.map(x=>x.id)); renderContent(); }
+    catch(err){ alert(err.message); }
+  };
   const revokeAllBtn = document.getElementById('revokeAllUnsigned');
   if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>x.status==='awaiting_signature'));
   c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{

@@ -1319,6 +1319,20 @@ async function rejectStatementSignature(statementId) {
   if (s) { s.status = 'awaiting_signature'; s.signedAt = null; s.signatureDataUrl = null; s.adminAcked = false; }
 }
 
+// 批次退回簽名（一次多份）：邏輯同 rejectStatementSignature，一個請求完成。
+async function rejectStatementSignatures(ids) {
+  if (!ids || !ids.length) return;
+  const supabase = getSupabase();
+  const { error } = await supabase.from('statements')
+    .update({ status: 'awaiting_signature', signed_at: null, signature_url: null })
+    .in('id', ids);
+  if (error) throw new Error('批次退回簽名失敗：' + error.message);
+  const idSet = new Set(ids);
+  state.data.statements.forEach(s => {
+    if (idSet.has(s.id)) { s.status = 'awaiting_signature'; s.signedAt = null; s.signatureDataUrl = null; s.adminAcked = false; }
+  });
+}
+
 // 收回月結：帳務有問題時，把已經月結確認的勞報單整份刪除，那個月份回到「尚未月結
 // 確認」，就可以重新新增／刪除調整項、修正後再月結確認一次。跟「退回簽名」不同：
 // 退回簽名只是讓司機重簽，金額仍是凍結的；收回是連凍結金額一起作廢。司機端會
