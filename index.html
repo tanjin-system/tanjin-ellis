@@ -3081,6 +3081,20 @@ function renderPayrollPage(c, mode){
       <button class="btn ghost" id="addAdj">新增調整項</button>
     </div>`}
     ${isSlip ? `<div id="payrollPending"></div>` : ''}
+    ${isSlip ? (()=>{
+      // 各司機的全部月份勞報單（月結＋區間），每位司機一組、預設收合；組內點「查看」切到那一份。
+      const stText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">待簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
+      const groups = state.data.drivers.filter(d=>inScope({driverId:d.id})).map(d=>({ d, list: state.data.statements.filter(x=>x.driverId===d.id).sort((a,b)=> statementRange(b)[1].localeCompare(statementRange(a)[1])) })).filter(g=>g.list.length);
+      if(!groups.length) return '';
+      return `<div class="panel no-print">
+        <h3 style="margin:0 0 6px;">各司機勞報單（全部月份）</h3>
+        ${groups.map(g=>{ const wait = g.list.filter(x=>x.status==='awaiting_signature').length; return `<details style="border-top:1px solid var(--border); padding:6px 0;">
+          <summary style="cursor:pointer; font-weight:600;">${escapeHtml(g.d.name)}　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${g.list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></summary>
+          <table style="margin-top:6px;"><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
+            <tbody>${g.list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
+        </details>`; }).join('')}
+      </div>`;
+    })() : ''}
     ${isSlip && scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
       <p class="note">司機每週（或每次）請款時，選一段期間開一張勞報單，司機簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成車趟與調整項日期自動算出，不能手動修改；期間不能跟該司機其他勞報單（月結或區間）重疊。</p>
@@ -3110,6 +3124,9 @@ function renderPayrollPage(c, mode){
   });
   const revokeAllBtn = document.getElementById('revokeAllUnsigned');
   if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature'));
+  c.querySelectorAll('[data-allview]').forEach(btn=>{
+    btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.allview); if(x) openStatementView(x); };
+  });
   c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{
     btn.onclick = ()=>{
       const x = state.data.statements.find(y=>y.id===btn.dataset.unsignedpick);
