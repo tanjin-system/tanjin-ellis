@@ -3022,6 +3022,12 @@ function renderPayrollPage(c, mode){
   c.innerHTML = `
     <h2 class="section-title">${isSlip ? '勞報單' : '薪資結算'}</h2>
     <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位司機的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
+    <div class="panel no-print" style="position:sticky; top:0; z-index:20; box-shadow:0 2px 6px rgba(27,33,41,.12);">
+      <div class="grid2">
+        <div class="field"><label>司機</label><select id="pDriver">${isSlip?'<option value="">全部司機</option>':''}${driverOpts}</select></div>
+        <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
+      </div>
+    </div>
     ${isSlip && inbox.length ? `<div class="panel">
       <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
       ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
@@ -3065,19 +3071,15 @@ function renderPayrollPage(c, mode){
       </div>
       <p class="note">只會納入「已完成月結確認」的司機（每人各佔一頁，直式）；當月尚未月結確認的司機不會出現在合併檔案裡。</p>
     </div>` : ''}
-    <div class="panel">
-      <div class="grid2">
-        <div class="field"><label>司機</label><select id="pDriver">${isSlip?'<option value="">全部司機</option>':''}${driverOpts}</select></div>
-        <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
-      </div>
-      ${isSlip ? '' : `<div class="grid3">
+    ${isSlip ? '' : `<div class="panel">
+      <div class="grid3">
         <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option></select></div>
         <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
         <div class="field"><label>備註</label><input id="aNote"></div>
       </div>
       <div class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
-      <button class="btn ghost" id="addAdj">新增調整項</button>`}
-    </div>
+      <button class="btn ghost" id="addAdj">新增調整項</button>
+    </div>`}
     ${isSlip ? `<div id="payrollPending"></div>` : ''}
     ${isSlip && scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
