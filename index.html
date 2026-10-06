@@ -3218,6 +3218,18 @@ function renderPayrollPage(c, mode){
       };
     });
   }
+  // 已開單（金額凍結）的勞報單，如果跟「現在的即時帳務」對不上（例如開單後才補代墊款日期、
+  // 加減項被改），在主控端提醒收回重開；司機看到的仍是凍結的數字，這裡只是給主控的警示。
+  function statementDriftNote(record, live){
+    if(!record) return '';
+    const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+    const diffs = [];
+    if(Math.abs(record.tripTotal - live.tripTotal) > 0.5) diffs.push(`車趟報酬 凍結 $${money(record.tripTotal)}／現在 $${money(live.tripTotal)}`);
+    if(Math.abs(record.adjTotal - calc.adjTotal) > 0.5) diffs.push(`加減項 凍結 $${money(record.adjTotal)}／現在 $${money(calc.adjTotal)}`);
+    if(Math.abs(record.reimbursementAmount - live.reimbursement) > 0.5) diffs.push(`代墊款 凍結 $${money(record.reimbursementAmount)}／現在 $${money(live.reimbursement)}`);
+    if(!diffs.length) return '';
+    return `<div class="note" style="border-color:var(--danger); color:var(--danger);">⚠️ 這張勞報單開單後帳務有變動，凍結的數字跟現在對不上：${diffs.join('；')}。如果現在的帳才是對的，請「收回」後重新開單。</div>`;
+  }
   // 開啟某份勞報單的詳情：月結的切到上面的月份明細，區間的切到區間勞報單區塊。
   function openStatementView(x){
     if(x.periodStart){
@@ -3281,7 +3293,7 @@ function renderPayrollPage(c, mode){
     box.innerHTML = listHtml + `
       <div class="panel no-print">
         <h3 style="margin-top:0;">${escapeHtml(driverName(driverId))} — ${start}～${end} ${record ? statusText(record) : ''}</h3>
-        ${record ? '' : '<div class="note">尚未開單，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。確認無誤後按「確認開單」凍結金額並開放司機簽名。</div>'}
+        ${record ? statementDriftNote(record, live) : '<div class="note">尚未開單，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。確認無誤後按「確認開單」凍結金額並開放司機簽名。</div>'}
         ${overlap ? `<div class="note" style="color:var(--danger);">⚠️ 這段期間跟已存在的勞報單（${statementLabel(overlap)}）重疊，不能開單。</div>` : ''}
         <h4 style="margin:14px 0 8px; font-size:13.5px;">配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</h4>
         <table><thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
@@ -3372,84 +3384,7 @@ function renderPayrollPage(c, mode){
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
           <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
-        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁按「月結確認」凍結並開放司機回簽。'}</div>` : ''}
-        ${isSlip ? `<table><tr><td>報酬總額</td><td class="amount">$${money(r.net)}</td></tr><tr><td><strong>實領金額（扣稅／補充保費後）</strong></td><td class="amount"><strong>$${money(ded.actualNet)}</strong></td></tr></table>` : `
-        `}
-      </div>
-      <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
-      <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn ghost" id="perPrint">產生勞報單（列印/另存PDF）</button>
-        ${!record && !overlap ? `<button class="btn amber" id="perConfirm">確認開單（開放司機簽名）</button>` : ''}
-        ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="perReject">退回簽名</button>` : ''}
-        ${record ? `<button class="btn danger" id="perRevoke" title="帳務有問題時，整份收回、重新計算">收回這張勞報單</button>` : ''}
-      </div>`;
-    wireList();
-    document.getElementById('perPrint').onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${start}～${end}_勞報單`);
-    box.querySelectorAll('[data-perdeladj]').forEach(b=>{
-      b.onclick = async ()=>{
-        const adj = r.adjustments.find(x=>x.id===b.dataset.perdeladj);
-        if(!confirm(`確定要刪除這筆「${adj?adjTypeLabel(adj.type):''}」調整項嗎（$${money(adj?.amount||0)}，${adj?.note||'無備註'}）？刪除後無法復原。`)) return;
-        try{ await deleteAdjustment(b.dataset.perdeladj); periodRefresh(); }
-        catch(err){ alert(err.message); }
-      };
-    });
-    const pc = document.getElementById('perConfirm');
-    if(pc) pc.onclick = async ()=>{
-      if(!payDate){ alert('請先填寫「實際給付日期（轉帳日）」'); return; }
-      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}。\n凍結後金額不會再變動，並開放司機簽名。`)) return;
-      try{ await confirmPeriodStatement(driverId, start, end, payDate, live); renderContent(); }
-      catch(err){ alert(err.message); }
-    };
-    const pr = document.getElementById('perReject');
-    if(pr) pr.onclick = async ()=>{
-      if(!confirm(`確定要退回 ${driverName(driverId)} ${start}～${end} 的簽名嗎？退回後司機需要重新簽名。`)) return;
-      try{ await rejectStatementSignature(record.id); periodRefresh(); }
-      catch(err){ alert(err.message); }
-    };
-    const prv = document.getElementById('perRevoke');
-    if(prv) prv.onclick = ()=> doRevoke([record]);
-  }
-  async function refresh(){
-    const driverId = document.getElementById('pDriver').value;
-    const monthStr = document.getElementById('pMonth').value;
-    state._payrollMonth = monthStr; state._payDriverId = driverId;
-    if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
-    // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
-    // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
-    // 也不影響其他畫面的效能，查哪個月份都一樣快。
-    document.getElementById('payrollResult').innerHTML = '<div class="empty">載入中...</div>';
-    let monthAssignments;
-    try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
-    catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
-    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
-    const live = driverMonthly(driverId, monthStr, monthAssignments);
-    const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
-    const periodOverlap = record ? null : findOverlappingStatement(driverId, monthStr+'-01', monthEndStr(monthStr));
-    const isFrozen = !!record;
-    // 還沒月結確認的預覽，要用「排除預支」的淨額（跟confirmMonthlyStatement()
-    // 存檔時算的邏輯一致），不能直接用live.net（那個是含預支扣減的即時參考值）。
-    const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
-    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
-    const ded = isFrozen
-      ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
-      : computePayrollDeductions(r.net, r.reimbursement);
-    const driver = state.data.drivers.find(d=>d.id===driverId);
-    const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">司機已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">司機已回簽（未鎖定）</span>' : '<span class="badge progress">等待司機回簽</span>';
-    const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
-      v2: slipUsesV2(record), serviceName: record ? record.serviceName : (driver && driver.serviceName),
-      signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
-    });
-    const attHtml = payrollAttachmentHtml(driver, monthStr, r);
-    const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
-    // 可領淨額＝勞報單實領金額（已扣稅／補充保費）再扣掉預支與已付款（現金／轉帳先付的），即這個月還要實際匯給司機的現金。
-    const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
-    const paidTotal = r.paid||0;
-    const payable = ded.actualNet - advanceTotal - paidTotal;
-    document.getElementById('payrollResult').innerHTML = `
-      <div class="panel no-print">
-        <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
-          <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
-        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
+        ${statementDriftNote(record, live)}
         ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁按「月結確認」凍結並開放司機回簽。'}</div>` : ''}
         <h4 data-tripstoggle style="margin:14px 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
