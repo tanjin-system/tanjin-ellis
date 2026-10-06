@@ -2448,7 +2448,15 @@ async function renderScheduleAdmin(c){
     if(state.tab!=='schedule') return; // 使用者可能已經切走這一頁
   }
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  const routeOpts = sortedRoutes().map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+  // 路線依「出發點」分組（optgroup），出發點順序跟出發點資料庫一致，組內維持原本的車次排序。
+  const routeOpts = (()=>{
+    const all = sortedRoutes();
+    const groups = state.data.origins.map(og=>({ label: og.label||og.address, list: all.filter(r=>r.originAddr===og.address) }));
+    const known = new Set(state.data.origins.map(og=>og.address));
+    const rest = all.filter(r=>!known.has(r.originAddr));
+    if(rest.length) groups.push({ label: '（未指定出發點）', list: rest });
+    return groups.filter(g=>g.list.length).map(g=>`<optgroup label="${escapeHtml(g.label)}">${g.list.map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</optgroup>`).join('');
+  })();
   const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">週班表</h2>
