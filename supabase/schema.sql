@@ -1043,3 +1043,8 @@ create table if not exists settle_skips (driver_id uuid not null references driv
 alter table settle_skips enable row level security;
 grant select, insert, update, delete on settle_skips to app_admin;
 create policy admin_all on settle_skips for all to app_admin using (true) with check (true);
+
+-- PART 17：代墊款日期補齊（2026-10-06，已在線上資料庫直接執行過）
+-- 舊的代墊款（由加油申報轉進來）當時沒有 adjustment_date，一律被當成該月1日，區間勞報單切週時會全擠在
+-- 含1號的那一段。已用對應申報的加油日期回填；程式也改成手動新增代墊款一定要填日期。
+--   update adjustments a set adjustment_date = f.fuel_date from fuel_claims f where f.adjustment_id = a.id and a.adjustment_date is null and a.adjustment_type = 'reimbursement';

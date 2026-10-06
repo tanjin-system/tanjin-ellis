@@ -1116,6 +1116,8 @@ async function bulkDeleteRouteVersions(ids) {
 async function createAdjustment(input) {
   const date = input.date || null;
   const month = date ? date.slice(0, 7) : input.month;
+  // 代墊款（發票）要跟著區間勞報單依日期拆分，一定要有日期；其他調整項日期選填（沒填視為該月1日）。
+  if (input.type === 'reimbursement' && !date) throw new Error('代墊款請填「調整項日期」（用發票日期），區間勞報單才會依日期歸入正確的期間。');
   const covered = findCoveringStatement(input.driverId, date || (month + '-01'));
   if (covered) throw new Error(`${date || month} 已經被勞報單（${statementLabel(covered)}）涵蓋並凍結，無法再新增調整項。如需調整請先收回那份勞報單。`);
   const supabase = getSupabase();
