@@ -2478,6 +2478,8 @@ async function renderScheduleAdmin(c){
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; renderContent(); };
   document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); };
   document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週班表_${week1[0]}_${week1[6]}`);
+  enhanceDriverSelect(document.getElementById('sDriver'), { getOrigin: ()=>{ const r = state.data.routes.find(x=>x.id===document.getElementById('sRoute').value); return r ? r.originAddr : null; } });
+  document.getElementById('sRoute').addEventListener('change', ()=>{ const d = document.getElementById('sDriver'); if(d && d.syncPicker) d.syncPicker(); });
   document.getElementById('addAssign').onclick = async ()=>{
     const routeId = document.getElementById('sRoute').value;
     const driverId = document.getElementById('sDriver').value;
@@ -2652,6 +2654,7 @@ function renderQuickCreate(routeId, date){
       <button class="btn ghost" id="qCancel">取消</button>
     </div>
   `;
+  enhanceDriverSelect(document.getElementById('qDriver'), { getOrigin: ()=> route.originAddr });
   document.getElementById('qCancel').onclick = ()=>{ box.innerHTML=''; };
   document.getElementById('qSave').onclick = async ()=>{
     const driverId = document.getElementById('qDriver').value;
@@ -2856,6 +2859,10 @@ function renderAssignmentDetail(id, box){
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
   };
+  if(canReassign){
+    const rt = state.data.routes.find(x=>x.id===a.routeId);
+    enhanceDriverSelect(box.querySelector('#afReassignDriver'), { getOrigin: ()=> rt ? rt.originAddr : null });
+  }
   if(canReassign) box.querySelector('#afReassignBtn').onclick = async ()=>{
     const newDriverId = box.querySelector('#afReassignDriver').value;
     if(!newDriverId){ alert('請選擇司機'); return; }
@@ -3575,6 +3582,7 @@ function renderPayrollPage(c, mode){
   const pDriverEl = document.getElementById('pDriver');
   if(state._payDriverId && [...pDriverEl.options].some(o=>o.value===state._payDriverId)) pDriverEl.value = state._payDriverId;
   state._payDriverId = pDriverEl.value;
+  enhanceDriverSelect(pDriverEl);
   const setPeriodDefaults = ()=>{
     const last = state.data.statements.filter(x=>x.driverId===pDriverEl.value && x.periodStart).map(x=>x.periodEnd).sort().pop();
     document.getElementById('perStart').value = last ? ymd(addDays(last, 1)) : '';
@@ -3626,6 +3634,93 @@ function renderPayrollPage(c, mode){
 // 依「通路」（例如7-11、康達盛通）結算一整份請款單：先依路線版本異動日期自動切成
 // 好幾段小區間算出各通路自己的未稅/含稅總額；配送明細則是「已選通路」共用一份，
 // 只列出已選通路的店數/佔比/金額，未勾選的通路完全不會出現（見 mergedRunRows）。
+// ---------- 司機搜尋選單 ----------
+// 把原本的 <select>（司機太多時很難找）升級成「可輸入文字搜尋」的選單：原本的 select 仍保留在頁面上
+// （隱藏），選到的值照常讀 select.value、照常觸發 change，所以呼叫端程式完全不用改。
+// 排班／換司機這幾處可以傳 getOrigin，優先列出「最近 60 天實際跑過這個出發點」的司機（自動判斷，免維護）。
+async function loadDriverOriginStats(){
+  const c = state._driverOriginStats;
+  if(c && Date.now() - c.at < 30*60*1000) return c.map;
+  const supabase = getSupabase();
+  const since = ymd(addDays(todayStr(), -60));
+  const PAGE = 1000, rows = [];
+  for(let from=0; ; from+=PAGE){
+    const { data, error } = await supabase.from('assignments').select('driver_id, route_id')
+      .eq('status','completed').gte('trip_date', since).order('id').range(from, from+PAGE-1);
+    if(error) throw new Error(error.message);
+    rows.push(...(data||[]));
+    if(!data || data.length < PAGE) break;
+  }
+  const routeOrigin = new Map(state.data.routes.map(r=>[r.id, r.originAddr]));
+  const map = new Map(); // originAddr -> Map(driverId -> 趟數)
+  rows.forEach(r=>{
+    const og = routeOrigin.get(r.route_id); if(!og) return;
+    if(!map.has(og)) map.set(og, new Map());
+    const m = map.get(og); m.set(r.driver_id, (m.get(r.driver_id)||0)+1);
+  });
+  state._driverOriginStats = { at: Date.now(), map };
+  return map;
+}
+function enhanceDriverSelect(sel, opts){
+  if(!sel || sel.dataset.enhanced) return;
+  opts = opts || {};
+  sel.dataset.enhanced = '1';
+  sel.style.display = 'none';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative; width:100%;';
+  const input = document.createElement('input');
+  input.type = 'text'; input.autocomplete = 'off';
+  input.style.cssText = 'width:100%;';
+  const list = document.createElement('div');
+  list.style.cssText = 'display:none; position:absolute; left:0; right:0; top:100%; z-index:60; max-height:280px; overflow:auto; background:var(--panel,#fff); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 18px rgba(27,33,41,.18); margin-top:2px;';
+  wrap.appendChild(input); wrap.appendChild(list);
+  sel.after(wrap);
+  // 「選擇司機」這種空白提示選項不列進清單（只有「全部司機」這種有意義的空值保留）。
+  const options = ()=> [...sel.options].filter(o=>o.value || o.textContent.includes('全部')).map(o=>({ value:o.value, text:o.textContent }));
+  const currentText = ()=>{ const o = sel.options[sel.selectedIndex]; return o && o.value ? o.textContent : (o && o.textContent.includes('全部') ? o.textContent : ''); };
+  const syncText = ()=>{ input.value = currentText(); input.placeholder = (sel.options[0] && !sel.options[0].value && !sel.options[0].textContent.includes('全部')) ? sel.options[0].textContent+'（可輸入名字搜尋）' : '輸入名字搜尋…'; };
+  sel.syncPicker = syncText;
+  let freq = null; // Map(driverId -> 趟數)，這個出發點最近60天常跑的
+  const loadFreq = ()=>{
+    if(!opts.getOrigin) return;
+    const og = opts.getOrigin();
+    if(!og){ freq = null; return; }
+    loadDriverOriginStats().then(map=>{ const m = new Map([...(map.get(og)||new Map())].filter(([,n])=>n>=2)); freq = m; if(list.style.display!=='none') render(); }).catch(()=>{ freq = null; });
+  };
+  function render(){
+    const q = input.value.trim().toLowerCase();
+    const filtering = q && q !== currentText().toLowerCase();
+    const items = options().filter(o=> !filtering || o.text.toLowerCase().includes(q));
+    const rowHtml = o=>`<div class="dpick-item" data-v="${escapeHtml(o.value)}" style="padding:7px 12px; cursor:pointer; font-size:13.5px; ${o.value===sel.value?'background:#F4F3EF;':''}">${escapeHtml(o.text)}${freq && freq.get(o.value) ? `<span style="color:var(--ink-soft); font-size:11.5px; margin-left:6px;">近60天 ${freq.get(o.value)} 趟</span>` : ''}</div>`;
+    let html;
+    if(freq && freq.size){
+      const common = items.filter(o=>o.value && freq.has(o.value)).sort((a,b)=>freq.get(b.value)-freq.get(a.value));
+      const other = items.filter(o=>!(o.value && freq.has(o.value)));
+      const og = opts.getOrigin && opts.getOrigin();
+      html = (common.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--teal); background:#F4F3EF;">${escapeHtml(originLabel(og))} 常跑的司機</div>${common.map(rowHtml).join('')}` : '')
+        + (other.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--ink-soft); background:#F4F3EF;">${common.length?'其他司機':'司機'}</div>${other.map(rowHtml).join('')}` : '');
+    } else html = items.map(rowHtml).join('');
+    list.innerHTML = html || '<div style="padding:8px 12px; font-size:12.5px; color:var(--ink-soft);">找不到符合的司機</div>';
+    list.querySelectorAll('.dpick-item').forEach(el=>{
+      el.onmousedown = e=>{ e.preventDefault(); choose(el.dataset.v); };
+    });
+  }
+  function choose(v){
+    sel.value = v;
+    syncText();
+    list.style.display = 'none';
+    sel.dispatchEvent(new Event('change'));
+  }
+  input.onfocus = ()=>{ loadFreq(); input.select(); render(); list.style.display = 'block'; };
+  input.oninput = ()=>{ render(); list.style.display = 'block'; };
+  input.onblur = ()=>{ setTimeout(()=>{ list.style.display = 'none'; syncText(); }, 120); };
+  input.onkeydown = e=>{
+    if(e.key==='Escape'){ list.style.display='none'; input.blur(); }
+    if(e.key==='Enter'){ e.preventDefault(); const first = list.querySelector('.dpick-item'); if(first) choose(first.dataset.v); }
+  };
+  syncText();
+  loadFreq();
+}
 function originLabel(addr){
   const og = state.data.origins.find(o=>o.address===addr);
   return og ? (og.label||og.address) : (addr || '（未知出發點）');
