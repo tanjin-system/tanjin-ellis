@@ -1009,3 +1009,22 @@ alter table statements drop constraint if exists statements_driver_id_statement_
 create unique index if not exists statements_monthly_uq on statements(driver_id, statement_month) where period_start is null;
 create unique index if not exists statements_period_uq on statements(driver_id, period_start, period_end) where period_start is not null;
 alter table adjustments add column if not exists adjustment_date date;
+
+-- ============================================================
+-- PART 15：趟報酬額外金額（臨時加錢／拆店調撥）與已付款（2026-10-06，已在線上資料庫直接執行過）
+-- assignments.extra_pay：併進這一趟司機報酬的額外金額（＝trip_pay_adjustments 該趟紀錄加總），
+--   趟報酬 = (payroll_fare_snapshot ?? fare) + extra_pay（程式 tripPay()）；我的報酬、薪資結算、勞報單、
+--   首頁即時利潤全部用趟報酬，勞報單不單獨列項；客戶請款不受影響。
+-- trip_pay_adjustments：逐筆來源紀錄（kind: extra 臨時加減／split 拆店調撥，同一次拆店共用 group_id），只有主控可讀寫。
+-- assignments.paid_amount/paid_date/paid_method：這趟已先付（現金／轉帳）的金額，只影響可領淨額，不影響勞報單，與預支獨立。
+-- ============================================================
+alter table assignments add column if not exists extra_pay numeric not null default 0;
+alter table assignments add column if not exists paid_amount numeric not null default 0;
+alter table assignments add column if not exists paid_date date;
+alter table assignments add column if not exists paid_method text check (paid_method is null or paid_method in ('cash','transfer'));
+create table if not exists trip_pay_adjustments (id uuid primary key default gen_random_uuid(), assignment_id uuid not null references assignments(id) on delete cascade, kind text not null check (kind in ('extra','split')), group_id uuid, amount numeric not null, note text, created_at timestamptz not null default now());
+create index if not exists idx_tpa_assignment on trip_pay_adjustments(assignment_id);
+create index if not exists idx_tpa_group on trip_pay_adjustments(group_id);
+alter table trip_pay_adjustments enable row level security;
+grant select, insert, update, delete on trip_pay_adjustments to app_admin;
+create policy admin_all on trip_pay_adjustments for all to app_admin using (true) with check (true);

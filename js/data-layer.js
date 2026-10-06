@@ -80,6 +80,8 @@ function mapAssignment(row) {
     runNo: row.run_no,
     completedAt: row.completed_at,
     payrollFareSnapshot: row.payroll_fare_snapshot != null ? Number(row.payroll_fare_snapshot) : null,
+    extraPay: Number(row.extra_pay || 0),
+    paidAmount: Number(row.paid_amount || 0), paidDate: row.paid_date || null, paidMethod: row.paid_method || null,
     billingSnapshot: row.billing_total_snapshot != null ? {
       totalAmount: Number(row.billing_total_snapshot),
       totalPoints: points.length,
@@ -1152,6 +1154,145 @@ async function bulkDeleteAdjustments(ids) {
   if (error) throw new Error('刪除資料失敗：' + error.message);
   const idSet = new Set(ids);
   state.data.adjustments = state.data.adjustments.filter(a => !idSet.has(a.id));
+}
+
+// ---------------- 趟報酬：額外金額（臨時加錢／拆店調撥）與已付款 ----------------
+// 司機單趟報酬＝凍結車資（或排定車資）＋額外金額（assignments.extra_pay）。額外金額是併進
+// 趟報酬的，所以我的報酬、薪資結算、勞報單、首頁即時利潤全部自動跟著變，不用另外處理；
+// 逐筆來源紀錄放在 trip_pay_adjustments（只有主控能看），extra_pay 永遠＝該趟所有紀錄的加總。
+// 客戶請款是另外手動輸入的數字，完全不受影響。
+function tripPay(a) {
+  return (Number(a.payrollFareSnapshot ?? a.fare) || 0) + (Number(a.extraPay) || 0);
+}
+
+// 已經被勞報單（月結或區間）涵蓋的趟次，金額已凍結簽名，不能再動額外金額。
+function assertTripPayEditable(a) {
+  const st = findCoveringStatement(a.driverId, a.date);
+  if (st) throw new Error(`${a.date} ${driverName(a.driverId)} 的車趟已被勞報單（${statementLabel(st)}）涵蓋並凍結，不能再改額外金額。如需調整請先收回那份勞報單。`);
+}
+
+async function fetchTripPayLogs(assignmentIds) {
+  if (!assignmentIds || !assignmentIds.length) return [];
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('trip_pay_adjustments').select('*').in('assignment_id', assignmentIds).order('created_at');
+  if (error) throw new Error('讀取額外金額紀錄失敗：' + error.message);
+  return data || [];
+}
+
+// 依紀錄重算並寫回這幾趟的 extra_pay。
+async function syncExtraPay(assignmentIds) {
+  const supabase = getSupabase();
+  const logs = await fetchTripPayLogs(assignmentIds);
+  for (const id of assignmentIds) {
+    const sum = logs.filter(l => l.assignment_id === id).reduce((s, l) => s + Number(l.amount), 0);
+    const { error } = await supabase.from('assignments').update({ extra_pay: sum }).eq('id', id);
+    if (error) throw new Error('更新額外金額失敗：' + error.message);
+    const a = state.data.assignments.find(x => x.id === id);
+    if (a) a.extraPay = sum;
+  }
+}
+
+function normalizeExtraAmount(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n === 0) throw new Error('請輸入不是 0 的金額（減錢請輸入負數）');
+  return Math.round(n * 100) / 100;
+}
+
+// 臨時加錢／減錢：單一趟，金額可正可負。
+async function addTripExtra(assignmentId, amount, note) {
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (!a) throw new Error('找不到這趟車');
+  assertTripPayEditable(a);
+  const amt = normalizeExtraAmount(amount);
+  const supabase = getSupabase();
+  const { error } = await supabase.from('trip_pay_adjustments').insert({
+    assignment_id: assignmentId, kind: 'extra', amount: amt, note: (note || '').trim() || null
+  });
+  if (error) throw new Error('新增額外金額失敗：' + error.message);
+  await syncExtraPay([assignmentId]);
+}
+
+// 拆店調撥：來源趟調整後保留 keepAmount，其他趟各自加 add；總額不要求不變（距離變短可以少付）。
+// 三筆以上綁成同一組（group_id），顯示與刪除都以整組為單位。
+async function createSplitTransfer({ sourceId, keepAmount, targets, note }) {
+  const src = state.data.assignments.find(x => x.id === sourceId);
+  if (!src) throw new Error('找不到來源車趟');
+  if (!targets || !targets.length) throw new Error('請至少選一趟要分過去的車');
+  const keep = Number(keepAmount);
+  if (!Number.isFinite(keep) || keep < 0) throw new Error('來源車趟保留金額要是 0 以上的數字');
+  const ids = new Set([sourceId]);
+  const rows = [];
+  const group = crypto.randomUUID();
+  const noteText = (note || '').trim() || null;
+  assertTripPayEditable(src);
+  const delta = Math.round((keep - tripPay(src)) * 100) / 100;
+  if (delta !== 0) rows.push({ assignment_id: sourceId, kind: 'split', group_id: group, amount: delta, note: noteText });
+  for (const t of targets) {
+    if (ids.has(t.assignmentId)) throw new Error('同一趟不能重複選');
+    ids.add(t.assignmentId);
+    const a = state.data.assignments.find(x => x.id === t.assignmentId);
+    if (!a) throw new Error('找不到要分過去的車趟');
+    assertTripPayEditable(a);
+    const add = Number(t.add);
+    if (!Number.isFinite(add) || add < 0) throw new Error('各趟加的金額要是 0 以上的數字');
+    if (add !== 0) rows.push({ assignment_id: t.assignmentId, kind: 'split', group_id: group, amount: Math.round(add * 100) / 100, note: noteText });
+  }
+  if (!rows.length) throw new Error('沒有任何金額變動');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('trip_pay_adjustments').insert(rows);
+  if (error) throw new Error('拆店調撥失敗：' + error.message);
+  await syncExtraPay([...ids]);
+}
+
+// 刪除一筆紀錄；屬於拆店調撥的整組一起刪（避免只刪一半造成金額對不起來）。
+async function deleteTripPayLog(logId) {
+  const supabase = getSupabase();
+  const { data: log, error: e1 } = await supabase.from('trip_pay_adjustments').select('*').eq('id', logId).single();
+  if (e1) throw new Error('讀取紀錄失敗：' + e1.message);
+  let q = supabase.from('trip_pay_adjustments').select('*');
+  q = log.group_id ? q.eq('group_id', log.group_id) : q.eq('id', logId);
+  const { data: logs, error: e2 } = await q;
+  if (e2) throw new Error('讀取紀錄失敗：' + e2.message);
+  const ids = [...new Set(logs.map(l => l.assignment_id))];
+  for (const id of ids) {
+    const a = state.data.assignments.find(x => x.id === id);
+    if (a) assertTripPayEditable(a);
+  }
+  const { error } = await supabase.from('trip_pay_adjustments').delete().in('id', logs.map(l => l.id));
+  if (error) throw new Error('刪除失敗：' + error.message);
+  await syncExtraPay(ids);
+}
+
+// 已付款（現金／轉帳）：只記錄「這趟已經先拿到多少」，影響可領淨額，不影響勞報單金額。
+async function setTripPaid(assignmentId, { amount, date, method }) {
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) throw new Error('請輸入大於 0 的付款金額');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('請選擇付款日期');
+  if (method !== 'cash' && method !== 'transfer') throw new Error('請選擇付款方式');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update({ paid_amount: amt, paid_date: date, paid_method: method }).eq('id', assignmentId);
+  if (error) throw new Error('記錄已付款失敗：' + error.message);
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (a) { a.paidAmount = amt; a.paidDate = date; a.paidMethod = method; }
+}
+
+async function clearTripPaid(assignmentId) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update({ paid_amount: 0, paid_date: null, paid_method: null }).eq('id', assignmentId);
+  if (error) throw new Error('取消已付款失敗：' + error.message);
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (a) { a.paidAmount = 0; a.paidDate = null; a.paidMethod = null; }
+}
+
+// 週領快捷：把某位司機在日期區間內「已完成、還沒標已付」的車趟，一次標為已付款（金額＝該趟報酬）。
+async function markTripsPaid(assignmentIds, date, method) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('請選擇付款日期');
+  if (method !== 'cash' && method !== 'transfer') throw new Error('請選擇付款方式');
+  for (const id of assignmentIds) {
+    const a = state.data.assignments.find(x => x.id === id);
+    if (!a) continue;
+    await setTripPaid(id, { amount: tripPay(a), date, method });
+  }
 }
 
 // ---------------- 客戶請款例外調整（跟司機薪資調整項是兩回事） ----------------
