@@ -1056,3 +1056,20 @@ create policy admin_all on settle_skips for all to app_admin using (true) with c
 alter table assignments add column if not exists pay_due_date date;
 alter table assignments add column if not exists pay_due_note text check (pay_due_note is null or char_length(pay_due_note) <= 60);
 create index if not exists idx_assignments_pay_due on assignments(pay_due_date) where pay_due_date is not null;
+
+-- PART 19：週班表「發佈」與「下週自動延續本週」（2026-10-06，已在線上資料庫直接執行過）
+-- assignments.published：false＝草稿（只有主控看得到），true＝司機看得到。司機端 assignments 的 select/update policy
+-- 加上 and published（assignment_drop_points、media、storage 的 policy 都是 exists(select from assignments)，
+-- 受同一個 RLS 過濾，自動跟著看不到草稿）；driver_depot_overview 也加了 published 條件。既有車趟預設 true。
+-- 程式：本週（含以前）新建的車趟 published=true，之後週次的車趟 published=false，主控按「發佈這週」才開放。
+-- schedule_rollovers：記錄哪一週已經自動延續過（先寫入再複製），之後刪掉哪格都不會再被補回來。
+alter table assignments add column if not exists published boolean not null default true;
+create table if not exists schedule_rollovers (week_start date primary key, created_count int not null default 0, created_at timestamptz not null default now());
+alter table schedule_rollovers enable row level security;
+grant select, insert, update, delete on schedule_rollovers to app_admin;
+create policy admin_all on schedule_rollovers for all to app_admin using (true) with check (true);
+drop policy if exists driver_select_own on assignments;
+create policy driver_select_own on assignments for select to app_driver using (driver_id = auth_driver_id() and published);
+drop policy if exists driver_update_own on assignments;
+create policy driver_update_own on assignments for update to app_driver using (driver_id = auth_driver_id() and published) with check (driver_id = auth_driver_id() and published);
+-- driver_depot_overview(p_date)：where 加 a.published，子查詢 a2 也加 a2.published（完整內容見上方 PART 的函式，已用 create or replace 更新）

@@ -1204,6 +1204,8 @@ async function renderHomeAdmin(c){
   // 的不列出；同一個月在這個 session 只查一次，查詢失敗不影響首頁其他內容。
   const prevMonthStr = settleReminderMonth();
   const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
+  // 下週（含之後）還有草稿車趟沒發佈：提醒主控（司機看不到）。
+  const draftWeekCount = state.data.assignments.filter(a=>a.published===false && a.date>=getWeekDates(0)[0]).length;
   let deferredDue = [];
   try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
   let unsettledNames = [];
@@ -1217,9 +1219,10 @@ async function renderHomeAdmin(c){
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單司機尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的車趟尚未發佈（司機看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週班表</button></div>` : ''}
       ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往薪資結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
@@ -1251,6 +1254,7 @@ async function renderHomeAdmin(c){
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
+  c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
   c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
   c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
@@ -2429,6 +2433,12 @@ function sortedRoutes(){
 }
 async function renderScheduleAdmin(c){
   const week1 = getWeekDates(state.weekOffset);
+  // 每週第一次打開：下週還是空的就自動延續本週（草稿，司機看不到，按「發佈」才開放）。背景進行，不擋畫面。
+  rolloverNextWeekIfNeeded().then(r=>{
+    if(!r) return;
+    state._rolloverMsg = r.created ? `已自動把本週班表延續到下週（${r.created} 趟，目前是草稿，司機看不到；有異動請手動改，排好後按「發佈」）。` : '';
+    if(state.tab==='schedule') renderContent();
+  }).catch(err=>{ state._rolloverChecked = null; console.error('自動延續下週班表失敗', err); });
   // 往前翻週（state.weekOffset 可以一直往負的翻）翻超過近14天的預設窗口時，
   // 要先補齊那一週的資料再畫格子，不然會看到格子是空的、以為那週沒排班。
   if(state.data.assignmentsWindowStart && week1[0] < state.data.assignmentsWindowStart){
@@ -2470,6 +2480,15 @@ async function renderScheduleAdmin(c){
         <button class="btn ghost" id="printWeek">另存PDF（本週）</button>
       </div>
     </div>
+    ${(()=>{
+      const drafts = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
+      const msg = state._rolloverMsg ? `<div class="note no-print" style="margin-bottom:8px;">${escapeHtml(state._rolloverMsg)}</div>` : '';
+      if(!drafts) return msg;
+      return msg + `<div class="panel no-print" style="border-color:var(--amber); border-width:2px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>📝 這週有 <b>${drafts}</b> 趟尚未發佈（草稿，司機目前看不到）</span>
+        <button class="btn amber" id="publishWeekBtn">發佈這週（${week1[0].slice(5)}～${week1[6].slice(5)}）</button>
+      </div>`;
+    })()}
     <h3>${week1[0]} ~ ${week1[6]}</h3>
     <div id="gridWeek1"></div>
     <div id="assignDetail"></div>
@@ -2478,6 +2497,14 @@ async function renderScheduleAdmin(c){
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; renderContent(); };
   document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); };
   document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週班表_${week1[0]}_${week1[6]}`);
+  const publishBtn = document.getElementById('publishWeekBtn');
+  if(publishBtn) publishBtn.onclick = async ()=>{
+    const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
+    if(!confirm(`確定要發佈 ${week1[0]}～${week1[6]} 的 ${n} 趟車嗎？發佈後司機馬上看得到自己的行程。`)) return;
+    publishBtn.disabled = true;
+    try{ await publishWeek(week1[0], week1[6]); state._rolloverMsg = ''; renderContent(); }
+    catch(err){ alert(err.message); publishBtn.disabled = false; }
+  };
   enhanceDriverSelect(document.getElementById('sDriver'), { getOrigin: ()=>{ const r = state.data.routes.find(x=>x.id===document.getElementById('sRoute').value); return r ? r.originAddr : null; } });
   document.getElementById('sRoute').addEventListener('change', ()=>{ const d = document.getElementById('sDriver'); if(d && d.syncPicker) d.syncPicker(); });
   document.getElementById('addAssign').onclick = async ()=>{
@@ -2534,7 +2561,7 @@ function renderWeekGrid(containerId, dates){
   function assignmentInner(a){
     const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
     const issue = (a.hasIssue || anyUndelivered) ? ' ⚠️' : '';
-    const tag = a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '';
+    const tag = (a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '') + (a.published===false ? ' <span title="草稿：尚未發佈，司機看不到" style="font-size:10px; color:var(--amber);">📝草稿</span>' : '');
     const extra = Number(a.extraPay)||0;
     const extraTag = extra ? ` <b style="color:${extra>0?'var(--ok,#2E7D32)':'var(--danger)'};">${extra>0?'+':'−'}${money(Math.abs(extra))}</b>` : '';
     const paidTag = (Number(a.paidAmount)||0)>0 ? ` <span title="${escapeHtml((a.paidDate||'')+'支付'+(a.paidPeriodStart?'　區間 '+a.paidPeriodStart+'～'+a.paidPeriodEnd:''))}" style="font-size:10px; color:var(--ok,#2E7D32);">✅${a.paidDate?a.paidDate.slice(5).replace('-','/')+'付':'已付'}</span>` : '';

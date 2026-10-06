@@ -84,6 +84,7 @@ function mapAssignment(row) {
     paidAmount: Number(row.paid_amount || 0), paidDate: row.paid_date || null, paidMethod: row.paid_method || null,
     paidGroup: row.paid_group || null, paidPeriodStart: row.paid_period_start || null, paidPeriodEnd: row.paid_period_end || null,
     payDueDate: row.pay_due_date || null, payDueNote: row.pay_due_note || '',
+    published: row.published !== false,
     billingSnapshot: row.billing_total_snapshot != null ? {
       totalAmount: Number(row.billing_total_snapshot),
       totalPoints: points.length,
@@ -932,6 +933,8 @@ async function createAssignment(input) {
     distance_km: version?.distanceKm ?? null,
     billing_total_snapshot: version?.billingTotal ?? null,
     billing_by_channel_snapshot: version?.billingByChannel ?? null,
+    // 本週（含以前）的車趟排好就生效；之後週次的車趟先是草稿（只有主控看得到），按「發佈」才開放給司機。
+    published: input.published ?? (input.date <= getWeekDates(0)[6]),
     status: 'scheduled'
   }).select().single();
   if (error) throw new Error('建立車趟失敗：' + error.message);
@@ -948,6 +951,100 @@ async function createAssignment(input) {
   const full = await fetchAssignment(assignRow.id);
   state.data.assignments.push(full);
   return full;
+}
+
+// ---------------- 週班表：下週自動延續本週＋發佈 ----------------
+// 發佈：未來週次的車趟預設是草稿（published=false，司機端 RLS 看不到），主控排完按「發佈」才開放。
+// 自動延續：每週第一次打開週班表時，如果下週還沒補過（schedule_rollovers 沒有紀錄）且下週是空的，
+// 就把本週每一格（路線＋司機＋星期幾）複製到下週，一律是草稿。先寫入紀錄再複製，之後刪掉哪格都不會再補回來。
+async function publishWeek(start, end) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update({ published: true })
+    .gte('trip_date', start).lte('trip_date', end).eq('published', false);
+  if (error) throw new Error('發佈失敗：' + error.message);
+  state.data.assignments.forEach(a => { if (a.date >= start && a.date <= end) a.published = true; });
+}
+
+async function rolloverNextWeekIfNeeded() {
+  const thisWeek = getWeekDates(0), nextWeek = getWeekDates(1);
+  const nextStart = nextWeek[0], nextEnd = nextWeek[6];
+  if (state._rolloverChecked === nextStart) return null;
+  state._rolloverChecked = nextStart;
+  const supabase = getSupabase();
+  const { data: rec, error: recErr } = await supabase.from('schedule_rollovers').select('week_start').eq('week_start', nextStart);
+  if (recErr || (rec && rec.length)) return null;
+  const { error: claimErr } = await supabase.from('schedule_rollovers').insert({ week_start: nextStart });
+  if (claimErr) return null; // 別的裝置剛好先補了，或寫入失敗：不重複做
+  if (state.data.assignments.some(a => a.date >= nextStart && a.date <= nextEnd)) return { created: 0, alreadyHadTrips: true };
+
+  const created = [];
+  let skipped = 0;
+  try {
+  // 本週來源（精簡欄位，分頁避開1000筆上限）
+  const src = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('assignments').select('route_id, driver_id, trip_date, status')
+      .gte('trip_date', thisWeek[0]).lte('trip_date', thisWeek[6]).neq('status', 'cancelled').order('id').range(from, from + 999);
+    if (error) throw new Error('讀取本週班表失敗：' + error.message);
+    src.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  const activeDrivers = new Set(state.data.drivers.filter(d => d.status === 'active').map(d => d.id));
+  const rows = [];
+  const seen = new Set();
+  src.forEach(x => {
+    const route = state.data.routes.find(r => r.id === x.route_id);
+    const date = ymd(addDays(x.trip_date, 7));
+    const key = x.route_id + '|' + date;
+    if (!route || !activeDrivers.has(x.driver_id) || seen.has(key)) { skipped++; return; }
+    seen.add(key);
+    const version = route.versions.find(v => date >= v.start && (!v.end || date <= v.end));
+    rows.push({
+      row: {
+        trip_date: date, route_id: x.route_id, driver_id: x.driver_id, origin_snapshot: route.originAddr || '',
+        fare: version?.driverFare ?? 0, distance_km: version?.distanceKm ?? null,
+        billing_total_snapshot: version?.billingTotal ?? null, billing_by_channel_snapshot: version?.billingByChannel ?? null,
+        published: false, status: 'scheduled'
+      },
+      dropPointIds: version ? version.dropPointIds : []
+    });
+  });
+  // 分批新增車趟，再分批新增每趟的下貨點。
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const { data, error } = await supabase.from('assignments').insert(chunk.map(c => c.row)).select('id, route_id, trip_date');
+    if (error) throw new Error('延續下週班表失敗：' + error.message);
+    chunk.forEach(c => {
+      const hit = (data || []).find(d => d.route_id === c.row.route_id && d.trip_date === c.row.trip_date);
+      if (hit) created.push({ id: hit.id, dropPointIds: c.dropPointIds });
+    });
+  }
+  const pointRows = [];
+  created.forEach(c => c.dropPointIds.forEach((dpId, i) => {
+    const dp = state.data.dropPoints.find(x => x.id === dpId);
+    pointRows.push({ assignment_id: c.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 });
+  }));
+  for (let i = 0; i < pointRows.length; i += 500) {
+    const { error } = await supabase.from('assignment_drop_points').insert(pointRows.slice(i, i + 500));
+    if (error) throw new Error('延續下週班表的下貨點失敗：' + error.message);
+  }
+  await supabase.from('schedule_rollovers').update({ created_count: created.length }).eq('week_start', nextStart);
+  } catch (err) {
+    // 中途失敗：把已建立的半成品車趟清掉（下貨點隨車趟一併刪除）並放掉「已補過」記錄，下次打開會重新嘗試。
+    try {
+      for (let i = 0; i < created.length; i += 200) await supabase.from('assignments').delete().in('id', created.slice(i, i + 200).map(c => c.id));
+      await supabase.from('schedule_rollovers').delete().eq('week_start', nextStart);
+    } catch (e2) { console.error('清理失敗的延續紀錄時出錯', e2); }
+    throw err;
+  }
+  // 把新建的下週車趟讀進記憶體（含下貨點）
+  const { data: full, error: fullErr } = await fetchAllAssignmentPages(() => supabase.from('assignments')
+    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', nextStart).lte('trip_date', nextEnd));
+  if (fullErr) throw new Error('讀取下週班表失敗：' + fullErr.message);
+  const have = new Set(state.data.assignments.map(a => a.id));
+  (full || []).map(mapAssignment).forEach(a => { if (!have.has(a.id)) state.data.assignments.push(a); });
+  state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
+  return { created: created.length, skipped };
 }
 
 async function deleteAssignment(assignmentId) {
