@@ -1048,3 +1048,11 @@ create policy admin_all on settle_skips for all to app_admin using (true) with c
 -- 舊的代墊款（由加油申報轉進來）當時沒有 adjustment_date，一律被當成該月1日，區間勞報單切週時會全擠在
 -- 含1號的那一段。已用對應申報的加油日期回填；程式也改成手動新增代墊款一定要填日期。
 --   update adjustments a set adjustment_date = f.fuel_date from fuel_claims f where f.adjustment_id = a.id and a.adjustment_date is null and a.adjustment_type = 'reimbursement';
+
+-- PART 18：延後付款（掛帳）（2026-10-06，已在線上資料庫直接執行過）
+-- 司機同意晚點領：主控把某段期間已完成、尚未付款的車趟掛帳（pay_due_date 預計付款日、pay_due_note 備註），
+-- 薪資結算頁有待付款清單，首頁到期前3天提醒，司機我的報酬顯示待領；用區間付款登記後（paid_amount>0）自動消失。
+-- 完全不影響勞報單。只標記有掛帳的車趟，舊月份不會被誤當成欠款。
+alter table assignments add column if not exists pay_due_date date;
+alter table assignments add column if not exists pay_due_note text check (pay_due_note is null or char_length(pay_due_note) <= 60);
+create index if not exists idx_assignments_pay_due on assignments(pay_due_date) where pay_due_date is not null;

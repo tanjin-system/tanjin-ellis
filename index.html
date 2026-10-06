@@ -1204,6 +1204,8 @@ async function renderHomeAdmin(c){
   // 的不列出；同一個月在這個 session 只查一次，查詢失敗不影響首頁其他內容。
   const prevMonthStr = settleReminderMonth();
   const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
+  let deferredDue = [];
+  try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
   let unsettledNames = [];
   if(prevMonthStr){
     try{
@@ -1215,9 +1217,10 @@ async function renderHomeAdmin(c){
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單司機尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往薪資結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
@@ -1248,6 +1251,7 @@ async function renderHomeAdmin(c){
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
+  c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
   c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
   const manualRefreshBtn = document.getElementById('manualRefreshBtn');
@@ -3080,6 +3084,19 @@ function renderPayrollPage(c, mode){
       <div class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
       <button class="btn ghost" id="addAdj">新增調整項</button>
     </div>`}
+    ${isSlip ? '' : `<div class="panel no-print">
+      <h3 style="margin-top:0;">延後付款（掛帳）</h3>
+      <p class="note" style="margin-top:0;">司機同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的車趟掛帳。轉帳後在下面「待付款清單」按「已付款」即可。司機的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+      <div class="grid3">
+        <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
+        <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
+        <div class="field"><label>預計付款日</label><input id="dfDue" type="date"></div>
+      </div>
+      <div class="field"><label>備註（選填，例如：司機要求）</label><input id="dfNote" maxlength="60"></div>
+      <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
+      <button class="btn amber" id="dfSave">掛帳</button>
+    </div>
+    <div id="deferredList"></div>`}
     ${isSlip ? `<div id="payrollPending"></div>` : ''}
     ${isSlip ? (()=>{
       // 各司機的全部月份勞報單（月結＋區間），每位司機一組、預設收合；組內點「查看」切到那一份。
@@ -3240,6 +3257,88 @@ function renderPayrollPage(c, mode){
         catch(err){ alert(err.message); }
       };
     });
+  }
+  // ---- 延後付款（薪資結算頁）：掛帳表單與待付款清單 ----
+  const dfStatusBadge = st => st==='overdue' ? '<span class="badge" style="background:#FBE9E7; color:var(--danger);">已逾期</span>' : st==='today' ? '<span class="badge pending">今天到期</span>' : st==='soon' ? '<span class="badge pending">3 天內</span>' : '';
+  async function renderDeferredPanel(){
+    const el = document.getElementById('deferredList');
+    if(!el) return;
+    const driverId = document.getElementById('pDriver').value;
+    let groups;
+    try{ groups = groupDeferred(await fetchDeferredTrips()); state._pendingPayCache = { at: Date.now(), groups }; }
+    catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
+    if(!el.isConnected) return;
+    const mine = groups.filter(g=>g.driverId===driverId);
+    const others = groups.filter(g=>g.driverId!==driverId);
+    el.innerHTML = `<div class="panel no-print" ${mine.some(g=>deferredStatus(g.due)==='overdue')?'style="border-color:var(--danger); border-width:2px;"':''}>
+      <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
+      ${mine.length ? `<table><thead><tr><th>區間</th><th>趟報酬合計</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
+        <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
+        <div id="dfPayForm"></div>` : '<div style="font-size:13px;">這位司機目前沒有待付款。</div>'}
+      ${others.length ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:8px;">其他司機還有 ${others.length} 筆待付款：${others.map(g=>`${escapeHtml(driverName(g.driverId))}（${g.due}）`).join('、')}</div>` : ''}
+    </div>`;
+    el.querySelectorAll('[data-dfcancel]').forEach(b=>{
+      b.onclick = async ()=>{
+        const g = mine[Number(b.dataset.dfcancel)];
+        if(!confirm(`取消 ${driverName(driverId)} ${g.start}${g.start===g.end?'':'～'+g.end} 的掛帳嗎？（車趟回到一般狀態，不會刪除任何資料）`)) return;
+        try{ await cancelDeferredPayment(g.ids); renderDeferredPanel(); }catch(err){ alert(err.message); }
+      };
+    });
+    el.querySelectorAll('[data-dfpay]').forEach(b=>{
+      b.onclick = ()=>{
+        const g = mine[Number(b.dataset.dfpay)];
+        const f = el.querySelector('#dfPayForm');
+        f.innerHTML = `<div style="border:1px dashed var(--border); padding:8px; border-radius:8px; margin-top:8px;">
+          <div style="font-size:12.5px; margin-bottom:6px;">登記 ${escapeHtml(driverName(driverId))} 的付款：${g.start}${g.start===g.end?'':'～'+g.end}，趟報酬合計 <b>$${money(g.total)}</b></div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <label style="font-size:12px;">付款日期</label><input id="dfpDate" type="date" value="${todayStr()}">
+            <select id="dfpMethod" style="width:auto;"><option value="transfer">轉帳</option><option value="cash">現金</option></select>
+            <input id="dfpAmt" type="number" placeholder="金額（空白＝全額）" style="width:160px;">
+            <button class="btn amber" id="dfpSave" style="padding:5px 10px; font-size:12px;">確認已付款</button>
+          </div></div>`;
+        f.querySelector('#dfpSave').onclick = async ()=>{
+          const args = { driverId, start:g.start, end:g.end, payDate:f.querySelector('#dfpDate').value, method:f.querySelector('#dfpMethod').value, amount:f.querySelector('#dfpAmt').value };
+          if(!confirm(`確定已於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${driverName(driverId)} ${g.start}～${g.end} 的車趟報酬${args.amount?`（$${args.amount}）`:`（全額 $${money(g.total)}）`}嗎？`)) return;
+          try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}`); renderContent(); }
+          catch(err){ alert(err.message); }
+        };
+      };
+    });
+  }
+  function wireDeferredForm(){
+    const save = document.getElementById('dfSave');
+    if(!save) return;
+    const pv = document.getElementById('dfPreview');
+    let timer=null, seq=0;
+    const update = ()=>{
+      clearTimeout(timer);
+      timer = setTimeout(async ()=>{
+        const start = document.getElementById('dfStart').value, end = document.getElementById('dfEnd').value, driverId = document.getElementById('pDriver').value;
+        const my = ++seq;
+        if(!driverId || !start || !end){ pv.textContent=''; return; }
+        try{ validatePaymentRange(start, end); }catch(err){ pv.textContent = err.message; return; }
+        try{
+          const trips = await fetchDriverTripsInRange(driverId, start, end);
+          if(my!==seq || !pv.isConnected) return;
+          const list = trips.filter(t=>t.status==='completed' && !(Number(t.paidAmount)>0));
+          const total = list.reduce((s,t)=>s+tripPay(t),0);
+          pv.innerHTML = `區間內已完成未付 <b>${list.length}</b> 趟，趟報酬合計 <b>$${money(total)}</b>。`;
+        }catch(err){ if(my===seq) pv.textContent = err.message; }
+      }, 300);
+    };
+    ['dfStart','dfEnd'].forEach(id=> document.getElementById(id).oninput = update);
+    document.getElementById('dfStart').value = ymd(addDays(todayStr(), -1));
+    document.getElementById('dfEnd').value = ymd(addDays(todayStr(), -1));
+    update();
+    save.onclick = async ()=>{
+      const driverId = document.getElementById('pDriver').value;
+      const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
+      if(!driverId){ alert('請先選擇司機'); return; }
+      if(!args.dueDate){ alert('請選擇預計付款日'); return; }
+      if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的車趟掛帳，預計 ${args.dueDate} 付款嗎？`)) return;
+      try{ const r = await deferPayment(args); alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，預計 ${args.dueDate} 付款`); document.getElementById('dfNote').value=''; renderDeferredPanel(); update(); }
+      catch(err){ alert(err.message); }
+    };
   }
   // 已開單（金額凍結）的勞報單，如果跟「現在的即時帳務」對不上（例如開單後才補代墊款日期、
   // 加減項被改），在主控端提醒收回重開；司機看到的仍是凍結的數字，這裡只是給主控的警示。
@@ -3480,7 +3579,7 @@ function renderPayrollPage(c, mode){
   pDriverEl.onchange = ()=>{
     state._payDriverId = pDriverEl.value;
     if(isSlip){ state._periodSel = null; renderContent(); }   // 選了司機，整頁重畫成只看這一位
-    else refresh();
+    else { refresh(); renderDeferredPanel(); const upd = document.getElementById('dfStart'); if(upd) upd.dispatchEvent(new Event('input')); }
   };
   document.getElementById('pMonth').onchange = refresh;
   if(isSlip && scope){
@@ -3496,6 +3595,7 @@ function renderPayrollPage(c, mode){
     periodRefresh();
   }
   if(isSlip) renderPendingSettlePanel();
+  else { wireDeferredForm(); renderDeferredPanel(); }
   if(state._scrollTo){
     const sid = state._scrollTo; state._scrollTo = null;
     setTimeout(()=>{ const el = document.getElementById(sid); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); }, 1200);
@@ -4450,6 +4550,7 @@ async function renderMyEarnings(c){
   const monthStr = state._myEarningsMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">我的報酬</h2>
+    <div id="meDeferred"></div>
     <div class="panel">
       <div class="field" style="max-width:200px;"><label>查詢月份</label>
         <select id="meMonth">${monthOptionsHtml(monthStr)}</select>
@@ -4459,6 +4560,15 @@ async function renderMyEarnings(c){
     <div id="meFuel"></div>
   `;
   renderFuelPanel();
+  // 掛帳中的報酬（約好之後才付）：不分月份，司機隨時看得到「待領多少、預計哪天付」。
+  fetchDeferredTrips(dId).then(trips=>{
+    const box = document.getElementById('meDeferred');
+    if(!box || !trips.length) return;
+    box.innerHTML = groupDeferred(trips).map(g=>`<div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <div style="font-weight:600;">待領 <span class="amount">$${money(g.total)}</span>　預計 ${g.due} 支付</div>
+      <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">工作日期 ${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）${g.note?'・'+escapeHtml(g.note):''}　※ 金額為車趟報酬，實際匯款金額以扣除預支、扣稅等為準。</div>
+    </div>`).join('');
+  }).catch(()=>{});
   document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; refresh(); };
   // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的車趟，
   // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列

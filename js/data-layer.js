@@ -83,6 +83,7 @@ function mapAssignment(row) {
     extraPay: Number(row.extra_pay || 0),
     paidAmount: Number(row.paid_amount || 0), paidDate: row.paid_date || null, paidMethod: row.paid_method || null,
     paidGroup: row.paid_group || null, paidPeriodStart: row.paid_period_start || null, paidPeriodEnd: row.paid_period_end || null,
+    payDueDate: row.pay_due_date || null, payDueNote: row.pay_due_note || '',
     billingSnapshot: row.billing_total_snapshot != null ? {
       totalAmount: Number(row.billing_total_snapshot),
       totalPoints: points.length,
@@ -1273,13 +1274,13 @@ async function deleteTripPayLog(logId) {
 async function fetchDriverTripsInRange(driverId, start, end) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('assignments')
-    .select('id, trip_date, driver_id, status, fare, payroll_fare_snapshot, extra_pay, paid_amount')
+    .select('id, trip_date, driver_id, status, fare, payroll_fare_snapshot, extra_pay, paid_amount, pay_due_date')
     .eq('driver_id', driverId).gte('trip_date', start).lte('trip_date', end).order('trip_date').limit(1000);
   if (error) throw new Error('讀取區間車趟失敗：' + error.message);
   return (data || []).map(r => ({
     id: r.id, date: r.trip_date, driverId: r.driver_id, status: r.status,
     fare: Number(r.fare), payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
-    extraPay: Number(r.extra_pay || 0), paidAmount: Number(r.paid_amount || 0)
+    extraPay: Number(r.extra_pay || 0), paidAmount: Number(r.paid_amount || 0), payDueDate: r.pay_due_date || null
   }));
 }
 
@@ -1324,6 +1325,7 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
     const a = state.data.assignments.find(x => x.id === p.id);
     if (a) Object.assign(a, { paidAmount: p.part, paidDate: payDate, paidMethod: method, paidGroup: group, paidPeriodStart: start, paidPeriodEnd: end });
   });
+  state._pendingPayCache = null;
   return { count: list.length, total: paying, skipped: trips.filter(t => t.status === 'completed').length - list.length };
 }
 
@@ -1337,6 +1339,84 @@ async function cancelPaymentGroup(groupId) {
   state.data.assignments.forEach(a => {
     if (a.paidGroup === groupId) Object.assign(a, { paidAmount: 0, paidDate: null, paidMethod: null, paidGroup: null, paidPeriodStart: null, paidPeriodEnd: null });
   });
+  state._pendingPayCache = null;
+}
+
+// ---------------- 延後付款（掛帳）與待付款清單 ----------------
+// 司機同意晚一點領（例如 9/30 的報酬約好 11/15 才付）：主控把那段期間「已完成、還沒付」的車趟掛帳，
+// 記錄預計付款日；到了預計日轉帳後，用上面的區間付款登記，掛帳自動消失。只標記有掛帳的車趟，
+// 舊月份沒有逐趟標過已付，不會被誤當成欠款。完全不影響勞報單與可領淨額計算。
+async function deferPayment({ driverId, start, end, dueDate, note }) {
+  validatePaymentRange(start, end);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate || '')) throw new Error('請選擇預計付款日');
+  const text = (note || '').trim();
+  if (text.length > 60) throw new Error('備註請控制在60字以內');
+  const trips = await fetchDriverTripsInRange(driverId, start, end);
+  const targets = trips.filter(t => t.status === 'completed' && !(Number(t.paidAmount) > 0));
+  if (!targets.length) throw new Error('這個區間內沒有「已完成、尚未付款」的車趟可以掛帳');
+  const supabase = getSupabase();
+  const results = await Promise.all(targets.map(t => supabase.from('assignments').update({ pay_due_date: dueDate, pay_due_note: text || null }).eq('id', t.id)));
+  const failed = results.find(r => r.error);
+  if (failed) throw new Error('掛帳失敗（部分車趟可能已更新，請重新整理後檢查）：' + failed.error.message);
+  targets.forEach(t => {
+    const a = state.data.assignments.find(x => x.id === t.id);
+    if (a) { a.payDueDate = dueDate; a.payDueNote = text; }
+  });
+  state._pendingPayCache = null;
+  return { count: targets.length, total: targets.reduce((s, t) => s + tripPay(t), 0) };
+}
+
+async function cancelDeferredPayment(assignmentIds) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update({ pay_due_date: null, pay_due_note: null }).in('id', assignmentIds);
+  if (error) throw new Error('取消掛帳失敗：' + error.message);
+  state.data.assignments.forEach(a => { if (assignmentIds.includes(a.id)) { a.payDueDate = null; a.payDueNote = ''; } });
+  state._pendingPayCache = null;
+}
+
+// 所有掛帳中（已完成、有預計付款日、還沒付）的車趟，精簡欄位；driverId 給了就只抓那位（司機端用）。
+async function fetchDeferredTrips(driverId) {
+  const supabase = getSupabase();
+  let q = supabase.from('assignments')
+    .select('id, trip_date, driver_id, fare, payroll_fare_snapshot, extra_pay, pay_due_date, pay_due_note')
+    .eq('status', 'completed').eq('paid_amount', 0).not('pay_due_date', 'is', null).order('pay_due_date').limit(1000);
+  if (driverId) q = q.eq('driver_id', driverId);
+  const { data, error } = await q;
+  if (error) throw new Error('讀取待付款清單失敗：' + error.message);
+  return (data || []).map(r => ({
+    id: r.id, date: r.trip_date, driverId: r.driver_id, fare: Number(r.fare),
+    payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
+    extraPay: Number(r.extra_pay || 0), payDueDate: r.pay_due_date, payDueNote: r.pay_due_note || ''
+  }));
+}
+// 同一位司機＋同一個預計付款日＋同一備註 合成一筆待付款。
+function groupDeferred(trips) {
+  const map = new Map();
+  trips.forEach(t => {
+    const k = `${t.driverId}|${t.payDueDate}|${t.payDueNote}`;
+    const g = map.get(k) || { driverId: t.driverId, due: t.payDueDate, note: t.payDueNote, ids: [], start: t.date, end: t.date, total: 0 };
+    g.ids.push(t.id); g.total += tripPay(t);
+    if (t.date < g.start) g.start = t.date;
+    if (t.date > g.end) g.end = t.date;
+    map.set(k, g);
+  });
+  return [...map.values()].sort((a, b) => a.due.localeCompare(b.due) || String(a.driverId).localeCompare(String(b.driverId)));
+}
+// 首頁用：5 分鐘內共用同一份結果，付款／掛帳動作會清掉快取。
+async function getDeferredCached() {
+  const c = state._pendingPayCache;
+  if (c && Date.now() - c.at < 5 * 60 * 1000) return c.groups;
+  const groups = groupDeferred(await fetchDeferredTrips());
+  state._pendingPayCache = { at: Date.now(), groups };
+  return groups;
+}
+// 到期狀態：overdue 逾期、today 今天、soon 3 天內、later 其他。
+function deferredStatus(due) {
+  const today = todayStr();
+  if (due < today) return 'overdue';
+  if (due === today) return 'today';
+  const days = Math.round((new Date(due + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000);
+  return days <= 3 ? 'soon' : 'later';
 }
 
 // ---------------- 客戶請款例外調整（跟司機薪資調整項是兩回事） ----------------
