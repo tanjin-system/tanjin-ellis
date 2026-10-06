@@ -2164,8 +2164,9 @@ function renderRouteDetail(rid){
   const renderVer = v => `
       <div class="version-block ${!v.end?'open':''}">
         <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
-        <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km ・ 司機費用 $${money(v.driverFare||0)}</div>
+        <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
+        <div style="font-size:12.5px; margin:8px 0 0;">司機費用 <strong>$${money(v.driverFare||0)}</strong></div>
         ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
         <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
         ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
