@@ -1782,26 +1782,76 @@ async function refreshFuelClaims() {
   state.data.fuelClaims = (data || []).map(mapFuelClaim);
 }
 
-// 「尚未月結確認」名單用：只抓指定月份有已完成車趟的司機 id（欄位只有 driver_id，
-// 很輕量），一樣分頁避開1000筆上限。
-async function fetchDriverIdsWithCompletedTrips(monthStr) {
+// 「尚未月結確認」名單用：只抓指定月份已完成車趟的精簡欄位（沒有下貨點），一樣分頁避開1000筆上限。
+// 同一個月份在這個 session 只查一次（state._settleCache），首頁提醒與勞報單頁共用。
+async function fetchCompletedTripsLite(monthStr) {
   const supabase = getSupabase();
   const PAGE = 1000;
-  const ids = new Set();
-  ids.dates = new Map(); // driverId -> 有完成車趟的日期集合（判斷有沒有被勞報單涵蓋用）
+  const trips = [];
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase.from('assignments').select('driver_id, trip_date')
+    const { data, error } = await supabase.from('assignments')
+      .select('driver_id, trip_date, fare, payroll_fare_snapshot, extra_pay')
       .eq('status', 'completed').gte('trip_date', monthStr + '-01').lte('trip_date', monthEndStr(monthStr))
       .order('id').range(from, from + PAGE - 1);
     if (error) throw new Error('讀取月結名單失敗：' + error.message);
-    (data || []).forEach(r => {
-      ids.add(r.driver_id);
-      if (!ids.dates.has(r.driver_id)) ids.dates.set(r.driver_id, new Set());
-      ids.dates.get(r.driver_id).add(r.trip_date);
-    });
+    (data || []).forEach(r => trips.push({
+      driverId: r.driver_id, date: r.trip_date, fare: Number(r.fare),
+      payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
+      extraPay: Number(r.extra_pay || 0)
+    }));
     if (!data || data.length < PAGE) break;
   }
-  return ids;
+  return trips;
+}
+async function getSettleTrips(monthStr, force) {
+  if (force || !state._settleCache || state._settleCache.month !== monthStr) {
+    state._settleCache = { month: monthStr, trips: await fetchCompletedTripsLite(monthStr) };
+  }
+  return state._settleCache.trips;
+}
+
+// 「無需月結」標記：某位司機某個月不需要月結（不影響任何金額），從尚未月結名單與首頁提醒消失，可恢復。
+async function ensureSettleSkips() {
+  if (state._settleSkips) return state._settleSkips;
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('settle_skips').select('driver_id, statement_month');
+  if (error) throw new Error('讀取無需月結標記失敗：' + error.message);
+  state._settleSkips = new Set((data || []).map(r => `${r.driver_id}|${r.statement_month.slice(0, 7)}`));
+  return state._settleSkips;
+}
+function settleSkipped(driverId, monthStr) {
+  return !!(state._settleSkips && state._settleSkips.has(`${driverId}|${monthStr}`));
+}
+async function addSettleSkip(driverId, monthStr) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('settle_skips').insert({ driver_id: driverId, statement_month: `${monthStr}-01` });
+  if (error) throw new Error('標記無需月結失敗：' + error.message);
+  (await ensureSettleSkips()).add(`${driverId}|${monthStr}`);
+}
+async function removeSettleSkip(driverId, monthStr) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('settle_skips').delete().eq('driver_id', driverId).eq('statement_month', `${monthStr}-01`);
+  if (error) throw new Error('恢復失敗：' + error.message);
+  (await ensureSettleSkips()).delete(`${driverId}|${monthStr}`);
+}
+
+// 某個月份「還沒被月結／區間勞報單涵蓋、也沒標無需月結」的司機與趟數、報酬總額（精簡趟資料＋已載入的調整項）。
+function unsettledRows(monthStr, liteTrips) {
+  return state.data.drivers.map(d => {
+    if (settleSkipped(d.id, monthStr)) return null;
+    const trips = liteTrips.filter(t => t.driverId === d.id && !findCoveringStatement(d.id, t.date));
+    if (!trips.length) return null;
+    const tripTotal = trips.reduce((sum, t) => sum + tripPay(t), 0);
+    const adjustments = state.data.adjustments.filter(a => a.driverId === d.id && a.month === monthStr && !findCoveringStatement(d.id, adjustmentEffectiveDate(a)));
+    return { d, trips: trips.length, net: statementNetFromAdjustments(tripTotal, adjustments).net };
+  }).filter(Boolean);
+}
+// 提示只在每月 1～15 號顯示，且只看上個月；16 號起不論有沒有月結都不顯示。
+function settleReminderMonth() {
+  const today = todayStr();
+  if (Number(today.slice(8, 10)) > 15) return null;
+  const [y, m] = today.slice(0, 7).split('-').map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 }
 
 // ---------------- 司機「已投保職業工會」證明圖檔（僅主控可上傳／查看） ----------------

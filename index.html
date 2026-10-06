@@ -847,6 +847,7 @@ const ADMIN_TABS = [
   {id:'origins', label:'出發點資料庫'},
   {id:'routes', label:'路線管理'},
   {id:'payroll', label:'薪資結算'},
+  {id:'slips', label:'勞報單'},
   {id:'billing', label:'請款結算'},
   {id:'export', label:'資料匯出'},
   {id:'settings', label:'系統設定'}
@@ -904,7 +905,7 @@ function renderContent(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
   if(!inDriverView){
     ({home:renderHomeAdmin, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
-      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
@@ -1162,7 +1163,8 @@ async function renderHomeAdmin(c){
     {id:'dropPoints', label:'下貨點資料庫', sub:'依通路分類'},
     {id:'origins', label:'出發點資料庫', sub:'常用出發地'},
     {id:'routes', label:'路線管理', sub:'版本化下貨點順序'},
-    {id:'payroll', label:'薪資結算', sub:'司機月結報酬'},
+    {id:'payroll', label:'薪資結算', sub:'調整項與可領淨額'},
+    {id:'slips', label:'勞報單', sub:'月結、區間開單與簽名'},
     {id:'billing', label:'請款結算', sub:'通路請款拆分'},
     {id:'export', label:'資料匯出', sub:'區間匯出並封存'},
     {id:'settings', label:'系統設定', sub:'管理PIN碼'}
@@ -1198,32 +1200,25 @@ async function renderHomeAdmin(c){
     return { name: ch.name, end, daysLeft };
   }).filter(Boolean);
   const pendingFuelCount = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').length;
-  // 上個月還沒月結確認的司機：只抓「有已完成車趟的司機id」（很輕量），同一個月在這個
-  // session 只查一次；查詢失敗不影響首頁其他內容。
-  const prevMonthStr = (()=>{ const [y,m]=today.slice(0,7).split('-').map(Number); return m===1 ? `${y-1}-12` : `${y}-${pad(m-1)}`; })();
+  // 上個月還沒月結確認的司機：只在每月 1～15 號提醒（16 號起不論有沒有月結都不提示），已標「無需月結」
+  // 的不列出；同一個月在這個 session 只查一次，查詢失敗不影響首頁其他內容。
+  const prevMonthStr = settleReminderMonth();
   const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
   let unsettledNames = [];
-  try{
-    if(!state._settleCache || state._settleCache.month!==prevMonthStr){
-      state._settleCache = { month: prevMonthStr, ids: await fetchDriverIdsWithCompletedTrips(prevMonthStr) };
-    }
-    unsettledNames = state.data.drivers
-      .filter(d=>{
-        if(!state._settleCache.ids.has(d.id)) return false;
-        // 有任何一天完成車趟還沒被月結或區間勞報單涵蓋，就算尚未月結。
-        const dates = state._settleCache.ids.dates && state._settleCache.ids.dates.get(d.id);
-        if(!dates) return !state.data.statements.some(x=>x.driverId===d.id && x.month===prevMonthStr);
-        return [...dates].some(dt=>!findCoveringStatement(d.id, dt));
-      })
-      .map(d=>d.name);
-  }catch(e){ console.error('讀取月結名單失敗', e); }
+  if(prevMonthStr){
+    try{
+      await ensureSettleSkips();
+      const lite = await getSettleTrips(prevMonthStr);
+      unsettledNames = unsettledRows(prevMonthStr, lite).map(r=>r.d.name);
+    }catch(e){ console.error('讀取月結名單失敗', e); }
+  }
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
-      ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單司機尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
-      ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往薪資結算</button></div>` : ''}
+      ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單司機尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
@@ -1253,7 +1248,7 @@ async function renderHomeAdmin(c){
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
-  c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('payroll'); }; });
+  c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
   const manualRefreshBtn = document.getElementById('manualRefreshBtn');
   if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
@@ -3009,14 +3004,19 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
     </div>`;
 }
 let payrollTripsExpanded = false; // 該司機配送明細（日期/路線/車資）預設收合，跟其他清單一致
-function renderPayroll(c){
+// 薪資結算頁（算錢：調整項、報酬明細、可領淨額）與勞報單頁（文件：月結確認、區間勞報單、簽名、
+// 下載）共用同一份畫面程式，用 mode 決定要顯示哪些區塊；司機／月份選擇存在 state，兩頁連動。
+function renderPayroll(c){ return renderPayrollPage(c, 'pay'); }
+function renderSlips(c){ return renderPayrollPage(c, 'slip'); }
+function renderPayrollPage(c, mode){
+  const isSlip = mode==='slip';
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
   const inbox = state.data.statements.filter(s=>(s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
   c.innerHTML = `
-    <h2 class="section-title">薪資結算</h2>
-    <p class="section-sub">月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。</p>
-    ${inbox.length ? `<div class="panel">
+    <h2 class="section-title">${isSlip ? '勞報單' : '薪資結算'}</h2>
+    <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位司機的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
+    ${isSlip && inbox.length ? `<div class="panel">
       <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
       ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
         <span>${driverName(s.driverId)} － ${statementLabel(s)}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'} ${s.status==='confirmed'?'<span class="badge signed">已鎖定</span>':'<span class="badge progress">未鎖定</span>'}</span>
@@ -3024,6 +3024,7 @@ function renderPayroll(c){
       </div>`).join('')}
     </div>` : ''}
     ${(()=>{
+      if(!isSlip) return '';
       // 月結確認後、司機還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
       const unsigned = state.data.statements.filter(x=>x.status==='awaiting_signature')
         .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
@@ -3039,19 +3040,8 @@ function renderPayroll(c){
       </div>`;
     })()}
     ${(()=>{
-      // 新版文字上線前就簽回的勞報單，內容還是舊文字；要換成新版只能退回簽名讓司機重簽。
-      const oldSigned = state.data.statements.filter(x=>(x.status==='signed'||x.status==='confirmed') && !slipUsesV2(x))
-        .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
-      if(!oldSigned.length) return '';
-      return `<div class="panel">
-        <div class="toolbar"><h3 style="margin:0;">已簽回但仍是舊版文字（${oldSigned.length} 份）</h3><button class="btn danger" id="rejectAllOldSigned">全部退回重簽（${oldSigned.length} 份）</button></div>
-        <p class="note" style="margin-top:8px;">這些勞報單是新版文字上線前簽的，內容維持舊文字。全部退回後，司機要重新簽名，重簽後就會是新版文字；金額不變。</p>
-        <div style="font-size:13px;">${oldSigned.map(x=>`${driverName(x.driverId)}（${statementLabel(x)}）`).join('、')}</div>
-      </div>`;
-    })()}
-    ${(()=>{
       const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
-      if(!pending.length) return '';
+      if(isSlip || !pending.length) return '';
       return `<div class="panel">
         <h3 style="margin-top:0;">司機代墊申報待確認（${pending.length}）</h3>
         <p class="note" style="margin-top:0;">請核對司機交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
@@ -3062,41 +3052,39 @@ function renderPayroll(c){
         </table>
       </div>`;
     })()}
-    <div class="panel">
+    ${isSlip ? `<div class="panel">
       <div class="grid2">
         <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
         <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體司機勞報單（合併PDF）</button></div>
       </div>
       <p class="note">只會納入「已完成月結確認」的司機（每人各佔一頁，直式）；當月尚未月結確認的司機不會出現在合併檔案裡。</p>
-    </div>
+    </div>` : ''}
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>司機</label><select id="pDriver">${driverOpts}</select></div>
         <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
-      <div class="grid3">
+      ${isSlip ? '' : `<div class="grid3">
         <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option></select></div>
         <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
         <div class="field"><label>備註</label><input id="aNote"></div>
       </div>
       <div class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
-      <button class="btn ghost" id="addAdj">新增調整項</button>
+      <button class="btn ghost" id="addAdj">新增調整項</button>`}
     </div>
-    <div class="panel no-print">
+    ${isSlip ? `<div id="payrollPending"></div>` : ''}
+    ${isSlip ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
       <p class="note">司機每週（或每次）請款時，選一段期間開一張勞報單，司機簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成車趟與調整項日期自動算出，不能手動修改；期間不能跟該司機其他勞報單（月結或區間）重疊。</p>
-      <div class="grid2">
-        <div class="field"><label>司機</label><select id="perDriver">${driverOpts}</select></div>
-        <div class="field"><label>實際給付日期（轉帳日）</label><input id="perPay" type="date"></div>
-      </div>
-      <div class="grid2">
+      <p class="note" style="margin-top:0;">司機沿用上方「司機」選單。</p>
+      <div class="grid3">
         <div class="field"><label>期間開始</label><input id="perStart" type="date"></div>
         <div class="field"><label>期間結束</label><input id="perEnd" type="date"></div>
+        <div class="field"><label>實際給付日期（轉帳日）</label><input id="perPay" type="date"></div>
       </div>
       <button class="btn amber" id="perPreview">預覽區間勞報單</button>
     </div>
-    <div id="periodResult"></div>
-    <div id="payrollPending"></div>
+    <div id="periodResult"></div>` : ''}
     <div id="payrollResult"></div>
   `;
   // 收回月結（單筆／全部）：確認文字會寫清楚後果，已經簽名的特別提醒。
@@ -3112,15 +3100,6 @@ function renderPayroll(c){
   c.querySelectorAll('[data-revoke]').forEach(btn=>{
     btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.revoke); if(x) doRevoke([x]); };
   });
-  const rejectAllOldBtn = document.getElementById('rejectAllOldSigned');
-  if(rejectAllOldBtn) rejectAllOldBtn.onclick = async ()=>{
-    const list = state.data.statements.filter(x=>(x.status==='signed'||x.status==='confirmed') && !slipUsesV2(x));
-    if(!list.length) return;
-    const names = list.map(x=>`${driverName(x.driverId)}（${statementLabel(x)}）`).join('、');
-    if(!confirm(`確定要把 ${list.length} 份已簽回的勞報單全部退回簽名嗎？\n${names}\n\n退回後司機需要重新簽名（重簽後為新版文字），金額不變。`)) return;
-    try{ await rejectStatementSignatures(list.map(x=>x.id)); renderContent(); }
-    catch(err){ alert(err.message); }
-  };
   const revokeAllBtn = document.getElementById('revokeAllUnsigned');
   if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>x.status==='awaiting_signature'));
   c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{
@@ -3165,7 +3144,8 @@ function renderPayroll(c){
       if(s) openStatementView(s);
     };
   });
-  document.getElementById('printAllStatements').onclick = async ()=>{
+  const printAllBtn = document.getElementById('printAllStatements');
+  if(printAllBtn) printAllBtn.onclick = async ()=>{
     const monthStr = document.getElementById('pAllMonth').value;
     const records = state.data.statements.filter(s=>s.month===monthStr);
     if(!records.length){ alert(`${monthStr} 沒有任何司機完成月結確認`); return; }
@@ -3186,34 +3166,63 @@ function renderPayroll(c){
     }).filter(Boolean).flat();
     exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
   };
-  // 這個月有已完成車趟、但還沒按「月結確認」的司機名單；點「查看並月結」直接切到
-  // 該司機的明細。已確認過的不列出，全部確認完會顯示打勾提示。
-  function pendingSettleHtml(monthStr, monthAssignments){
-    const rows = state.data.drivers.map(d=>{
-      if(state.data.statements.some(x=>x.driverId===d.id && !x.periodStart && x.month===monthStr)) return null;
-      const live = driverMonthly(d.id, monthStr, monthAssignments);
-      // 已被區間勞報單涵蓋的日期不再算進「尚未月結」。
-      const trips = live.trips.filter(a=>!findCoveringStatement(d.id, a.date));
-      if(!trips.length) return null;
-      const tripTotal = trips.reduce((sum,a)=> sum+tripPay(a), 0);
-      const adjustments = live.adjustments.filter(a=>!findCoveringStatement(d.id, adjustmentEffectiveDate(a)));
-      const calc = statementNetFromAdjustments(tripTotal, adjustments);
-      return { d, trips:trips.length, net:calc.net };
-    }).filter(Boolean);
+  // 尚未月結名單（勞報單頁）：只在每月 1～15 號顯示、只看上個月、可收合；每位司機有「查看並月結」與「無需月結」，
+  // 已標無需月結的可在底下恢復。16 號起整個消失，不論有沒有月結。
+  async function renderPendingSettlePanel(){
+    const el = document.getElementById('payrollPending');
+    if(!el) return;
+    const mon = settleReminderMonth();
+    if(!mon){ el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="panel"><div class="empty">載入上月尚未月結名單…</div></div>';
+    let rows, skipped;
+    try{
+      await ensureSettleSkips();
+      const lite = await getSettleTrips(mon);
+      rows = unsettledRows(mon, lite);
+      skipped = state.data.drivers.filter(d=>settleSkipped(d.id, mon));
+    }catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
+    if(!el.isConnected) return;
     const total = rows.reduce((sum,r)=>sum+r.net, 0);
-    return `<div class="panel no-print" ${rows.length?'style="border-color:var(--amber); border-width:2px;"':''}>
-      <h3 style="margin-top:0;">${monthStr} 尚未月結確認${rows.length?`（${rows.length} 位）`:''}</h3>
+    el.innerHTML = `<details class="panel no-print" ${rows.length?'style="border-color:var(--amber); border-width:2px;"':''}>
+      <summary style="cursor:pointer; font-weight:700;">${mon} 尚未月結確認${rows.length?`（${rows.length} 位）`:'（已全部處理 ✅）'}</summary>
+      <div style="margin-top:8px;">
       ${rows.length ? `<table>
         <thead><tr><th>司機</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
-        <tbody>${rows.map(r=>`<tr><td>${r.d.name}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">查看並月結</button></td></tr>`).join('')}
+        <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">查看並月結</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
         <tr style="font-weight:700; background:#F4F3EF;"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
-      </table>` : '<div style="font-size:13px;">✅ 這個月所有有完成車趟的司機都已月結確認。</div>'}
-    </div>`;
+      </table>` : '<div style="font-size:13px;">這個月所有有完成車趟的司機都已月結確認或標為無需月結。</div>'}
+      ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
+        <div style="margin-top:4px;">${skipped.map(d=>`<span style="margin-right:12px; font-size:12.5px;">${escapeHtml(d.name)} <button class="btn ghost" data-settlerestore="${d.id}" style="padding:2px 8px; font-size:11.5px;">恢復</button></span>`).join('')}</div></details>` : ''}
+      </div></details>`;
+    el.querySelectorAll('[data-settlepick]').forEach(b=>{
+      b.onclick = ()=>{
+        const monthSel = document.getElementById('pMonth');
+        if(![...monthSel.options].some(o=>o.value===mon)) monthSel.add(new Option(mon, mon));
+        monthSel.value = mon; state._payrollMonth = mon;
+        document.getElementById('pDriver').value = b.dataset.settlepick; state._payDriverId = b.dataset.settlepick;
+        refresh().then(()=>{ const r=document.getElementById('payrollResult'); if(r) r.scrollIntoView({behavior:'smooth', block:'start'}); });
+      };
+    });
+    el.querySelectorAll('[data-settleskip]').forEach(b=>{
+      b.onclick = async ()=>{
+        const d = state.data.drivers.find(x=>x.id===b.dataset.settleskip);
+        if(!confirm(`確定 ${d?d.name:''} ${mon} 無需月結嗎？\n只是記錄，不影響任何金額；會從這個名單和首頁提醒消失，之後可以恢復。`)) return;
+        try{ await addSettleSkip(b.dataset.settleskip, mon); renderPendingSettlePanel(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    el.querySelectorAll('[data-settlerestore]').forEach(b=>{
+      b.onclick = async ()=>{
+        try{ await removeSettleSkip(b.dataset.settlerestore, mon); renderPendingSettlePanel(); }
+        catch(err){ alert(err.message); }
+      };
+    });
   }
   // 開啟某份勞報單的詳情：月結的切到上面的月份明細，區間的切到區間勞報單區塊。
   function openStatementView(x){
     if(x.periodStart){
-      document.getElementById('perDriver').value = x.driverId;
+      document.getElementById('pDriver').value = x.driverId; state._payDriverId = x.driverId;
+      refresh();
       document.getElementById('perStart').value = x.periodStart;
       document.getElementById('perEnd').value = x.periodEnd;
       document.getElementById('perPay').value = x.payDate || '';
@@ -3230,7 +3239,7 @@ function renderPayroll(c){
   async function periodRefresh(){
     const box = document.getElementById('periodResult');
     if(!box) return;
-    const driverId = document.getElementById('perDriver').value;
+    const driverId = document.getElementById('pDriver').value;
     const start = document.getElementById('perStart').value;
     const end = document.getElementById('perEnd').value;
     const payDate = document.getElementById('perPay').value;
@@ -3325,7 +3334,7 @@ function renderPayroll(c){
   async function refresh(){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
-    state._payrollMonth = monthStr;
+    state._payrollMonth = monthStr; state._payDriverId = driverId;
     if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
     // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
     // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
@@ -3335,14 +3344,6 @@ function renderPayroll(c){
     try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
     catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
-    const pendingEl = document.getElementById('payrollPending');
-    pendingEl.innerHTML = pendingSettleHtml(monthStr, monthAssignments);
-    pendingEl.querySelectorAll('[data-settlepick]').forEach(b=>{
-      b.onclick = ()=>{
-        document.getElementById('pDriver').value = b.dataset.settlepick;
-        refresh().then(()=>{ const el=document.getElementById('payrollResult'); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); });
-      };
-    });
     const live = driverMonthly(driverId, monthStr, monthAssignments);
     const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
     const periodOverlap = record ? null : findOverlappingStatement(driverId, monthStr+'-01', monthEndStr(monthStr));
@@ -3368,9 +3369,88 @@ function renderPayroll(c){
     const payable = ded.actualNet - advanceTotal - paidTotal;
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
-        <h3 style="margin-top:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
+        <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
+          <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
-        ${!record ? '<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費），調整項仍可新增；確認無誤後按「月結確認」凍結金額並開放司機回簽。</div>' : ''}
+        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁按「月結確認」凍結並開放司機回簽。'}</div>` : ''}
+        ${isSlip ? `<table><tr><td>報酬總額</td><td class="amount">$${money(r.net)}</td></tr><tr><td><strong>實領金額（扣稅／補充保費後）</strong></td><td class="amount"><strong>$${money(ded.actualNet)}</strong></td></tr></table>` : `
+        `}
+      </div>
+      <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
+      <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn ghost" id="perPrint">產生勞報單（列印/另存PDF）</button>
+        ${!record && !overlap ? `<button class="btn amber" id="perConfirm">確認開單（開放司機簽名）</button>` : ''}
+        ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="perReject">退回簽名</button>` : ''}
+        ${record ? `<button class="btn danger" id="perRevoke" title="帳務有問題時，整份收回、重新計算">收回這張勞報單</button>` : ''}
+      </div>`;
+    wireList();
+    document.getElementById('perPrint').onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${start}～${end}_勞報單`);
+    box.querySelectorAll('[data-perdeladj]').forEach(b=>{
+      b.onclick = async ()=>{
+        const adj = r.adjustments.find(x=>x.id===b.dataset.perdeladj);
+        if(!confirm(`確定要刪除這筆「${adj?adjTypeLabel(adj.type):''}」調整項嗎（$${money(adj?.amount||0)}，${adj?.note||'無備註'}）？刪除後無法復原。`)) return;
+        try{ await deleteAdjustment(b.dataset.perdeladj); periodRefresh(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    const pc = document.getElementById('perConfirm');
+    if(pc) pc.onclick = async ()=>{
+      if(!payDate){ alert('請先填寫「實際給付日期（轉帳日）」'); return; }
+      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}。\n凍結後金額不會再變動，並開放司機簽名。`)) return;
+      try{ await confirmPeriodStatement(driverId, start, end, payDate, live); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+    const pr = document.getElementById('perReject');
+    if(pr) pr.onclick = async ()=>{
+      if(!confirm(`確定要退回 ${driverName(driverId)} ${start}～${end} 的簽名嗎？退回後司機需要重新簽名。`)) return;
+      try{ await rejectStatementSignature(record.id); periodRefresh(); }
+      catch(err){ alert(err.message); }
+    };
+    const prv = document.getElementById('perRevoke');
+    if(prv) prv.onclick = ()=> doRevoke([record]);
+  }
+  async function refresh(){
+    const driverId = document.getElementById('pDriver').value;
+    const monthStr = document.getElementById('pMonth').value;
+    state._payrollMonth = monthStr; state._payDriverId = driverId;
+    if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
+    // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
+    // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
+    // 也不影響其他畫面的效能，查哪個月份都一樣快。
+    document.getElementById('payrollResult').innerHTML = '<div class="empty">載入中...</div>';
+    let monthAssignments;
+    try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
+    catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
+    const live = driverMonthly(driverId, monthStr, monthAssignments);
+    const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
+    const periodOverlap = record ? null : findOverlappingStatement(driverId, monthStr+'-01', monthEndStr(monthStr));
+    const isFrozen = !!record;
+    // 還沒月結確認的預覽，要用「排除預支」的淨額（跟confirmMonthlyStatement()
+    // 存檔時算的邏輯一致），不能直接用live.net（那個是含預支扣減的即時參考值）。
+    const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+    const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
+    const ded = isFrozen
+      ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
+      : computePayrollDeductions(r.net, r.reimbursement);
+    const driver = state.data.drivers.find(d=>d.id===driverId);
+    const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">司機已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">司機已回簽（未鎖定）</span>' : '<span class="badge progress">等待司機回簽</span>';
+    const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
+      v2: slipUsesV2(record), serviceName: record ? record.serviceName : (driver && driver.serviceName),
+      signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
+    });
+    const attHtml = payrollAttachmentHtml(driver, monthStr, r);
+    const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
+    // 可領淨額＝勞報單實領金額（已扣稅／補充保費）再扣掉預支與已付款（現金／轉帳先付的），即這個月還要實際匯給司機的現金。
+    const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+    const paidTotal = r.paid||0;
+    const payable = ded.actualNet - advanceTotal - paidTotal;
+    document.getElementById('payrollResult').innerHTML = `
+      <div class="panel no-print">
+        <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
+          <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
+        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
+        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁按「月結確認」凍結並開放司機回簽。'}</div>` : ''}
         <h4 data-tripstoggle style="margin:14px 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span style="color:var(--ink-soft); font-size:12px;">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
@@ -3395,14 +3475,16 @@ function renderPayroll(c){
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
         </table>
       </div>
-      <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
+      ${isSlip ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
         ${!record && !periodOverlap ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
         ${record ? `<button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>` : ''}
-      </div>`;
-    document.getElementById('printStatement').onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
+      </div>` : ''}`;
+    document.querySelectorAll('[data-togo]').forEach(b=>{ b.onclick = ()=> goTab(b.dataset.togo); });
+    const printBtn = document.getElementById('printStatement');
+    if(printBtn) printBtn.onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
     const tripsToggle = document.querySelector('[data-tripstoggle]');
     if(tripsToggle) tripsToggle.onclick = ()=>{ payrollTripsExpanded = !payrollTripsExpanded; refresh(); };
     document.querySelectorAll('[data-deladj]').forEach(btn=>{
@@ -3428,30 +3510,37 @@ function renderPayroll(c){
       catch(err){ alert(err.message); }
     };
   }
-  document.getElementById('pDriver').onchange = refresh;
+  // 司機／月份選擇存在 state，薪資結算頁與勞報單頁共用，切頁不用重選。
+  const pDriverEl = document.getElementById('pDriver');
+  if(state._payDriverId && [...pDriverEl.options].some(o=>o.value===state._payDriverId)) pDriverEl.value = state._payDriverId;
+  state._payDriverId = pDriverEl.value;
+  const setPeriodDefaults = ()=>{
+    const last = state.data.statements.filter(x=>x.driverId===pDriverEl.value && x.periodStart).map(x=>x.periodEnd).sort().pop();
+    document.getElementById('perStart').value = last ? ymd(addDays(last, 1)) : '';
+    document.getElementById('perEnd').value = ymd(addDays(todayStr(), -1));
+    document.getElementById('perPay').value = todayStr();
+  };
+  pDriverEl.onchange = ()=>{
+    state._payDriverId = pDriverEl.value;
+    refresh();
+    if(isSlip){ setPeriodDefaults(); periodRefresh(); }
+  };
   document.getElementById('pMonth').onchange = refresh;
-  {
+  if(isSlip){
     // 區間區塊：換司機時，預設開始日＝這位司機上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
     const sel = state._periodSel;
-    const perDriver = document.getElementById('perDriver');
-    const setDefaults = ()=>{
-      const last = state.data.statements.filter(x=>x.driverId===perDriver.value && x.periodStart).map(x=>x.periodEnd).sort().pop();
-      document.getElementById('perStart').value = last ? ymd(addDays(last, 1)) : '';
-      document.getElementById('perEnd').value = ymd(addDays(todayStr(), -1));
-      document.getElementById('perPay').value = todayStr();
-    };
-    if(sel && sel.driverId && [...perDriver.options].some(o=>o.value===sel.driverId)){
-      perDriver.value = sel.driverId;
+    if(sel && sel.driverId===pDriverEl.value){
       document.getElementById('perStart').value = sel.start || '';
       document.getElementById('perEnd').value = sel.end || '';
       document.getElementById('perPay').value = sel.payDate || todayStr();
-    } else { setDefaults(); }
-    perDriver.onchange = ()=>{ setDefaults(); periodRefresh(); };
+    } else { setPeriodDefaults(); }
     ['perStart','perEnd','perPay'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
     document.getElementById('perPreview').onclick = periodRefresh;
     periodRefresh();
+    renderPendingSettlePanel();
   }
-  document.getElementById('addAdj').onclick = async ()=>{
+  const addAdjBtn = document.getElementById('addAdj');
+  if(addAdjBtn) addAdjBtn.onclick = async ()=>{
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     const amount = document.getElementById('aAmount').value;
@@ -3459,7 +3548,7 @@ function renderPayroll(c){
     try{
       const aDate = document.getElementById('aDate').value || null;
       await createAdjustment({ driverId, month: monthStr, date: aDate, type: document.getElementById('aType').value, amount, note: document.getElementById('aNote').value.trim() });
-      refresh(); periodRefresh();
+      refresh();
     }catch(err){ alert(err.message); }
   };
   refresh();

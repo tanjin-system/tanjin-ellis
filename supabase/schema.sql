@@ -1036,3 +1036,10 @@ alter table assignments add column if not exists paid_group uuid;
 alter table assignments add column if not exists paid_period_start date;
 alter table assignments add column if not exists paid_period_end date;
 create index if not exists idx_assignments_paid_group on assignments(paid_group) where paid_group is not null;
+
+-- PART 16：「無需月結」標記（2026-10-06，已在線上資料庫直接執行過）
+-- 某位司機某個月不需要月結（只是記錄，不影響金額）：從尚未月結名單與首頁提醒消失，可恢復。只有主控可讀寫。
+create table if not exists settle_skips (driver_id uuid not null references drivers(id) on delete cascade, statement_month date not null, created_at timestamptz not null default now(), primary key (driver_id, statement_month));
+alter table settle_skips enable row level security;
+grant select, insert, update, delete on settle_skips to app_admin;
+create policy admin_all on settle_skips for all to app_admin using (true) with check (true);
