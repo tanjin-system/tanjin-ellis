@@ -3012,7 +3012,13 @@ function renderPayrollPage(c, mode){
   const isSlip = mode==='slip';
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  const inbox = state.data.statements.filter(s=>(s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
+  // 勞報單頁：選了司機，整個畫面（收件匣、尚未回簽、尚未月結、月結與區間勞報單）都只看這一位；
+  // 選「全部司機」才看總覽清單。薪資結算頁沒有「全部」，一定是某一位。
+  let scope = isSlip ? (state._payDriverId || '') : '';
+  if(scope && !state.data.drivers.some(d=>d.id===scope)) scope = '';
+  if(isSlip) state._payDriverId = scope;
+  const inScope = x => !scope || x.driverId===scope;
+  const inbox = state.data.statements.filter(s=>inScope(s) && (s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
   c.innerHTML = `
     <h2 class="section-title">${isSlip ? '勞報單' : '薪資結算'}</h2>
     <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位司機的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
@@ -3026,7 +3032,7 @@ function renderPayrollPage(c, mode){
     ${(()=>{
       if(!isSlip) return '';
       // 月結確認後、司機還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
-      const unsigned = state.data.statements.filter(x=>x.status==='awaiting_signature')
+      const unsigned = state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature')
         .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
       if(!unsigned.length) return `<div class="panel"><h3 style="margin:0;">司機回簽狀況</h3><div style="font-size:13px; margin-top:6px;">✅ 所有已月結確認的勞報單，司機都已回簽。</div></div>`;
       const days = x=> x.confirmedAt ? Math.max(0, Math.floor((Date.now()-new Date(x.confirmedAt).getTime())/86400000)) : null;
@@ -3052,7 +3058,7 @@ function renderPayrollPage(c, mode){
         </table>
       </div>`;
     })()}
-    ${isSlip ? `<div class="panel">
+    ${isSlip && !scope ? `<div class="panel">
       <div class="grid2">
         <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
         <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體司機勞報單（合併PDF）</button></div>
@@ -3061,7 +3067,7 @@ function renderPayrollPage(c, mode){
     </div>` : ''}
     <div class="panel">
       <div class="grid2">
-        <div class="field"><label>司機</label><select id="pDriver">${driverOpts}</select></div>
+        <div class="field"><label>司機</label><select id="pDriver">${isSlip?'<option value="">全部司機</option>':''}${driverOpts}</select></div>
         <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
       ${isSlip ? '' : `<div class="grid3">
@@ -3073,7 +3079,7 @@ function renderPayrollPage(c, mode){
       <button class="btn ghost" id="addAdj">新增調整項</button>`}
     </div>
     ${isSlip ? `<div id="payrollPending"></div>` : ''}
-    ${isSlip ? `<div class="panel no-print">
+    ${isSlip && scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
       <p class="note">司機每週（或每次）請款時，選一段期間開一張勞報單，司機簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成車趟與調整項日期自動算出，不能手動修改；期間不能跟該司機其他勞報單（月結或區間）重疊。</p>
       <p class="note" style="margin-top:0;">司機沿用上方「司機」選單。</p>
@@ -3101,7 +3107,7 @@ function renderPayrollPage(c, mode){
     btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.revoke); if(x) doRevoke([x]); };
   });
   const revokeAllBtn = document.getElementById('revokeAllUnsigned');
-  if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>x.status==='awaiting_signature'));
+  if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature'));
   c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{
     btn.onclick = ()=>{
       const x = state.data.statements.find(y=>y.id===btn.dataset.unsignedpick);
@@ -3178,8 +3184,8 @@ function renderPayrollPage(c, mode){
     try{
       await ensureSettleSkips();
       const lite = await getSettleTrips(mon);
-      rows = unsettledRows(mon, lite);
-      skipped = state.data.drivers.filter(d=>settleSkipped(d.id, mon));
+      rows = unsettledRows(mon, lite).filter(r=>!scope || r.d.id===scope);
+      skipped = state.data.drivers.filter(d=>(!scope || d.id===scope) && settleSkipped(d.id, mon));
     }catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
     if(!el.isConnected) return;
     const total = rows.reduce((sum,r)=>sum+r.net, 0);
@@ -3196,11 +3202,8 @@ function renderPayrollPage(c, mode){
       </div></details>`;
     el.querySelectorAll('[data-settlepick]').forEach(b=>{
       b.onclick = ()=>{
-        const monthSel = document.getElementById('pMonth');
-        if(![...monthSel.options].some(o=>o.value===mon)) monthSel.add(new Option(mon, mon));
-        monthSel.value = mon; state._payrollMonth = mon;
-        document.getElementById('pDriver').value = b.dataset.settlepick; state._payDriverId = b.dataset.settlepick;
-        refresh().then(()=>{ const r=document.getElementById('payrollResult'); if(r) r.scrollIntoView({behavior:'smooth', block:'start'}); });
+        state._payDriverId = b.dataset.settlepick; state._payrollMonth = mon; state._scrollTo = 'payrollResult';
+        renderContent();
       };
     });
     el.querySelectorAll('[data-settleskip]').forEach(b=>{
@@ -3232,26 +3235,17 @@ function renderPayrollPage(c, mode){
   }
   // 開啟某份勞報單的詳情：月結的切到上面的月份明細，區間的切到區間勞報單區塊。
   function openStatementView(x){
-    if(x.periodStart){
-      document.getElementById('pDriver').value = x.driverId; state._payDriverId = x.driverId;
-      refresh();
-      document.getElementById('perStart').value = x.periodStart;
-      document.getElementById('perEnd').value = x.periodEnd;
-      document.getElementById('perPay').value = x.payDate || '';
-      periodRefresh().then(()=>{ const el=document.getElementById('periodResult'); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); });
-    } else {
-      const monthSel = document.getElementById('pMonth');
-      if(![...monthSel.options].some(o=>o.value===x.month)) monthSel.add(new Option(x.month, x.month));
-      monthSel.value = x.month;
-      document.getElementById('pDriver').value = x.driverId;
-      refresh().then(()=>{ const el=document.getElementById('payrollResult'); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); });
-    }
+    state._payDriverId = x.driverId;
+    if(x.periodStart){ state._periodSel = { driverId:x.driverId, start:x.periodStart, end:x.periodEnd, payDate:x.payDate||'' }; state._scrollTo = 'periodResult'; }
+    else { state._payrollMonth = x.month; state._scrollTo = 'payrollResult'; }
+    renderContent();
   }
   // 區間勞報單區塊：預覽／確認開單／查看已開的（退回簽名、收回、列印）。
   async function periodRefresh(){
     const box = document.getElementById('periodResult');
     if(!box) return;
     const driverId = document.getElementById('pDriver').value;
+    if(!driverId){ box.innerHTML = ''; return; }
     const start = document.getElementById('perStart').value;
     const end = document.getElementById('perEnd').value;
     const payDate = document.getElementById('perPay').value;
@@ -3347,7 +3341,7 @@ function renderPayrollPage(c, mode){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     state._payrollMonth = monthStr; state._payDriverId = driverId;
-    if(!driverId){ document.getElementById('payrollResult').innerHTML='<div class="empty">請先建立司機資料</div>'; return; }
+    if(!driverId){ document.getElementById('payrollResult').innerHTML = isSlip ? '<div class="panel"><div class="empty">請先選擇司機，或從上方清單點「查看」，就會顯示這位司機的月結與區間勞報單。</div></div>' : '<div class="empty">請先建立司機資料</div>'; return; }
     // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
     // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
     // 也不影響其他畫面的效能，查哪個月份都一樣快。
@@ -3455,13 +3449,15 @@ function renderPayrollPage(c, mode){
     document.getElementById('perEnd').value = ymd(addDays(todayStr(), -1));
     document.getElementById('perPay').value = todayStr();
   };
+  // 月份選單只列近 6 個月，從清單點進較舊月份時要補上那個選項。
+  { const ms = document.getElementById('pMonth'); if(![...ms.options].some(o=>o.value===month)) ms.add(new Option(month, month)); ms.value = month; }
   pDriverEl.onchange = ()=>{
     state._payDriverId = pDriverEl.value;
-    refresh();
-    if(isSlip){ setPeriodDefaults(); periodRefresh(); }
+    if(isSlip){ state._periodSel = null; renderContent(); }   // 選了司機，整頁重畫成只看這一位
+    else refresh();
   };
   document.getElementById('pMonth').onchange = refresh;
-  if(isSlip){
+  if(isSlip && scope){
     // 區間區塊：換司機時，預設開始日＝這位司機上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
     const sel = state._periodSel;
     if(sel && sel.driverId===pDriverEl.value){
@@ -3472,7 +3468,11 @@ function renderPayrollPage(c, mode){
     ['perStart','perEnd','perPay'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
     document.getElementById('perPreview').onclick = periodRefresh;
     periodRefresh();
-    renderPendingSettlePanel();
+  }
+  if(isSlip) renderPendingSettlePanel();
+  if(state._scrollTo){
+    const sid = state._scrollTo; state._scrollTo = null;
+    setTimeout(()=>{ const el = document.getElementById(sid); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); }, 1200);
   }
   const addAdjBtn = document.getElementById('addAdj');
   if(addAdjBtn) addAdjBtn.onclick = async ()=>{
