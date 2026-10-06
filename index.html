@@ -3213,7 +3213,7 @@ function renderPayrollPage(c, mode){
       <div style="margin-top:8px;">
       ${rows.length ? `<table>
         <thead><tr><th>司機</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
-        <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">查看並月結</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
+        <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
         <tr style="font-weight:700; background:#F4F3EF;"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
       </table>` : '<div style="font-size:13px;">這個月所有有完成車趟的司機都已月結確認或標為無需月結。</div>'}
       ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
@@ -3221,7 +3221,8 @@ function renderPayrollPage(c, mode){
       </div></details>`;
     el.querySelectorAll('[data-settlepick]').forEach(b=>{
       b.onclick = ()=>{
-        state._payDriverId = b.dataset.settlepick; state._payrollMonth = mon; state._scrollTo = 'payrollResult';
+        state._payDriverId = b.dataset.settlepick; state._payrollMonth = mon; state._scrollTo = 'periodResult';
+        state._periodSel = { driverId: b.dataset.settlepick, start: mon+'-01', end: monthEndStr(mon), payDate: todayStr() };
         renderContent();
       };
     });
@@ -3361,6 +3362,12 @@ function renderPayrollPage(c, mode){
     const monthStr = document.getElementById('pMonth').value;
     state._payrollMonth = monthStr; state._payDriverId = driverId;
     if(!driverId){ document.getElementById('payrollResult').innerHTML = isSlip ? '<div class="panel"><div class="empty">請先選擇司機，或從上方清單點「查看」，就會顯示這位司機的月結與區間勞報單。</div></div>' : '<div class="empty">請先建立司機資料</div>'; return; }
+    // 勞報單頁不再提供「整月預覽／月結確認」：沒有月結勞報單的月份直接提示改用區間勞報單；
+    // 已經月結過的舊勞報單仍可在這裡查看、退回簽名、收回。
+    if(isSlip && !state.data.statements.some(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr)){
+      document.getElementById('payrollResult').innerHTML = `<div class="panel"><div class="empty">${escapeHtml(driverName(driverId))} ${monthStr} 沒有月結勞報單。要開單請在上方「區間勞報單」選期間產生。</div></div>`;
+      return;
+    }
     // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
     // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
     // 也不影響其他畫面的效能，查哪個月份都一樣快。
@@ -3398,7 +3405,7 @@ function renderPayrollPage(c, mode){
           <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
         ${statementDriftNote(record, live)}
-        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁按「月結確認」凍結並開放司機回簽。'}</div>` : ''}
+        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放司機簽名。'}</div>` : ''}
         <h4 data-tripstoggle style="margin:14px 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span style="color:var(--ink-soft); font-size:12px;">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
