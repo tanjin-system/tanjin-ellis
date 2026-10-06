@@ -1402,6 +1402,18 @@ function groupDeferred(trips) {
   });
   return [...map.values()].sort((a, b) => a.due.localeCompare(b.due) || String(a.driverId).localeCompare(String(b.driverId)));
 }
+// 掛帳金額依「檢視的期間」拆成兩塊：期間內（已經算在該月報酬裡，只註明已掛帳）與期間外（其他月份的掛帳，
+// 要另外加進應付合計）。dues 是預計付款日（去重、由早到晚）。
+function deferredSplit(trips, start, end) {
+  const pack = list => ({
+    total: list.reduce((sum, t) => sum + tripPay(t), 0),
+    dues: [...new Set(list.map(t => t.payDueDate))].sort()
+  });
+  return {
+    inRange: pack(trips.filter(t => t.date >= start && t.date <= end)),
+    other: pack(trips.filter(t => t.date < start || t.date > end))
+  };
+}
 // 首頁用：5 分鐘內共用同一份結果，付款／掛帳動作會清掉快取。
 async function getDeferredCached() {
   const c = state._pendingPayCache;

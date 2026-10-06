@@ -3498,6 +3498,10 @@ function renderPayrollPage(c, mode){
     const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
     const paidTotal = r.paid||0;
     const payable = ded.actualNet - advanceTotal - paidTotal;
+    // 掛帳（約好之後才付）：本月的只註明，其他月份的另外加進應付合計。
+    let defTrips = [];
+    try{ defTrips = await fetchDeferredTrips(driverId); }catch(e){}
+    const defSplit = deferredSplit(defTrips, monthStr+'-01', monthEndStr(monthStr));
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
@@ -3527,6 +3531,9 @@ function renderPayrollPage(c, mode){
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
           ${paidTotal ? `<tr><td>已付款（先付現金／轉帳）</td><td class="amount">-$${money(paidTotal)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
+          ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
+          ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待付（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
+          <tr><td><strong>應付合計（含掛帳）</strong></td><td class="amount"><strong>$${money(payable+defSplit.other.total)}</strong></td></tr>` : ''}
         </table>
       </div>
       ${isSlip ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
@@ -4583,6 +4590,9 @@ async function renderMyEarnings(c){
     catch(err){ resultEl.innerHTML = `<div class="empty">載入失敗：${err.message}</div>`; return; }
     if(state.tab!=='my-earnings') return; // 使用者可能已經切走這一頁
     const r = driverMonthly(dId, m, monthAssignments);
+    let defTrips = [];
+    try{ defTrips = await fetchDeferredTrips(dId); }catch(e){}
+    const defSplit = deferredSplit(defTrips, m+'-01', monthEndStr(m));
     const isCurrent = m===todayStr().slice(0,7);
     resultEl.innerHTML = `
       <div class="panel">
@@ -4593,6 +4603,9 @@ async function renderMyEarnings(c){
           ${r.reimbursement ? `<tr><td>　其中含代墊款（憑證開公司）</td><td class="amount">$${money(r.reimbursement)}</td></tr>` : ''}
           ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(r.net-(r.paid||0))}</strong></td></tr>
+          ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
+          ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待領（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
+          <tr><td><strong>應領合計（含掛帳）</strong></td><td class="amount"><strong>$${money(r.net-(r.paid||0)+defSplit.other.total)}</strong></td></tr>` : ''}
         </table>
         ${(()=>{
           const groups = new Map();
