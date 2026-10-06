@@ -2536,7 +2536,7 @@ function renderWeekGrid(containerId, dates){
     const tag = a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '';
     const extra = Number(a.extraPay)||0;
     const extraTag = extra ? ` <b style="color:${extra>0?'var(--ok,#2E7D32)':'var(--danger)'};">${extra>0?'+':'−'}${money(Math.abs(extra))}</b>` : '';
-    const paidTag = (Number(a.paidAmount)||0)>0 ? ' <span style="font-size:10px; color:var(--ok,#2E7D32);">✅已付</span>' : '';
+    const paidTag = (Number(a.paidAmount)||0)>0 ? ` <span title="${escapeHtml((a.paidDate||'')+'支付'+(a.paidPeriodStart?'　區間 '+a.paidPeriodStart+'～'+a.paidPeriodEnd:''))}" style="font-size:10px; color:var(--ok,#2E7D32);">✅${a.paidDate?a.paidDate.slice(5).replace('-','/')+'付':'已付'}</span>` : '';
     const feeLine = (a.fare || a.distanceKm || extra || paidTag) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(a.fare)}・${a.distanceKm||0}km${extraTag}${paidTag}</span>` : '';
     return `${driverName(a.driverId)}${tag}${issue}${feeLine}`;
   }
@@ -2688,8 +2688,6 @@ async function renderTripPaySection(a, el){
   const frozen = findCoveringStatement(a.driverId, a.date);
   const paid = Number(a.paidAmount)||0;
   const sameDay = state.data.assignments.filter(x=>x.date===a.date && x.id!==a.id && x.status!=='cancelled');
-  const weekDates = (()=>{ const d=new Date(a.date+'T00:00:00'); const wd=(d.getDay()+6)%7; const mon=new Date(d); mon.setDate(d.getDate()-wd); const sun=new Date(mon); sun.setDate(mon.getDate()+6); return [ymd(mon), ymd(sun)]; })();
-  const weekUnpaid = state.data.assignments.filter(x=>x.driverId===a.driverId && x.status==='completed' && x.date>=weekDates[0] && x.date<=weekDates[1] && !(Number(x.paidAmount)>0));
   el.innerHTML = `
     <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center;">
       <strong>額外金額（臨時加錢／拆店調撥）</strong>
@@ -2710,17 +2708,21 @@ async function renderTripPaySection(a, el){
     <hr style="border:none; border-top:1px solid var(--border); margin:10px 0;">
     <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center;">
       <strong>已付款</strong>
-      <span>${paid>0 ? `<span class="badge completed">已付 $${money(paid)}（${a.paidDate||'—'}・${a.paidMethod==='cash'?'現金':'轉帳'}）</span>` : '<span class="badge pending">尚未付款</span>'}</span>
+      <span>${paid>0 ? `<span class="badge completed">已付 $${money(paid)}</span>` : '<span class="badge pending">尚未付款</span>'}</span>
     </div>
     <div style="font-size:11.5px; color:var(--ink-soft); margin:2px 0 6px;">只影響「可領淨額」，不影響勞報單金額；預支功能不受影響。</div>
+    ${paid>0 ? `<div style="font-size:12.5px; margin-bottom:6px;">${a.paidDate||'—'} 以${a.paidMethod==='cash'?'現金':'轉帳'}支付${a.paidPeriodStart?`，區間 ${a.paidPeriodStart}～${a.paidPeriodEnd}`:''}。<button class="btn ghost" id="pdCancel" style="padding:3px 8px; font-size:11.5px;">${a.paidGroup?'取消這次付款（整個區間）':'取消已付款'}</button></div>` : ''}
+    <div style="font-size:12.5px; margin:6px 0 4px;">登記一次付款（${escapeHtml(driverName(a.driverId))}）：</div>
     <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-      <input id="pdAmt" type="number" value="${paid>0?paid:tripPay(a)}" style="width:110px;">
-      <input id="pdDate" type="date" value="${a.paidDate||todayStr()}">
-      <select id="pdMethod" style="width:auto;"><option value="cash" ${a.paidMethod!=='transfer'?'selected':''}>現金</option><option value="transfer" ${a.paidMethod==='transfer'?'selected':''}>轉帳</option></select>
-      <button class="btn amber" id="pdSave" style="padding:5px 10px; font-size:12px;">${paid>0?'更新已付款':'標為已付款'}</button>
-      ${paid>0 ? '<button class="btn ghost" id="pdClear" style="padding:5px 10px; font-size:12px;">取消已付款</button>' : ''}
+      <label style="font-size:12px;">區間</label><input id="pdStart" type="date" value="${a.date}"><span>～</span><input id="pdEnd" type="date" value="${a.date}">
     </div>
-    ${weekUnpaid.length ? `<div style="margin-top:8px;"><button class="btn ghost" id="pdWeek" style="padding:5px 10px; font-size:12px;">${escapeHtml(driverName(a.driverId))} 這週（${weekDates[0].slice(5)}～${weekDates[1].slice(5)}）還沒標已付的 ${weekUnpaid.length} 趟，一次標為已付</button></div>` : ''}`;
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:4px;">
+      <label style="font-size:12px;">付款日期</label><input id="pdDate" type="date" value="${todayStr()}">
+      <select id="pdMethod" style="width:auto;"><option value="cash">現金</option><option value="transfer">轉帳</option></select>
+      <input id="pdAmt" type="number" placeholder="金額（空白＝區間全額）" style="width:170px;">
+      <button class="btn amber" id="pdSave" style="padding:5px 10px; font-size:12px;">登記已付款</button>
+    </div>
+    <div id="pdPreview" style="font-size:12px; color:var(--ink-soft); margin-top:4px;"></div>`;
   const rerender = ()=>{ renderContent(); };
   el.querySelectorAll('[data-dellog]').forEach(b=>{
     b.onclick = async ()=>{
@@ -2775,18 +2777,42 @@ async function renderTripPaySection(a, el){
       catch(err){ alert(err.message); }
     };
   };
+  // 區間預覽：輸入區間時即時顯示「已完成未付 N 趟、合計 $X」（只抓必要欄位，輕量）。
+  const pdPreview = el.querySelector('#pdPreview');
+  let pdTimer = null, pdSeq = 0;
+  const updatePreview = ()=>{
+    clearTimeout(pdTimer);
+    pdTimer = setTimeout(async ()=>{
+      const start = el.querySelector('#pdStart').value, end = el.querySelector('#pdEnd').value;
+      const mySeq = ++pdSeq;
+      try{ validatePaymentRange(start, end); }catch(err){ pdPreview.textContent = err.message; return; }
+      pdPreview.textContent = '計算區間車趟…';
+      try{
+        const trips = await fetchDriverTripsInRange(a.driverId, start, end);
+        if(mySeq!==pdSeq || !pdPreview.isConnected) return;
+        const { list, total } = unpaidTripsOf(trips);
+        const paidAlready = trips.filter(t=>t.status==='completed').length - list.length;
+        pdPreview.innerHTML = `區間 ${start}～${end}：已完成未付 <b>${list.length}</b> 趟，合計 <b>$${money(total)}</b>${paidAlready?`（另有 ${paidAlready} 趟已標過已付，略過）`:''}。金額留空＝全額。`;
+      }catch(err){ if(mySeq===pdSeq) pdPreview.textContent = err.message; }
+    }, 300);
+  };
+  ['#pdStart','#pdEnd'].forEach(sel=> el.querySelector(sel).oninput = updatePreview);
+  updatePreview();
   el.querySelector('#pdSave').onclick = async ()=>{
-    try{ await setTripPaid(a.id, { amount: el.querySelector('#pdAmt').value, date: el.querySelector('#pdDate').value, method: el.querySelector('#pdMethod').value }); rerender(); }
+    const args = { driverId:a.driverId, start: el.querySelector('#pdStart').value, end: el.querySelector('#pdEnd').value,
+      payDate: el.querySelector('#pdDate').value, method: el.querySelector('#pdMethod').value, amount: el.querySelector('#pdAmt').value };
+    if(!confirm(`登記 ${driverName(a.driverId)} 於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${args.start}～${args.end} 的車趟報酬${args.amount?`（金額 $${args.amount}）`:'（全額）'}嗎？`)) return;
+    try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}${r.skipped?`（略過 ${r.skipped} 趟已付過的）`:''}`); rerender(); }
     catch(err){ alert(err.message); }
   };
-  const clr = el.querySelector('#pdClear');
-  if(clr) clr.onclick = async ()=>{ if(!confirm('確定要取消這趟的已付款記錄嗎？')) return; try{ await clearTripPaid(a.id); rerender(); }catch(err){ alert(err.message); } };
-  const wk = el.querySelector('#pdWeek');
-  if(wk) wk.onclick = async ()=>{
-    const date = el.querySelector('#pdDate').value, method = el.querySelector('#pdMethod').value;
-    if(!confirm(`把 ${driverName(a.driverId)} 這週 ${weekUnpaid.length} 趟都標為已付款（各趟金額＝該趟報酬，${method==='cash'?'現金':'轉帳'}，${date}）嗎？`)) return;
-    try{ await markTripsPaid(weekUnpaid.map(x=>x.id), date, method); rerender(); }
-    catch(err){ alert(err.message); }
+  const cancelBtn = el.querySelector('#pdCancel');
+  if(cancelBtn) cancelBtn.onclick = async ()=>{
+    if(!confirm(a.paidGroup ? '會取消同一次付款的所有車趟（整個區間），確定嗎？' : '確定要取消這趟的已付款記錄嗎？')) return;
+    try{
+      if(a.paidGroup) await cancelPaymentGroup(a.paidGroup);
+      else { const supabase = getSupabase(); const { error } = await supabase.from('assignments').update({ paid_amount: 0, paid_date: null, paid_method: null }).eq('id', a.id); if(error) throw new Error(error.message); a.paidAmount=0; a.paidDate=null; a.paidMethod=null; }
+      rerender();
+    }catch(err){ alert(err.message); }
   };
 }
 function renderAssignmentDetail(id, box){
@@ -4408,6 +4434,17 @@ async function renderMyEarnings(c){
           ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(r.net-(r.paid||0))}</strong></td></tr>
         </table>
+        ${(()=>{
+          const groups = new Map();
+          r.trips.filter(a=>(Number(a.paidAmount)||0)>0).forEach(a=>{
+            const k = a.paidGroup || ('single-'+a.id);
+            const g = groups.get(k) || { date:a.paidDate, method:a.paidMethod, ps:a.paidPeriodStart, pe:a.paidPeriodEnd, amount:0 };
+            g.amount += Number(a.paidAmount)||0; groups.set(k, g);
+          });
+          if(!groups.size) return '';
+          const monthStart = m+'-01', monthEnd = monthEndStr(m);
+          return `<div style="margin:10px 0 0;"><div style="font-size:12.5px; font-weight:600; margin-bottom:4px;">已支付紀錄</div>${[...groups.values()].sort((x,y)=>(x.date||'').localeCompare(y.date||'')).map(g=>`<div style="font-size:12.5px; padding:2px 0;">✅ ${g.date||'—'} 以${g.method==='cash'?'現金':'轉帳'}支付${g.ps?`　區間 ${g.ps}～${g.pe}`:''}　<b>$${money(g.amount)}</b>${g.ps && (g.ps<monthStart || g.pe>monthEnd) ? '<span style="color:var(--ink-soft);">（本月部分）</span>' : ''}</div>`).join('')}</div>`;
+        })()}
         ${r.reimbursement ? `<p class="note" style="margin:8px 0 0;">代墊款（例如油資）已包含在上面的報酬裡一起付給您，不屬於所得，勞報單的扣稅／補充保費只用「報酬 − 代墊款」計算，所以扣的稅會比較少。</p>` : ''}
       </div>
       <div class="panel">

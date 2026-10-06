@@ -82,6 +82,7 @@ function mapAssignment(row) {
     payrollFareSnapshot: row.payroll_fare_snapshot != null ? Number(row.payroll_fare_snapshot) : null,
     extraPay: Number(row.extra_pay || 0),
     paidAmount: Number(row.paid_amount || 0), paidDate: row.paid_date || null, paidMethod: row.paid_method || null,
+    paidGroup: row.paid_group || null, paidPeriodStart: row.paid_period_start || null, paidPeriodEnd: row.paid_period_end || null,
     billingSnapshot: row.billing_total_snapshot != null ? {
       totalAmount: Number(row.billing_total_snapshot),
       totalPoints: points.length,
@@ -1263,36 +1264,77 @@ async function deleteTripPayLog(logId) {
   await syncExtraPay(ids);
 }
 
-// 已付款（現金／轉帳）：只記錄「這趟已經先拿到多少」，影響可領淨額，不影響勞報單金額。
-async function setTripPaid(assignmentId, { amount, date, method }) {
-  const amt = Number(amount);
-  if (!Number.isFinite(amt) || amt <= 0) throw new Error('請輸入大於 0 的付款金額');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('請選擇付款日期');
-  if (method !== 'cash' && method !== 'transfer') throw new Error('請選擇付款方式');
+// 已付款（現金／轉帳）：主控填「區間日期＋付款日期」，區間內這位司機已完成、還沒標已付的車趟
+// 一次標為已付（付款金額依各趟報酬比例攤到每一趟，所以跨月時各月各自算得出已付多少）。
+// 只影響「可領淨額」，不影響勞報單金額，跟預支是兩個獨立功能；同一次付款共用 paid_group。
+// 只抓必要欄位，不連帶抓下貨點，區間再長也很輕。
+async function fetchDriverTripsInRange(driverId, start, end) {
   const supabase = getSupabase();
-  const { error } = await supabase.from('assignments').update({ paid_amount: amt, paid_date: date, paid_method: method }).eq('id', assignmentId);
-  if (error) throw new Error('記錄已付款失敗：' + error.message);
-  const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a) { a.paidAmount = amt; a.paidDate = date; a.paidMethod = method; }
+  const { data, error } = await supabase.from('assignments')
+    .select('id, trip_date, driver_id, status, fare, payroll_fare_snapshot, extra_pay, paid_amount')
+    .eq('driver_id', driverId).gte('trip_date', start).lte('trip_date', end).order('trip_date').limit(1000);
+  if (error) throw new Error('讀取區間車趟失敗：' + error.message);
+  return (data || []).map(r => ({
+    id: r.id, date: r.trip_date, driverId: r.driver_id, status: r.status,
+    fare: Number(r.fare), payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
+    extraPay: Number(r.extra_pay || 0), paidAmount: Number(r.paid_amount || 0)
+  }));
 }
 
-async function clearTripPaid(assignmentId) {
-  const supabase = getSupabase();
-  const { error } = await supabase.from('assignments').update({ paid_amount: 0, paid_date: null, paid_method: null }).eq('id', assignmentId);
-  if (error) throw new Error('取消已付款失敗：' + error.message);
-  const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a) { a.paidAmount = 0; a.paidDate = null; a.paidMethod = null; }
+function validatePaymentRange(start, end) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '')) throw new Error('請選擇區間的開始與結束日期');
+  if (end < start) throw new Error('結束日期不能早於開始日期');
+  if ((new Date(end) - new Date(start)) / 86400000 > 62) throw new Error('一次付款的區間最長 62 天');
 }
 
-// 週領快捷：把某位司機在日期區間內「已完成、還沒標已付」的車趟，一次標為已付款（金額＝該趟報酬）。
-async function markTripsPaid(assignmentIds, date, method) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('請選擇付款日期');
+// 預覽／實際付款共用：區間內已完成、尚未標已付的車趟與合計。
+function unpaidTripsOf(trips) {
+  const list = trips.filter(t => t.status === 'completed' && !(Number(t.paidAmount) > 0));
+  return { list, total: list.reduce((s, t) => s + tripPay(t), 0) };
+}
+
+async function recordPeriodPayment({ driverId, start, end, payDate, method, amount }) {
+  validatePaymentRange(start, end);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate || '')) throw new Error('請選擇付款日期');
   if (method !== 'cash' && method !== 'transfer') throw new Error('請選擇付款方式');
-  for (const id of assignmentIds) {
-    const a = state.data.assignments.find(x => x.id === id);
-    if (!a) continue;
-    await setTripPaid(id, { amount: tripPay(a), date, method });
-  }
+  const trips = await fetchDriverTripsInRange(driverId, start, end);
+  const { list, total } = unpaidTripsOf(trips);
+  if (!list.length) throw new Error('這個區間內沒有「已完成、尚未標已付」的車趟');
+  const paying = (amount === '' || amount == null) ? total : Number(amount);
+  if (!Number.isFinite(paying) || paying <= 0) throw new Error('付款金額要大於 0');
+  if (paying > total + 0.005) throw new Error(`付款金額 $${paying} 超過區間內車趟報酬合計 $${total}`);
+  // 依各趟報酬比例攤，最後一趟補尾差，加總一定等於付款金額。
+  const group = crypto.randomUUID();
+  let allocated = 0;
+  const parts = list.map((t, i) => {
+    const part = i === list.length - 1 ? Math.round((paying - allocated) * 100) / 100 : Math.round(paying * tripPay(t) / total * 100) / 100;
+    allocated += part;
+    return { id: t.id, part };
+  });
+  const supabase = getSupabase();
+  const results = await Promise.all(parts.map(p => supabase.from('assignments').update({
+    paid_amount: p.part, paid_date: payDate, paid_method: method,
+    paid_group: group, paid_period_start: start, paid_period_end: end
+  }).eq('id', p.id)));
+  const failed = results.find(r => r.error);
+  if (failed) throw new Error('記錄已付款失敗（部分車趟可能已更新，請重新整理後檢查）：' + failed.error.message);
+  parts.forEach(p => {
+    const a = state.data.assignments.find(x => x.id === p.id);
+    if (a) Object.assign(a, { paidAmount: p.part, paidDate: payDate, paidMethod: method, paidGroup: group, paidPeriodStart: start, paidPeriodEnd: end });
+  });
+  return { count: list.length, total: paying, skipped: trips.filter(t => t.status === 'completed').length - list.length };
+}
+
+// 取消整次付款（同一個 paid_group 的所有車趟一起取消）。
+async function cancelPaymentGroup(groupId) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments')
+    .update({ paid_amount: 0, paid_date: null, paid_method: null, paid_group: null, paid_period_start: null, paid_period_end: null })
+    .eq('paid_group', groupId);
+  if (error) throw new Error('取消付款失敗：' + error.message);
+  state.data.assignments.forEach(a => {
+    if (a.paidGroup === groupId) Object.assign(a, { paidAmount: 0, paidDate: null, paidMethod: null, paidGroup: null, paidPeriodStart: null, paidPeriodEnd: null });
+  });
 }
 
 // ---------------- 客戶請款例外調整（跟司機薪資調整項是兩回事） ----------------

@@ -1028,3 +1028,11 @@ create index if not exists idx_tpa_group on trip_pay_adjustments(group_id);
 alter table trip_pay_adjustments enable row level security;
 grant select, insert, update, delete on trip_pay_adjustments to app_admin;
 create policy admin_all on trip_pay_adjustments for all to app_admin using (true) with check (true);
+
+-- PART 15b：已付款改成「區間付款」（2026-10-06，已在線上資料庫直接執行過）
+-- 主控填區間＋付款日期，區間內已完成未付的車趟一次標為已付（金額依各趟報酬比例攤）；
+-- 同一次付款共用 paid_group，並記錄 paid_period_start/end，週班表顯示「✅10/3付」、司機我的報酬顯示支付日與區間。
+alter table assignments add column if not exists paid_group uuid;
+alter table assignments add column if not exists paid_period_start date;
+alter table assignments add column if not exists paid_period_end date;
+create index if not exists idx_assignments_paid_group on assignments(paid_group) where paid_group is not null;
