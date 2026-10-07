@@ -4398,7 +4398,7 @@ function renderTodayDetail(todays){
             </div>
             ${!dp.photo && dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
             ${dp.status!=='completed' ? `<div style="margin-top:8px;">
-              <label style="font-size:12px; color:var(--ink-soft); display:block; margin-bottom:3px;">若無法送達，請選擇原因：</label>
+              <label style="font-size:12px; color:var(--ink-soft); display:block; margin-bottom:3px;">若無法完成，請選擇原因：</label>
               <select data-issue="${a.id}|${dp.id}" style="width:100%;">
                 <option value="">－選擇原因－</option>
                 ${['通路未下單','央廚未出貨','便當翻覆','遲到拒收'].map(r=>`<option value="${r}" ${dp.issueReason===r?'selected':''}>${r}</option>`).join('')}
