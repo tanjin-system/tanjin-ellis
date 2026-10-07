@@ -1402,7 +1402,7 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
   if (!list.length) throw new Error('這個區間內沒有「已完成、尚未標已付」的車趟');
   const paying = (amount === '' || amount == null) ? total : Number(amount);
   if (!Number.isFinite(paying) || paying <= 0) throw new Error('付款金額要大於 0');
-  if (paying > total + 0.005) throw new Error(`付款金額 $${paying} 超過區間內車趟報酬合計 $${total}`);
+  if (paying > total + 0.005) throw new Error(`付款金額 $${paying} 超過區間內報酬合計 $${total}`);
   // 依各趟報酬比例攤，最後一趟補尾差，加總一定等於付款金額。
   const group = crypto.randomUUID();
   let allocated = 0;
