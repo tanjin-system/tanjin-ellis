@@ -177,7 +177,7 @@ function addDays(dateStr, days){ const d=new Date(dateStr+'T00:00:00'); d.setDat
 function monthEndStr(monthStr){ const [y,m] = monthStr.split('-').map(Number); return ymd(new Date(y,m,0)); }
 // 安全性修補：夥伴端可自由輸入的文字（目前是 issueNote 異常備註）在塞進 innerHTML 前
 // 一定要先跳脫，否則夥伴可以在備註裡放 <img onerror=...> 之類的內容，主控端打開該筆
-// 車趟時就會在主控瀏覽器執行，偷走主控的登入token（有全庫存取權）。
+// 任務時就會在主控瀏覽器執行，偷走主控的登入token（有全庫存取權）。
 function escapeHtml(s){
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -609,7 +609,7 @@ function tripBilling(dropPoints, distanceKm, channelsList){
   let totalAmount = 0;
 
   // 共配拆分：所有「依里程+下貨點數」公式的通路，共用同一套里程/點數費率，
-  // 先算出整趟共同總額，再依各通路下貨點數比例分攤（同一車趟共配多個通路時使用）。
+  // 先算出整趟共同總額，再依各通路下貨點數比例分攤（同一任務共配多個通路時使用）。
   const pooledIds = Object.keys(countByChannel).filter(chId=>{
     const ch = channels.find(c=>c.id===chId);
     return ch && ch.formulaType !== 'flat_per_trip';
@@ -680,10 +680,10 @@ function findMondayQuoteRoute(route){
 }
 // 對客戶的請款金額：一律以「路線管理」裡這條路線（如果有「星期一」報價版本，
 // 不管實際是哪一天、用哪個版本跑的，套用星期一版本）當天生效的拆賬金額為準
-// ——路線管理的拆賬是主控手動輸入／確認過的金額，車趟完成當下資料庫自動
+// ——路線管理的拆賬是主控手動輸入／確認過的金額，任務完成當下資料庫自動
 // 算出來的 a.billingSnapshot 只是formula估算值，兩邊算法本來就不保證一致，
 // 這正是請款結算跟路線管理對不起來的原因。只有在路線被刪除、或該版本從未
-// 設定過拆賬金額時，才退回用車趟自己的快照／即時試算頂著（夥伴薪資不受
+// 設定過拆賬金額時，才退回用任務自己的快照／即時試算頂著（夥伴薪資不受
 // 影響，夥伴費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
 function effectiveByChannelForAssignment(a){
   const route = state.data.routes.find(r=>r.id===a.routeId);
@@ -759,14 +759,14 @@ function driverMonthly(driverId, monthStr, assignmentsList = state.data.assignme
   const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
   const tripTotal = trips.reduce((s,a)=> s+tripPay(a), 0);
   const adjustments = state.data.adjustments.filter(a=> a.driverId===driverId && a.month===monthStr);
-  // 代墊款（reimbursement）已經包含在車趟報酬裡一起付給夥伴，只是勞報單要拆出來
+  // 代墊款（reimbursement）已經包含在任務報酬裡一起付給夥伴，只是勞報單要拆出來
   // 不算所得，不影響報酬總額，所以不計入加減項。
   const adjTotal = adjustments.reduce((s,a)=> a.type==='reimbursement' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
   const reimbursement = adjustments.filter(a=>a.type==='reimbursement').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
   const paid = trips.reduce((s,a)=> s+(Number(a.paidAmount)||0), 0);
   return { trips, tripTotal, adjustments, adjTotal, reimbursement, paid, net: tripTotal+adjTotal };
 }
-// 區間版（區間勞報單用）：車趟取日期在 [start,end] 內已完成的；調整項依「調整項日期」歸入
+// 區間版（區間勞報單用）：任務取日期在 [start,end] 內已完成的；調整項依「調整項日期」歸入
 // （沒有日期的舊資料視為該月1日）。回傳格式跟 driverMonthly 一致。
 function driverRange(driverId, start, end, assignmentsList = state.data.assignments){
   const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date>=start && a.date<=end && a.status==='completed');
@@ -828,7 +828,7 @@ function computeProfitSnapshot(){
   state.data.drivers.forEach(d=>{
     const r = driverMonthly(d.id, monthStr);
     // 預支只是提前發放薪資、不是公司少付一筆錢，不能從支出扣掉，否則預支
-    // 越多利潤就被灌水越多；沿用勞報單的算法（車趟報酬＋加減項，不含預支）。
+    // 越多利潤就被灌水越多；沿用勞報單的算法（任務報酬＋加減項，不含預支）。
     expenseTotal += statementNetFromAdjustments(r.tripTotal, r.adjustments).net;
   });
   return { perChannel, revenueTotal, expenseTotal, profit: revenueTotal-expenseTotal, monthStr };
@@ -1107,7 +1107,7 @@ function holidayForDate(dateStr){
   return TAIWAN_HOLIDAYS_2026.find(h => dateStr>=h.start && dateStr<=h.end) || null;
 }
 // 節日賀詞是「祝福」不是「放假通知」，車隊不一定真的休息——如果主控
-// 那天其實有排這位夥伴的班（車趟狀態不是cancelled），代表他當天照常
+// 那天其實有排這位夥伴的班（任務狀態不是cancelled），代表他當天照常
 // 出車，就不顯示賀詞了（顯示「中秋節快樂，闔家團圓」給一個正在跑車的
 // 夥伴看很奇怪）。是依「這位夥伴本人」當天有沒有被排班判斷，不是看
 // 整個車隊有沒有人上班——同一天，沒被排班的夥伴正常看得到賀詞，有
@@ -1129,7 +1129,7 @@ function currentProgressShifts(){
 }
 // 夥伴首頁「同出發點今日出發狀況」：同出發點所有還沒完成的車次都列出來，
 // 只顯示「出發了沒」，不含下貨點/店名等配送細節；完成的車次直接從清單
-// 消失。夥伴登入時 state.data.assignments 因為RLS只有自己的車趟，算不出
+// 消失。夥伴登入時 state.data.assignments 因為RLS只有自己的任務，算不出
 // 「同出發點其他車次」，要透過 fetchDepotOverview()（呼叫schema.sql的
 // security definer函式）另外查；主控本人或「主控檢視中」預覽時本來就有
 // 完整資料，直接從 state.data 算，確保跟夥伴實際登入看到的內容一致。
@@ -1208,7 +1208,7 @@ async function renderHomeAdmin(c){
   // 的不列出；同一個月在這個 session 只查一次，查詢失敗不影響首頁其他內容。
   const prevMonthStr = settleReminderMonth();
   const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
-  // 下週（含之後）還有草稿車趟沒發佈：提醒主控（夥伴看不到）。
+  // 下週（含之後）還有草稿任務沒發佈：提醒主控（夥伴看不到）。
   const draftWeekCount = state.data.assignments.filter(a=>a.published===false && a.date>=getWeekDates(0)[0]).length;
   let deferredDue = [];
   try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
@@ -1226,7 +1226,7 @@ async function renderHomeAdmin(c){
     ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
-      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的車趟尚未發佈（夥伴看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
+      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往薪資結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
@@ -1426,7 +1426,7 @@ function renderDrivers(c){
         <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
           <label>勞報單勞務名稱（僅主控可設定）</label>
           <input id="eServiceName" maxlength="30" placeholder="${DEFAULT_SERVICE_NAME}" value="${escapeHtml(d.serviceName||'')}">
-          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">空白＝預設名稱。名稱必須符合實際工作：當月有完成車趟的，名稱要含「配送」，否則月結確認會被擋下；已月結確認的勞報單不受影響（名稱在月結當下凍結）。</div>
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">空白＝預設名稱。名稱必須符合實際工作：當月有完成任務的，名稱要含「配送」，否則月結確認會被擋下；已月結確認的勞報單不受影響（名稱在月結當下凍結）。</div>
         </div>
         <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
           <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="eUnion" style="width:auto;" ${d.unionInsured?'checked':''}> 已投保職業工會（僅主控可設定）</label>
@@ -1594,10 +1594,10 @@ function renderDrivers(c){
     listEl.querySelectorAll('[data-del]').forEach(btn=>{
       btn.onclick = async ()=>{
         const driver = state.data.drivers.find(d=>d.id===btn.dataset.del);
-        if(!confirm(`確定要刪除夥伴「${driver?.name||''}」嗎？\n\n如果這位夥伴已有歷史車趟紀錄，系統會改為「停用」以保留歷史資料（該夥伴將無法再登入）；如果從未有任何車趟，會直接永久刪除、無法復原。`)) return;
+        if(!confirm(`確定要刪除夥伴「${driver?.name||''}」嗎？\n\n如果這位夥伴已有歷史任務紀錄，系統會改為「停用」以保留歷史資料（該夥伴將無法再登入）；如果從未有任何任務，會直接永久刪除、無法復原。`)) return;
         try{
           const result = await deleteOrDeactivateDriver(btn.dataset.del);
-          if(result==='deactivated') alert('這位夥伴已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
+          if(result==='deactivated') alert('這位夥伴已有歷史任務紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
           renderContent();
         }catch(err){ alert(err.message); }
       };
@@ -1668,7 +1668,7 @@ let editingChannelId = null;
 function renderChannels(c){
   c.innerHTML = `
     <h2 class="section-title">通路管理</h2>
-    <p class="section-sub">每個通路可以設定自己的請款依據：「依里程+下貨點數」的通路若同車趟共配，會先算出共同總額再依點數比例分攤；「整趟固定金額」（例如牧穀）則不參與共配、獨立計算。也可設定請款週期規則。</p>
+    <p class="section-sub">每個通路可以設定自己的請款依據：「依里程+下貨點數」的通路若同任務共配，會先算出共同總額再依點數比例分攤；「整趟固定金額」（例如牧穀）則不參與共配、獨立計算。也可設定請款週期規則。</p>
     <div class="panel">
       <div class="grid4">
         <div class="field"><label>通路名稱</label><input id="chName"></div>
@@ -1805,10 +1805,10 @@ function renderChannelList(){
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const ch = state.data.channels.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除通路「${ch?.name||''}」嗎？\n\n如果這個通路已有下貨點或歷史車趟關聯，系統會改為「已停用」保留歷史分類；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要刪除通路「${ch?.name||''}」嗎？\n\n如果這個通路已有下貨點或歷史任務關聯，系統會改為「已停用」保留歷史分類；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateChannel(btn.dataset.del);
-        if(result==='deactivated') alert('這個通路已有下貨點或歷史車趟關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
+        if(result==='deactivated') alert('這個通路已有下貨點或歷史任務關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
         renderContent();
       }catch(err){ alert(err.message); }
     };
@@ -1905,10 +1905,10 @@ function renderDpListBody(){
   wrap.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除下貨點「${dp?dpLabel(dp):''}」嗎？\n\n如果這個下貨點已被路線版本或歷史車趟使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要刪除下貨點「${dp?dpLabel(dp):''}」嗎？\n\n如果這個下貨點已被路線版本或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateDropPoint(btn.dataset.del);
-        if(result==='deactivated') alert('這個下貨點已被路線版本或歷史車趟使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        if(result==='deactivated') alert('這個下貨點已被路線版本或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
         renderContent();
       }catch(err){ alert(err.message); }
     };
@@ -1980,10 +1980,10 @@ function renderOgList(){
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const og = state.data.origins.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除出發點「${og?.label||og?.address||''}」嗎？\n\n如果這個出發點已被路線或歷史車趟使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要刪除出發點「${og?.label||og?.address||''}」嗎？\n\n如果這個出發點已被路線或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateOrigin(btn.dataset.del);
-        if(result==='deactivated') alert('這個出發點已被路線或歷史車趟使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        if(result==='deactivated') alert('這個出發點已被路線或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
         renderContent();
       }catch(err){ alert(err.message); }
     };
@@ -2407,7 +2407,7 @@ function renderRouteDetail(rid){
   });
 }
 
-// ---------- 週期任務清單（直接指派夥伴＋出發點，這裡才產生實際車趟） ----------
+// ---------- 週期任務清單（直接指派夥伴＋出發點，這裡才產生實際任務） ----------
 const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
 // 車次排序用：從「第X車...」抓出中文數字X換算成阿拉伯數字，抓不到的排到最後面
 // （維持原本相對順序，不會亂跳）。支援到「第十九車」，車隊規模通常用不到更多。
@@ -2475,7 +2475,7 @@ async function renderScheduleAdmin(c){
         <div class="field"><label>結束日期（單日則同起始日）</label><input id="sEnd" type="date" value="${todayStr()}"></div>
       </div>
       <div class="field">
-        <label>套用星期（僅勾選的星期會建立車趟）</label>
+        <label>套用星期（僅勾選的星期會建立任務）</label>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           ${WEEKDAY_ZH.map((l,i)=>`<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="wdcheck" value="${i}" checked style="width:auto;">${l}</label>`).join('')}
         </div>
@@ -2549,7 +2549,7 @@ async function renderScheduleAdmin(c){
         cursor = ymd(addDays(cursor,1));
       }
     }catch(err){ alert(err.message); }
-    alert(`已建立 ${created} 筆車趟。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過。`:''}`);
+    alert(`已建立 ${created} 筆任務。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過。`:''}`);
     renderContent();
   };
   renderWeekGrid('gridWeek1', week1);
@@ -2567,7 +2567,7 @@ function renderWeekGrid(containerId, dates){
     // 不管是還沒處理、還是夥伴已經填了未配達原因（通路未下單/央廚未出貨等）——
     // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
     // 會漏掉「夥伴把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
-    // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的車趟明細顯示，
+    // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的任務明細顯示，
     // 這裡週期任務清單格子維持簡單，不重複塞理由文字）。
     return `<td class="grid-cell" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
   }
@@ -2582,7 +2582,7 @@ function renderWeekGrid(containerId, dates){
     return `${driverName(a.driverId)}${tag}${issue}${feeLine}`;
   }
   // 「星期一」／「週二到五」這種分成兩條路線、但在週期任務清單合併成同一格的車次：不能只看
-  // 依星期幾挑中的那一條路線，如果同一天同一班另一條路線底下也有車趟（例如星期一那天
+  // 依星期幾挑中的那一條路線，如果同一天同一班另一條路線底下也有任務（例如星期一那天
   // 實際用了「週二到五」版本，或同一位夥伴兩條路線都排了），也要一起列出來，不然點
   // 夥伴名字只看得到其中一趟、另一趟被藏起來。同一格有多趟時，每趟各自可以點擊，
   // 並標出是哪一條路線版本。
@@ -2639,8 +2639,8 @@ function renderWeekGrid(containerId, dates){
       </div>`;
   }).join('');
   wrap.innerHTML = blocks || '<div class="empty">此出發點尚無路線，請先到「路線管理」建立</div>';
-  // 車趟明細改成直接展開在點擊的那一列下方（同一張表格裡插入一列），不用再滑到
-  // 最底部看；同一列（同一個車次/班次）再點一次收合，點別的車趟就換成顯示那一趟。
+  // 任務明細改成直接展開在點擊的那一列下方（同一張表格裡插入一列），不用再滑到
+  // 最底部看；同一列（同一個車次/班次）再點一次收合，點別的任務就換成顯示那一趟。
   wrap.querySelectorAll('[data-viewassign]').forEach(td=>{
     td.onclick = ()=>{
       const tr = td.closest('tr');
@@ -2678,7 +2678,7 @@ function renderQuickCreate(routeId, date){
   const route = state.data.routes.find(r=>r.id===routeId);
   const version = getActiveVersion(route, date);
   if(!version){
-    box.innerHTML = `<div class="panel"><div class="note" style="border-color:var(--danger); color:var(--danger);">此路線在 ${date} 尚無生效的下貨點版本，請先到「路線管理」建立對應版本後再指派，避免車趟下貨點是空的。</div></div>`;
+    box.innerHTML = `<div class="panel"><div class="note" style="border-color:var(--danger); color:var(--danger);">此路線在 ${date} 尚無生效的下貨點版本，請先到「路線管理」建立對應版本後再指派，避免任務下貨點是空的。</div></div>`;
     return;
   }
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
@@ -2706,7 +2706,7 @@ function renderQuickCreate(routeId, date){
     }catch(err){ alert(err.message); }
   };
 }
-// 週期任務清單車趟明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
+// 週期任務清單任務明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
 // 額外金額併進這一趟的報酬（我的報酬、薪資結算、勞報單、即時利潤自動跟著變，勞報單不單獨列項）；
 // 已付款只影響可領淨額，不影響勞報單金額，跟預支是兩個獨立功能。
 async function renderTripPaySection(a, el){
@@ -2725,7 +2725,7 @@ async function renderTripPaySection(a, el){
   if(!el.isConnected) return;
   const own = logs.filter(l=>l.assignment_id===a.id);
   const sig = x=> `${x>0?'+':'−'}$${money(Math.abs(x))}`;
-  const tripLabel = id=>{ const t = state.data.assignments.find(x=>x.id===id); return t ? `${routeName(t.routeId)}（${driverName(t.driverId)}）` : '其他車趟'; };
+  const tripLabel = id=>{ const t = state.data.assignments.find(x=>x.id===id); return t ? `${routeName(t.routeId)}（${driverName(t.driverId)}）` : '其他任務'; };
   const extra = Number(a.extraPay)||0;
   const frozen = findCoveringStatement(a.driverId, a.date);
   const paid = Number(a.paidAmount)||0;
@@ -2769,7 +2769,7 @@ async function renderTripPaySection(a, el){
   el.querySelectorAll('[data-dellog]').forEach(b=>{
     b.onclick = async ()=>{
       const l = logs.find(x=>x.id===b.dataset.dellog);
-      if(!confirm(l && l.group_id ? '這是拆店調撥，會把同組所有車趟的金額一起刪除，確定嗎？' : '確定要刪除這筆額外金額嗎？')) return;
+      if(!confirm(l && l.group_id ? '這是拆店調撥，會把同組所有任務的金額一起刪除，確定嗎？' : '確定要刪除這筆額外金額嗎？')) return;
       try{ await deleteTripPayLog(b.dataset.dellog); rerender(); }catch(err){ alert(err.message); }
     };
   });
@@ -2787,7 +2787,7 @@ async function renderTripPaySection(a, el){
       <div style="border:1px dashed var(--border); padding:8px; border-radius:8px;">
         <div style="font-size:12px; margin-bottom:6px;">例如這趟 8 家 $800，拆 4／2／2：這趟保留 400，另外兩趟各加 200。總額不用一樣（距離變短可以少付）。</div>
         <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;"><span style="font-size:12.5px;">這趟（${escapeHtml(driverName(a.driverId))}）調整後保留</span><input id="spKeep" type="number" value="${P}" style="width:100px;"></div>
-        ${sameDay.length ? sameDay.map(t=>`<div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;"><label style="display:flex; gap:4px; align-items:center; font-size:12.5px; flex:1;"><input type="checkbox" class="spPick" data-id="${t.id}" style="width:auto;"> ${escapeHtml(routeName(t.routeId))}（${escapeHtml(driverName(t.driverId))}）</label><span style="font-size:12px;">加</span><input type="number" class="spAdd" data-id="${t.id}" value="0" style="width:90px;"></div>`).join('') : '<div class="empty">當天沒有其他車趟可以分</div>'}
+        ${sameDay.length ? sameDay.map(t=>`<div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;"><label style="display:flex; gap:4px; align-items:center; font-size:12.5px; flex:1;"><input type="checkbox" class="spPick" data-id="${t.id}" style="width:auto;"> ${escapeHtml(routeName(t.routeId))}（${escapeHtml(driverName(t.driverId))}）</label><span style="font-size:12px;">加</span><input type="number" class="spAdd" data-id="${t.id}" value="0" style="width:90px;"></div>`).join('') : '<div class="empty">當天沒有其他任務可以分</div>'}
         <input id="spNote" placeholder="原因（選填，例如：第X車夥伴未到）" maxlength="60" style="margin:6px 0; width:100%;">
         <div id="spSummary" style="font-size:12.5px; margin-bottom:6px;"></div>
         <button class="btn amber" id="spSave" style="padding:5px 10px; font-size:12px;">儲存拆店調撥</button>
@@ -2828,7 +2828,7 @@ async function renderTripPaySection(a, el){
       const start = el.querySelector('#pdStart').value, end = el.querySelector('#pdEnd').value;
       const mySeq = ++pdSeq;
       try{ validatePaymentRange(start, end); }catch(err){ pdPreview.textContent = err.message; return; }
-      pdPreview.textContent = '計算區間車趟…';
+      pdPreview.textContent = '計算區間任務…';
       try{
         const trips = await fetchDriverTripsInRange(a.driverId, start, end);
         if(mySeq!==pdSeq || !pdPreview.isConnected) return;
@@ -2843,13 +2843,13 @@ async function renderTripPaySection(a, el){
   el.querySelector('#pdSave').onclick = async ()=>{
     const args = { driverId:a.driverId, start: el.querySelector('#pdStart').value, end: el.querySelector('#pdEnd').value,
       payDate: el.querySelector('#pdDate').value, method: el.querySelector('#pdMethod').value, amount: el.querySelector('#pdAmt').value };
-    if(!confirm(`登記 ${driverName(a.driverId)} 於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${args.start}～${args.end} 的車趟報酬${args.amount?`（金額 $${args.amount}）`:'（全額）'}嗎？`)) return;
+    if(!confirm(`登記 ${driverName(a.driverId)} 於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${args.start}～${args.end} 的任務報酬${args.amount?`（金額 $${args.amount}）`:'（全額）'}嗎？`)) return;
     try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}${r.skipped?`（略過 ${r.skipped} 趟已付過的）`:''}`); rerender(); }
     catch(err){ alert(err.message); }
   };
   const cancelBtn = el.querySelector('#pdCancel');
   if(cancelBtn) cancelBtn.onclick = async ()=>{
-    if(!confirm(a.paidGroup ? '會取消同一次付款的所有車趟（整個區間），確定嗎？' : '確定要取消這趟的已付款記錄嗎？')) return;
+    if(!confirm(a.paidGroup ? '會取消同一次付款的所有任務（整個區間），確定嗎？' : '確定要取消這趟的已付款記錄嗎？')) return;
     try{
       if(a.paidGroup) await cancelPaymentGroup(a.paidGroup);
       else { const supabase = getSupabase(); const { error } = await supabase.from('assignments').update({ paid_amount: 0, paid_date: null, paid_method: null }).eq('id', a.id); if(error) throw new Error(error.message); a.paidAmount=0; a.paidDate=null; a.paidMethod=null; }
@@ -2863,7 +2863,7 @@ function renderAssignmentDetail(id, box){
   const canReassign = a.status!=='completed';
   const otherDrivers = state.data.drivers.filter(d=>d.status==='active' && d.id!==a.driverId);
   // 請款總額要跟請款結算/路線管理看到的數字一致：優先用「星期一報價路線」
-  // 當天生效版本手動輸入的拆賬金額，不是車趟完成當下資料庫自動算出來的
+  // 當天生效版本手動輸入的拆賬金額，不是任務完成當下資料庫自動算出來的
   // a.billingSnapshot（那只是formula估算值，例如第七車/第八車平日是跑
   // 「週二到五」版本，路線管理裡本來就沒在那個版本填請款金額，不能直接
   // 顯示資料庫的估算snapshot，否則會跟路線管理顯示的對不起來）。
@@ -3133,7 +3133,7 @@ function renderPayrollPage(c, mode){
     </div>`}
     ${isSlip ? '' : `<div class="panel no-print">
       <h3 style="margin-top:0;">延後付款（掛帳）</h3>
-      <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的車趟掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+      <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
       <div class="grid3">
         <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
         <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
@@ -3161,7 +3161,7 @@ function renderPayrollPage(c, mode){
     })() : ''}
     ${isSlip && scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
-      <p class="note">夥伴每週（或每次）請款時，選一段期間開一張勞報單，夥伴簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成車趟與調整項日期自動算出，不能手動修改；期間不能跟該夥伴其他勞報單（月結或區間）重疊。</p>
+      <p class="note">夥伴每週（或每次）請款時，選一段期間開一張勞報單，夥伴簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成任務與調整項日期自動算出，不能手動修改；期間不能跟該夥伴其他勞報單（月結或區間）重疊。</p>
       <p class="note" style="margin-top:0;">夥伴沿用上方「夥伴」選單。</p>
       <div class="grid3">
         <div class="field"><label>期間開始</label><input id="perStart" type="date"></div>
@@ -3279,7 +3279,7 @@ function renderPayrollPage(c, mode){
         <thead><tr><th>夥伴</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
         <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
         <tr style="font-weight:700; background:#F4F3EF;"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
-      </table>` : '<div style="font-size:13px;">這個月所有有完成車趟的夥伴都已月結確認或標為無需月結。</div>'}
+      </table>` : '<div style="font-size:13px;">這個月所有有完成任務的夥伴都已月結確認或標為無需月結。</div>'}
       ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
         <div style="margin-top:4px;">${skipped.map(d=>`<span style="margin-right:12px; font-size:12.5px;">${escapeHtml(d.name)} <button class="btn ghost" data-settlerestore="${d.id}" style="padding:2px 8px; font-size:11.5px;">恢復</button></span>`).join('')}</div></details>` : ''}
       </div></details>`;
@@ -3327,7 +3327,7 @@ function renderPayrollPage(c, mode){
     el.querySelectorAll('[data-dfcancel]').forEach(b=>{
       b.onclick = async ()=>{
         const g = mine[Number(b.dataset.dfcancel)];
-        if(!confirm(`取消 ${driverName(driverId)} ${g.start}${g.start===g.end?'':'～'+g.end} 的掛帳嗎？（車趟回到一般狀態，不會刪除任何資料）`)) return;
+        if(!confirm(`取消 ${driverName(driverId)} ${g.start}${g.start===g.end?'':'～'+g.end} 的掛帳嗎？（任務回到一般狀態，不會刪除任何資料）`)) return;
         try{ await cancelDeferredPayment(g.ids); renderDeferredPanel(); }catch(err){ alert(err.message); }
       };
     });
@@ -3345,7 +3345,7 @@ function renderPayrollPage(c, mode){
           </div></div>`;
         f.querySelector('#dfpSave').onclick = async ()=>{
           const args = { driverId, start:g.start, end:g.end, payDate:f.querySelector('#dfpDate').value, method:f.querySelector('#dfpMethod').value, amount:f.querySelector('#dfpAmt').value };
-          if(!confirm(`確定已於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${driverName(driverId)} ${g.start}～${g.end} 的車趟報酬${args.amount?`（$${args.amount}）`:`（全額 $${money(g.total)}）`}嗎？`)) return;
+          if(!confirm(`確定已於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${driverName(driverId)} ${g.start}～${g.end} 的任務報酬${args.amount?`（$${args.amount}）`:`（全額 $${money(g.total)}）`}嗎？`)) return;
           try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}`); renderContent(); }
           catch(err){ alert(err.message); }
         };
@@ -3382,7 +3382,7 @@ function renderPayrollPage(c, mode){
       const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
       if(!driverId){ alert('請先選擇夥伴'); return; }
       if(!args.dueDate){ alert('請選擇預計付款日'); return; }
-      if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的車趟掛帳，預計 ${args.dueDate} 付款嗎？`)) return;
+      if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的任務掛帳，預計 ${args.dueDate} 付款嗎？`)) return;
       try{ const r = await deferPayment(args); alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，預計 ${args.dueDate} 付款`); document.getElementById('dfNote').value=''; renderDeferredPanel(); update(); }
       catch(err){ alert(err.message); }
     };
@@ -3393,7 +3393,7 @@ function renderPayrollPage(c, mode){
     if(!record) return '';
     const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
     const diffs = [];
-    if(Math.abs(record.tripTotal - live.tripTotal) > 0.5) diffs.push(`車趟報酬 凍結 $${money(record.tripTotal)}／現在 $${money(live.tripTotal)}`);
+    if(Math.abs(record.tripTotal - live.tripTotal) > 0.5) diffs.push(`任務報酬 凍結 $${money(record.tripTotal)}／現在 $${money(live.tripTotal)}`);
     if(Math.abs(record.adjTotal - calc.adjTotal) > 0.5) diffs.push(`加減項 凍結 $${money(record.adjTotal)}／現在 $${money(calc.adjTotal)}`);
     if(Math.abs(record.reimbursementAmount - live.reimbursement) > 0.5) diffs.push(`代墊款 凍結 $${money(record.reimbursementAmount)}／現在 $${money(live.reimbursement)}`);
     if(!diffs.length) return '';
@@ -3457,12 +3457,12 @@ function renderPayrollPage(c, mode){
         ${overlap ? `<div class="note" style="color:var(--danger);">⚠️ 這段期間跟已存在的勞報單（${statementLabel(overlap)}）重疊，不能開單。</div>` : ''}
         <h4 style="margin:14px 0 8px; font-size:13.5px;">配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</h4>
         <table><thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
-          <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">這段期間無已完成車趟</div></td></tr>'}</tbody></table>
+          <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">這段期間無已完成任務</div></td></tr>'}</tbody></table>
         <h4 style="margin:14px 0 8px; font-size:13.5px;">調整項（依調整項日期歸入）</h4>
         <table><thead><tr><th>日期</th><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
           <tbody>${r.adjustments.map(a=>`<tr><td>${adjustmentEffectiveDate(a)}${a.date?'':'（無日期）'}</td><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${escapeHtml(a.note||'—')}</td><td>${!record?`<button class="btn danger" data-perdeladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">無調整項</div></td></tr>'}</tbody></table>
         <table style="margin-top:10px;">
-          <tr><td>報酬總額（車趟＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
+          <tr><td>報酬總額（任務＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
           ${r.reimbursement ? `<tr><td>　其中代墊款（憑證開公司，非所得，不扣稅）</td><td class="amount">$${money(r.reimbursement)}</td></tr><tr><td>　所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-r.reimbursement)}</td></tr>` : ''}
           ${ded.taxAmount||ded.nhiAmount ? `<tr><td>扣稅／補充保費</td><td class="amount">-$${money(ded.taxAmount+ded.nhiAmount)}</td></tr>` : ''}
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
@@ -3514,7 +3514,7 @@ function renderPayrollPage(c, mode){
       document.getElementById('payrollResult').innerHTML = `<div class="panel"><div class="empty">${escapeHtml(driverName(driverId))} ${monthStr} 沒有月結勞報單。要開單請在上方「區間勞報單」選期間產生。</div></div>`;
       return;
     }
-    // 這個畫面只讀不寫，直接跟資料庫要這個月的車趟，不碰共用的
+    // 這個畫面只讀不寫，直接跟資料庫要這個月的任務，不碰共用的
     // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
     // 也不影響其他畫面的效能，查哪個月份都一樣快。
     document.getElementById('payrollResult').innerHTML = '<div class="empty">載入中...</div>';
@@ -3563,7 +3563,7 @@ function renderPayrollPage(c, mode){
         <div style="${payrollTripsExpanded?'':'display:none;'}">
           <table>
             <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
-            <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月無已完成車趟</div></td></tr>'}</tbody>
+            <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月無已完成任務</div></td></tr>'}</tbody>
           </table>
         </div>
         <h4 style="margin:14px 0 8px; font-size:13.5px;">調整項</h4>
@@ -3572,7 +3572,7 @@ function renderPayrollPage(c, mode){
           <tbody>${r.adjustments.map(a=>`<tr><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
         </table>
         <table style="margin-top:10px;">
-          <tr><td>報酬總額（車趟＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
+          <tr><td>報酬總額（任務＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
           ${r.reimbursement ? `<tr><td>　其中代墊款（憑證開公司，非所得，不扣稅）</td><td class="amount">$${money(r.reimbursement)}</td></tr><tr><td>　所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-r.reimbursement)}</td></tr>` : ''}
           ${ded.taxAmount||ded.nhiAmount ? `<tr><td>扣稅／補充保費</td><td class="amount">-$${money(ded.taxAmount+ded.nhiAmount)}</td></tr>` : ''}
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
@@ -3613,7 +3613,7 @@ function renderPayrollPage(c, mode){
     if(revokeBtn) revokeBtn.onclick = ()=> doRevoke([record]);
     const confirmBtn = document.getElementById('confirmMonth');
     if(confirmBtn) confirmBtn.onclick = async ()=>{
-      if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放夥伴回簽？凍結後車趟報酬不會再變動。`)) return;
+      if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放夥伴回簽？凍結後任務報酬不會再變動。`)) return;
       try{ await confirmMonthlyStatement(driverId, monthStr, live); renderContent(); }
       catch(err){ alert(err.message); }
     };
@@ -3785,7 +3785,7 @@ function computeChannelBillingReport(channelId, start, end, assignmentsList = st
   return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax };
 }
 // 多通路合併配送明細：只計入「已選通路」的店數/金額，未勾選的通路即使共用同一
-// 車趟也完全不會出現（避免把其他通路的請款資訊洩漏到對帳用的明細表裡）。
+// 任務也完全不會出現（避免把其他通路的請款資訊洩漏到對帳用的明細表裡）。
 // 同一條路線如果連續好幾天下貨點組成、金額都完全相同（代表路線沒有異動），
 // 會自動合併成一列「生效區間＋天數」；只有真的異動過的路線才會拆成好幾列，
 // 不需要像人工作業一樣，一有異動就整個出發點的車都重新複製一份。
@@ -3799,7 +3799,7 @@ function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assi
 
     // 有星期一報價版本的路線家族：金額（fullByChannel，上面 effectiveByChannelForAssignment
     // 已經處理）跟「配送路線」內容（下貨點清單／店數／公里）在請款單上一律顯示星期一版本
-    // 當天生效的內容，不用當天車趟實際跑的下貨點——平日實際停靠站難免天天略有出入，
+    // 當天生效的內容，不用當天任務實際跑的下貨點——平日實際停靠站難免天天略有出入，
     // 沒有這步的話，同一個車次會因為內容細節不同被拆成好幾筆看起來不一樣的請款明細，
     // 即使金額其實已經是同一個數字。
     const mondayRoute = findMondayQuoteRoute(route);
@@ -3849,7 +3849,7 @@ function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assi
 }
 function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
   const originAddrs = Object.keys(mergedByOrigin);
-  if(!originAddrs.length) return '<div class="empty">此區間無相關車趟</div>';
+  if(!originAddrs.length) return '<div class="empty">此區間無相關任務</div>';
   return originAddrs.map(addr=>{
     const list = mergedByOrigin[addr];
     const bodyRows = list.map(r=>{
@@ -3879,7 +3879,7 @@ function channelSummaryPanelHtml(report){
       <h3 style="margin-top:0;">${channel.name}｜物流費用請款總覽（${start} ~ ${end}）</h3>
       <table>
         <thead><tr><th>請款期間</th><th>物流費</th></tr></thead>
-        <tbody>${segRows.map(s=>`<tr><td>${s.start} ~ ${s.end}</td><td class="amount">$${money(Math.round(s.amount))}</td></tr>`).join('') || '<tr><td colspan="2"><div class="empty">此區間無相關車趟</div></td></tr>'}
+        <tbody>${segRows.map(s=>`<tr><td>${s.start} ~ ${s.end}</td><td class="amount">$${money(Math.round(s.amount))}</td></tr>`).join('') || '<tr><td colspan="2"><div class="empty">此區間無相關任務</div></td></tr>'}
         ${adjustments.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td></tr>`).join('')}
         </tbody>
         <tfoot><tr><td><strong>未稅合計</strong></td><td class="amount"><strong>$${money(grand.untaxed)}</strong></td></tr>
@@ -3888,8 +3888,8 @@ function channelSummaryPanelHtml(report){
       </table>
       <h4 style="margin:14px 0 6px;">各區費用總覽（依供應商／出發點）</h4>
       <table>
-        <thead><tr><th>供應商</th><th>車趟數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
-        <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關車趟</div></td></tr>'}</tbody>
+        <thead><tr><th>供應商</th><th>任務數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
+        <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關任務</div></td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -3916,7 +3916,7 @@ function buildChannelSummarySheet(wb, report){
   aoa.push(['含稅合計', grand.withTax]);
   aoa.push([]);
   aoa.push(['各區費用總覽（依供應商／出發點）']);
-  aoa.push(['供應商','車趟數','配送店次','未稅','稅額','含稅']);
+  aoa.push(['供應商','任務數','配送店次','未稅','稅額','含稅']);
   originWithTax.forEach(o=> aoa.push([originLabel(o.originAddr), o.tripCount, o.storeCount, o.untaxed, o.tax, o.withTax]));
   const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:1,c:0}, e:{r:1,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:5} }];
   addAOASheet(wb, `${channel.name}請款總覽`, aoa, merges);
@@ -3956,14 +3956,14 @@ function exportBillingExcel(channelIds, monthStr, start, end, assignmentsList = 
   XLSX.writeFile(wb, `請款單_${start}_${end}.xlsx`);
 }
 function renderBilling(c){
-  // 這個畫面查出來的車趟資料只存在這個變數（畫面本身的區域狀態），不寫回
+  // 這個畫面查出來的任務資料只存在這個變數（畫面本身的區域狀態），不寫回
   // state.data.assignments，離開畫面後自然被丟棄，不需要額外清理。
   let billingAssignments = [];
   const chChecks = state.data.channels.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" ${(state._billingChannelIds||[]).includes(ch.id)?'checked':''} style="width:auto;">${ch.name}</label>`).join('');
   const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">勾選要一起結算的通路（可複選）。每個通路自己的請款總覽（未稅／含稅合計），永遠依「通路管理」設定的自己週期計算（例如康達盛通是自然月、7-11是每月27日至次月26日），不會因為同時勾了好幾個通路而互相污染；下方的「抓取範圍」只用來決定合併配送明細要撈多寬的資料，只勾一個通路時可直接當作那個通路自己的週期手動調整。系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一車趟，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
+    <p class="section-sub">勾選要一起結算的通路（可複選）。每個通路自己的請款總覽（未稅／含稅合計），永遠依「通路管理」設定的自己週期計算（例如康達盛通是自然月、7-11是每月27日至次月26日），不會因為同時勾了好幾個通路而互相污染；下方的「抓取範圍」只用來決定合併配送明細要撈多寬的資料，只勾一個通路時可直接當作那個通路自己的週期手動調整。系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一任務，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
     <div class="panel">
       <div class="field">
         <label>通路（可複選；各通路各自產生一份請款總覽，配送明細則合併成一份，只顯示已選通路）</label>
@@ -4032,7 +4032,7 @@ function renderBilling(c){
   // 去算，只有勾選單一通路時，才會直接沿用共用的「區間起訖」欄位（維持原本
   // 可手動調整單一通路週期的彈性）。多選通路時，共用的「區間起訖」欄位改成
   // 只決定「抓取範圍」──要夠寬才能同時涵蓋每個已選通路各自的區間，讓合併
-  // 配送明細表看得到全部相關車趟；預設值會自動抓所有已選通路週期的聯集
+  // 配送明細表看得到全部相關任務；預設值會自動抓所有已選通路週期的聯集
   // （最早的起始日～最晚的結束日）。
   function ownPeriodFor(channelId, monthStr, channelIds, sharedStart, sharedEnd){
     const channel = state.data.channels.find(ch=>ch.id===channelId);
@@ -4057,7 +4057,7 @@ function renderBilling(c){
       }
     }
     const start = startInput.value, end = endInput.value; // 抓取範圍（合併配送明細用）
-    // 這個畫面只讀不寫，直接跟資料庫要這段區間的車趟，不碰共用的
+    // 這個畫面只讀不寫，直接跟資料庫要這段區間的任務，不碰共用的
     // state.data.assignments——查完這個函式結束就丟，不管查的區間多大、
     // 查幾次，都不會累積佔用記憶體、拖慢其他畫面。
     if(start && end){
@@ -4201,7 +4201,7 @@ function renderExport(c){
     <div class="panel">
       <div class="grid3">
         <div class="field"><label>資料類型</label>
-          <select id="exType"><option value="assignments">車趟／班表紀錄</option><option value="adjustments">薪資調整項</option><option value="routeVersions">路線管理（歷史版本）</option></select>
+          <select id="exType"><option value="assignments">任務／班表紀錄</option><option value="adjustments">薪資調整項</option><option value="routeVersions">路線管理（歷史版本）</option></select>
         </div>
         <div class="field" id="exStartField"><label>起始日期</label><input id="exStart" type="date"></div>
         <div class="field" id="exEndField"><label>結束日期</label><input id="exEnd" type="date"></div>
@@ -4218,7 +4218,7 @@ function renderExport(c){
   };
   // 每一條路線的歷史版本（route_versions裡end不是null的，代表已被新版本
   // 取代），攤平成一筆一筆方便依「版本結束日」篩選區間、預覽、匯出、
-  // 確認備份後刪除釋放資料量——跟車趟/薪資調整項同一套流程，只是資料
+  // 確認備份後刪除釋放資料量——跟任務/薪資調整項同一套流程，只是資料
   // 來源是route裡的versions陣列，不是獨立的table直接查。
   function allClosedRouteVersions(){
     const rows = [];
@@ -4247,7 +4247,7 @@ function renderExport(c){
     const preStart = document.getElementById('exStart').value;
     const preEnd = document.getElementById('exEnd').value;
     if(!preStart || !preEnd){ alert('請選擇起訖日期'); return; }
-    // 車趟／班表紀錄這裡是唯一需要任意查回更久以前資料的地方（匯出封存的
+    // 任務／班表紀錄這裡是唯一需要任意查回更久以前資料的地方（匯出封存的
     // 目的就是處理舊資料），直接跟資料庫要這段區間，不影響/不依賴共用的
     // state.data.assignments，查完這個函式結束就丟，不會佔用記憶體。
     let exAssignments;
@@ -4297,7 +4297,7 @@ function renderExport(c){
 }
 
 // ---------- 夥伴端：今日任務（預設畫面） ----------
-// 上午永遠排在下午前面——不管實際建立車趟的順序（週期任務清單怎麼異動、
+// 上午永遠排在下午前面——不管實際建立任務的順序（週期任務清單怎麼異動、
 // 哪個先建立），同一天同時有上午跟下午的車次時，畫面上一律上午在上。
 function assignmentShiftKey(a){
   const route = state.data.routes.find(r=>r.id===a.routeId);
@@ -4332,7 +4332,7 @@ function renderToday(c){
   renderTodayDetail(todays);
 }
 // 本週任務總覽裡「待完成」的車次點擊後預覽當天行程與夥伴費用——單純預覽，
-// 車趟還沒開始，不提供拍照/完成等操作（那些要等到當天在「今日任務」才會出現）。
+// 任務還沒開始，不提供拍照/完成等操作（那些要等到當天在「今日任務」才會出現）。
 function openWeekTripPreview(assignmentId){
   const host = document.getElementById('weekTripModal');
   const a = state.data.assignments.find(x=>x.id===assignmentId);
@@ -4559,7 +4559,7 @@ function dpPhotoUrls(dp){
 async function renderHistory(c){
   const dId = state.activeDriverId;
   // 夥伴自己的歷史班表想看多久以前都合理，而且夥伴端因為RLS本來就只看得到
-  // 自己的車趟（driver_select_own policy），不會因為系統整體規模（多少夥伴/
+  // 自己的任務（driver_select_own policy），不會因為系統整體規模（多少夥伴/
   // 多少店家）變大而跟著變重，所以這裡直接補到半年前，比預設的14天窗口寬
   // 很多，不受主控端那邊刻意縮小窗口的影響。
   const HISTORY_LOOKBACK_DAYS = 180;
@@ -4711,13 +4711,13 @@ async function renderMyEarnings(c){
     if(!box || !trips.length) return;
     box.innerHTML = groupDeferred(trips).map(g=>`<div class="panel" style="border-color:var(--amber); border-width:2px;">
       <div style="font-weight:600;">待領 <span class="amount">$${money(g.total)}</span>　預計 ${g.due} 支付</div>
-      <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">工作日期 ${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）${g.note?'・'+escapeHtml(g.note):''}　※ 金額為車趟報酬，實際匯款金額以扣除預支、扣稅等為準。</div>
+      <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">工作日期 ${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）${g.note?'・'+escapeHtml(g.note):''}　※ 金額為任務報酬，實際匯款金額以扣除預支、扣稅等為準。</div>
     </div>`).join('');
   }).catch(()=>{});
   document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; renderFuelPanel(); refresh(); };
-  // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的車趟，
+  // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的任務，
   // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列
-  // 越查越大（夥伴身份本來就受RLS限制只看得到自己的車趟，查6個月內任一個月
+  // 越查越大（夥伴身份本來就受RLS限制只看得到自己的任務，查6個月內任一個月
   // 都很輕量）。
   async function refresh(){
     const m = state._myEarningsMonth || monthStr;
@@ -4762,7 +4762,7 @@ async function renderMyEarnings(c){
         <h3 style="margin-top:0;">已完成任務</h3>
         <table>
           <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
-          <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || `<tr><td colspan="3"><div class="empty">${m}尚無已完成車趟</div></td></tr>`}</tbody>
+          <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || `<tr><td colspan="3"><div class="empty">${m}尚無已完成任務</div></td></tr>`}</tbody>
         </table>
         ${(()=>{
           // 由加油／保養申報確認轉進來的代墊款，下方「申報紀錄」已經有（含日期、發票號碼、狀態），
@@ -5024,7 +5024,7 @@ function renderMyStatement(c){
     const driver = state.data.drivers.find(d=>d.id===dId);
     const label = statementLabel(record);
     // 勞報單上的「共完成N趟」要以整個期間為準：state.data.assignments 預設只載入最近14天，
-    // 所以跟薪資結算、我的報酬一樣，直接跟資料庫要這段期間的車趟。
+    // 所以跟薪資結算、我的報酬一樣，直接跟資料庫要這段期間的任務。
     box.innerHTML = '<div class="empty">載入中...</div>';
     let monthAssignments;
     const [rangeStart, rangeEnd] = statementRange(record);
@@ -5122,7 +5122,7 @@ function showApp(){
   document.getElementById('appLayout').style.display = 'flex';
   updateHeaderBar();
   updateTitle(); renderNav(); renderContent();
-  // 首頁即時更新改成主要靠 Realtime（車趟/下貨點一有異動就推播），不用再
+  // 首頁即時更新改成主要靠 Realtime（任務/下貨點一有異動就推播），不用再
   // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
   startRealtimeSync(()=> refreshHomeDataIfIdle());
@@ -5185,7 +5185,7 @@ async function checkForUpdate(){
   if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
   if(sig !== __bootPageSignature) showUpdateBanner();
 }
-// 首頁即時更新主要靠 Realtime 推播（見 startRealtimeSync，車趟/下貨點一有
+// 首頁即時更新主要靠 Realtime 推播（見 startRealtimeSync，任務/下貨點一有
 // 異動，debounce一下就會呼叫這支函式刷新），不用再每25秒硬去問一次資料庫。
 // 這裡的定時輪詢改成保險用的備援（例如WebSocket連線中途斷掉、或Realtime
 // 訂閱失敗退回純輪詢的情況），間隔放寬到3分鐘即可，平常都是Realtime先
@@ -5195,7 +5195,7 @@ let lastHomeRefreshAt = null;
 async function refreshHomeDataIfIdle(){
   if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
-    // 只重抓首頁真的需要跟上即時狀態的車趟資料，不呼叫整支 loadAllData()——
+    // 只重抓首頁真的需要跟上即時狀態的任務資料，不呼叫整支 loadAllData()——
     // 夥伴/通路/路線這些目錄資料幾乎不會變動，100人同時在線時每25秒讓每個人
     // 都重抓一次是不必要的資料庫負擔（見 refreshAssignmentsRange 說明）。
     // 主控要看到「本月至今」的即時利潤，夥伴首頁只需要「今天」的行程數字。

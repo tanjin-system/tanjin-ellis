@@ -223,8 +223,8 @@ function dataUrlToBytesAndType(dataUrl) {
 
 // ---------------- 讀取全部資料（取代 loadData()） ----------------
 
-// 車趟紀錄只會越堆越多、從來不會清（「資料匯出與封存」要admin手動確認才會刪），
-// 每次登入/重新整理都把全部車趟連同下貨點、附加照片一次抓光，資料量只會越來越大、
+// 任務紀錄只會越堆越多、從來不會清（「資料匯出與封存」要admin手動確認才會刪），
+// 每次登入/重新整理都把全部任務連同下貨點、附加照片一次抓光，資料量只會越來越大、
 // 越來越慢——尤其「加入主畫面」模式常被手機系統整個殺掉釋放記憶體，比一般瀏覽器
 // 分頁更常從頭冷啟動、更常整批重抓，延遲感特別明顯。
 //
@@ -236,7 +236,7 @@ function dataUrlToBytesAndType(dataUrl) {
 // 這種天天在看的畫面（這兩個畫面另外各自呼叫 ensureAssignmentsRange 確保涵蓋
 // 實際顯示的區間，不完全依賴這裡的預設值）。夥伴自己登入時因為 RLS
 // （driver_select_own policy 是 driver_id = auth_driver_id()）本來就只看得到
-// 自己的車趟，不會跟著全系統規模一起變大，14天以外需要的地方（薪資結算、
+// 自己的任務，不會跟著全系統規模一起變大，14天以外需要的地方（薪資結算、
 // 請款結算查舊月份、資料匯出與封存、夥伴歷史班表）都用 ensureAssignmentsRange()
 // 按需補抓缺口，不受這個預設窗口大小影響。
 const ASSIGNMENTS_WINDOW_DAYS = 14;
@@ -249,8 +249,8 @@ const ASSIGNMENTS_WINDOW_DAYS = 14;
 // 版本查詢本身失敗（例如舊版資料庫還沒跑 migration）就當作沒快取，照原本
 // 方式整包重抓，不影響既有行為。
 // Supabase(PostgREST) 單次查詢最多回傳 1000 筆（Max Rows），超過會悄悄截斷、不報錯。
-// 一個月的車趟數已經接近這個量，薪資/請款/首頁利潤如果只抓一頁就會少算，所以所有
-// 抓整段車趟的查詢都改成這個分頁函式：buildQuery 回傳尚未排序的查詢，這裡依
+// 一個月的任務數已經接近這個量，薪資/請款/首頁利潤如果只抓一頁就會少算，所以所有
+// 抓整段任務的查詢都改成這個分頁函式：buildQuery 回傳尚未排序的查詢，這裡依
 // trip_date、id 排序後每次抓1000筆，抓到不足一頁為止。
 async function fetchAllAssignmentPages(buildQuery) {
   const PAGE = 1000;
@@ -364,7 +364,7 @@ async function loadAllData() {
   return data;
 }
 
-// 補抓 loadAllData() 預設時間窗口之外、更早的車趟資料（見 ASSIGNMENTS_WINDOW_DAYS
+// 補抓 loadAllData() 預設時間窗口之外、更早的任務資料（見 ASSIGNMENTS_WINDOW_DAYS
 // 說明），只補「要求的日期」到「目前已載入的最早日期」這一段缺口，抓回來的資料
 // 直接併入 state.data.assignments（依 id 去重，正常不會重疊），並把
 // assignmentsWindowStart 往前推——之後再查更早的日期，缺口只會越補越小，
@@ -379,7 +379,7 @@ async function ensureAssignmentsRange(startDate) {
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
     .gte('trip_date', startDate)
     .lt('trip_date', windowStart));
-  if (error) throw new Error('讀取較早的車趟資料失敗：' + error.message);
+  if (error) throw new Error('讀取較早的任務資料失敗：' + error.message);
   const extra = (data || []).map(mapAssignment);
   await resolvePhotoUrls(extra);
   const existingIds = new Set(state.data.assignments.map(a => a.id));
@@ -393,8 +393,8 @@ async function ensureAssignmentsRange(startDate) {
 // 全部版本與版本下貨點）這些幾乎不會變動的目錄資料也一起重抓一次。在100位
 // 夥伴同時上線的規模下，這代表每25秒就有100個並發連線各自重抓一次幾乎相同
 // 的目錄資料，是完全不必要的資料庫負擔。首頁背景刷新真正需要跟上即時狀態
-// 的只有車趟資料（請款-薪資即時利潤、今日尚未配送完成），改成只重新抓「這個
-// 範圍內」的車趟、直接整段覆蓋（不是像 ensureAssignmentsRange 那樣只補缺口，
+// 的只有任務資料（請款-薪資即時利潤、今日尚未配送完成），改成只重新抓「這個
+// 範圍內」的任務、直接整段覆蓋（不是像 ensureAssignmentsRange 那樣只補缺口，
 // 這裡要的是最新狀態，即使範圍已經載入過也要覆蓋成最新的），範圍外的資料
 // 完全不動。
 async function refreshAssignmentsRange(start, end) {
@@ -404,7 +404,7 @@ async function refreshAssignmentsRange(start, end) {
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
     .gte('trip_date', start)
     .lte('trip_date', end));
-  if (error) throw new Error('重新整理車趟資料失敗：' + error.message);
+  if (error) throw new Error('重新整理任務資料失敗：' + error.message);
   const fresh = (data || []).map(mapAssignment);
   await resolvePhotoUrls(fresh);
   const outsideRange = state.data.assignments.filter(a => a.date < start || a.date > end);
@@ -428,7 +428,7 @@ async function fetchAssignmentsInRange(start, end) {
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
     .gte('trip_date', start)
     .lte('trip_date', end));
-  if (error) throw new Error('讀取車趟資料失敗：' + error.message);
+  if (error) throw new Error('讀取任務資料失敗：' + error.message);
   return (data || []).map(mapAssignment);
 }
 
@@ -452,7 +452,7 @@ function trimAssignmentsToBaseWindow() {
 async function fetchAssignment(id) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').eq('id', id).single();
-  if (error) throw new Error('讀取車趟失敗：' + error.message);
+  if (error) throw new Error('讀取任務失敗：' + error.message);
   const assignment = mapAssignment(data);
   await resolvePhotoUrls([assignment]);
   return assignment;
@@ -691,10 +691,10 @@ async function updateDropPoint(dpId, input) {
   const idx = state.data.dropPoints.findIndex(x => x.id === dpId);
   if (idx >= 0) state.data.dropPoints[idx] = mapDropPoint(data);
 
-  // 通路（所屬分類）改變時，同步套用到「所有」引用這個下貨點的車趟快照
+  // 通路（所屬分類）改變時，同步套用到「所有」引用這個下貨點的任務快照
   // （不分完成與否——請款明細/配送紀錄一律依下貨點資料庫目前的分類顯示）。
-  // 已完成的車趟，資料庫那邊（見 sync_drop_point_channel()）也會一併補算
-  // 一次請款拆賬金額，這裡重新抓一次那些車趟同步最新的金額快照；夥伴費用
+  // 已完成的任務，資料庫那邊（見 sync_drop_point_channel()）也會一併補算
+  // 一次請款拆賬金額，這裡重新抓一次那些任務同步最新的金額快照；夥伴費用
   // 不受影響。
   if (channelChanged) {
     const { error: syncErr } = await supabase.rpc('sync_drop_point_channel', { p_drop_point_id: dpId, p_channel_id: input.channelId });
@@ -867,11 +867,11 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
 }
 
 // 路線版本臨時更新（例如訂正下貨點順序、修正拆賬）時，週期任務清單裡已經排好、
-// 但還沒開始/還沒完成的未來車趟，不會自動跟著變——建立車趟當下就把內容複製
+// 但還沒開始/還沒完成的未來任務，不會自動跟著變——建立任務當下就把內容複製
 // 成快照了（見 createAssignment）。這裡是選配的「一鍵套用」：找出這條路線
-// 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的車趟，
+// 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的任務，
 // 把下貨點清單、里程、夥伴費用、請款拆賬全部重新套用成當時該生效版本的
-// 內容，夥伴／日期／車次都不動。已完成的車趟本來就凍結（付過的夥伴費用、
+// 內容，夥伴／日期／車次都不動。已完成的任務本來就凍結（付過的夥伴費用、
 // 請款金額都不該回頭被重算），不在套用範圍內。
 async function regenerateFutureAssignments(routeId, fromDate) {
   const route = state.data.routes.find(r => r.id === routeId);
@@ -900,7 +900,7 @@ async function regenerateFutureAssignments(routeId, fromDate) {
       billing_total_snapshot: version.billingTotal ?? null,
       billing_by_channel_snapshot: version.billingByChannel ?? null
     }).eq('id', a.id);
-    if (updErr) throw new Error('更新車趟資料失敗：' + updErr.message);
+    if (updErr) throw new Error('更新任務資料失敗：' + updErr.message);
     updated++;
   }
   for (const a of targets) {
@@ -910,12 +910,12 @@ async function regenerateFutureAssignments(routeId, fromDate) {
   return { updated, total: targets.length };
 }
 
-// ---------------- 車趟指派與生命週期 ----------------
+// ---------------- 任務指派與生命週期 ----------------
 
 // 夥伴費用／里程／請款金額不再由排班時人工輸入，改成直接複製路線當時生效
 // 版本裡已經填好的數字（見 saveRouteVersion 的 finance 參數）。找不到生效版本
-// 或版本還沒填費用時，就先以 0/null 建立，之後可以在路線管理補上再重新產生車趟，
-// 或於車趟管理個別調整（見 updateAssignmentFinance，供例外狀況覆寫用）。
+// 或版本還沒填費用時，就先以 0/null 建立，之後可以在路線管理補上再重新產生任務，
+// 或於任務管理個別調整（見 updateAssignmentFinance，供例外狀況覆寫用）。
 async function createAssignment(input) {
   const route = state.data.routes.find(r => r.id === input.routeId);
   if (!route) throw new Error('找不到路線');
@@ -933,11 +933,11 @@ async function createAssignment(input) {
     distance_km: version?.distanceKm ?? null,
     billing_total_snapshot: version?.billingTotal ?? null,
     billing_by_channel_snapshot: version?.billingByChannel ?? null,
-    // 本週（含以前）的車趟排好就生效；之後週次的車趟先是草稿（只有主控看得到），按「發佈」才開放給夥伴。
+    // 本週（含以前）的任務排好就生效；之後週次的任務先是草稿（只有主控看得到），按「發佈」才開放給夥伴。
     published: input.published ?? (input.date <= getWeekDates(0)[6]),
     status: 'scheduled'
   }).select().single();
-  if (error) throw new Error('建立車趟失敗：' + error.message);
+  if (error) throw new Error('建立任務失敗：' + error.message);
 
   if (dropPointIds.length) {
     const rows = dropPointIds.map((dpId, i) => {
@@ -945,7 +945,7 @@ async function createAssignment(input) {
       return { assignment_id: assignRow.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
     });
     const { error: pointsErr } = await supabase.from('assignment_drop_points').insert(rows);
-    if (pointsErr) throw new Error('建立車趟下貨點失敗：' + pointsErr.message);
+    if (pointsErr) throw new Error('建立任務下貨點失敗：' + pointsErr.message);
   }
 
   const full = await fetchAssignment(assignRow.id);
@@ -954,7 +954,7 @@ async function createAssignment(input) {
 }
 
 // ---------------- 週期任務清單：下週自動延續本週＋發佈 ----------------
-// 發佈：未來週次的車趟預設是草稿（published=false，夥伴端 RLS 看不到），主控排完按「發佈」才開放。
+// 發佈：未來週次的任務預設是草稿（published=false，夥伴端 RLS 看不到），主控排完按「發佈」才開放。
 // 自動延續：每週第一次打開週期任務清單時，如果下週還沒補過（schedule_rollovers 沒有紀錄）且下週是空的，
 // 就把本週每一格（路線＋夥伴＋星期幾）複製到下週，一律是草稿。先寫入紀錄再複製，之後刪掉哪格都不會再補回來。
 async function publishWeek(start, end) {
@@ -1009,7 +1009,7 @@ async function rolloverNextWeekIfNeeded() {
       dropPointIds: version ? version.dropPointIds : []
     });
   });
-  // 分批新增車趟，再分批新增每趟的下貨點。
+  // 分批新增任務，再分批新增每趟的下貨點。
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
     const { data, error } = await supabase.from('assignments').insert(chunk.map(c => c.row)).select('id, route_id, trip_date');
@@ -1030,14 +1030,14 @@ async function rolloverNextWeekIfNeeded() {
   }
   await supabase.from('schedule_rollovers').update({ created_count: created.length }).eq('week_start', nextStart);
   } catch (err) {
-    // 中途失敗：把已建立的半成品車趟清掉（下貨點隨車趟一併刪除）並放掉「已補過」記錄，下次打開會重新嘗試。
+    // 中途失敗：把已建立的半成品任務清掉（下貨點隨任務一併刪除）並放掉「已補過」記錄，下次打開會重新嘗試。
     try {
       for (let i = 0; i < created.length; i += 200) await supabase.from('assignments').delete().in('id', created.slice(i, i + 200).map(c => c.id));
       await supabase.from('schedule_rollovers').delete().eq('week_start', nextStart);
     } catch (e2) { console.error('清理失敗的延續紀錄時出錯', e2); }
     throw err;
   }
-  // 把新建的下週車趟讀進記憶體（含下貨點）
+  // 把新建的下週任務讀進記憶體（含下貨點）
   const { data: full, error: fullErr } = await fetchAllAssignmentPages(() => supabase.from('assignments')
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', nextStart).lte('trip_date', nextEnd));
   if (fullErr) throw new Error('讀取下週期任務清單失敗：' + fullErr.message);
@@ -1050,16 +1050,16 @@ async function rolloverNextWeekIfNeeded() {
 async function deleteAssignment(assignmentId) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').delete().eq('id', assignmentId);
-  if (error) throw new Error('刪除車趟失敗：' + error.message);
+  if (error) throw new Error('刪除任務失敗：' + error.message);
   state.data.assignments = state.data.assignments.filter(a => a.id !== assignmentId);
 }
 
-// 臨時異動：已排定或已出發的車趟需要臨時換夥伴（例如原本排定的夥伴臨時請假），
-// 不用刪除重建整趟車趟（那樣會遺失已經拍的照片、下貨點順序等資料）。
-// 已完成的車趟不開放異動，維持「完成即封存」的設計。
+// 臨時異動：已排定或已出發的任務需要臨時換夥伴（例如原本排定的夥伴臨時請假），
+// 不用刪除重建整趟任務（那樣會遺失已經拍的照片、下貨點順序等資料）。
+// 已完成的任務不開放異動，維持「完成即封存」的設計。
 async function reassignAssignmentDriver(assignmentId, newDriverId) {
   const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a && a.status === 'completed') throw new Error('已完成的車趟不可異動夥伴。');
+  if (a && a.status === 'completed') throw new Error('已完成的任務不可異動夥伴。');
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).eq('id', assignmentId);
   if (error) throw new Error('換夥伴失敗：' + error.message);
@@ -1077,14 +1077,14 @@ async function markAssignmentDeparted(assignmentId) {
 // issueNote 有值代表「尚有下貨點未拍照回報」時夥伴填寫的原因說明，跟 demo 的
 // 「完成本趟」流程一致：同一次操作把 status/has_issue/issue_note 一起送出。
 // 完成時間（completed_at）與夥伴報酬凍結快照（payroll_fare_snapshot）由資料庫
-// 觸發器自動處理；請款金額不再自動計算，改由主控在車趟管理裡人工輸入
-// （見 updateAssignmentFinance()），這裡送出後重新抓一次該筆車趟同步最新狀態。
+// 觸發器自動處理；請款金額不再自動計算，改由主控在任務管理裡人工輸入
+// （見 updateAssignmentFinance()），這裡送出後重新抓一次該筆任務同步最新狀態。
 async function markAssignmentComplete(assignmentId, issueNote) {
   const payload = { status: 'completed' };
   if (issueNote) { payload.has_issue = true; payload.issue_note = issueNote; }
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update(payload).eq('id', assignmentId);
-  if (error) throw new Error('完成車趟失敗：' + error.message);
+  if (error) throw new Error('完成任務失敗：' + error.message);
 
   const full = await fetchAssignment(assignmentId);
   const idx = state.data.assignments.findIndex(x => x.id === assignmentId);
@@ -1092,7 +1092,7 @@ async function markAssignmentComplete(assignmentId, issueNote) {
   return full;
 }
 
-// 車趟管理的人工輸入：夥伴費用、里程、各通路請款金額都由主控直接 key in，
+// 任務管理的人工輸入：夥伴費用、里程、各通路請款金額都由主控直接 key in，
 // 不再依公里數/下貨點數套公式換算。billingByChannel 是 {channelId: amount} 的物件，
 // 只需要包含這趟車實際牽涉到的通路；總額在這裡直接加總，不留給資料庫算。
 async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billingByChannel }) {
@@ -1269,7 +1269,7 @@ function tripPay(a) {
 // 已經被勞報單（月結或區間）涵蓋的趟次，金額已凍結簽名，不能再動額外金額。
 function assertTripPayEditable(a) {
   const st = findCoveringStatement(a.driverId, a.date);
-  if (st) throw new Error(`${a.date} ${driverName(a.driverId)} 的車趟已被勞報單（${statementLabel(st)}）涵蓋並凍結，不能再改額外金額。如需調整請先收回那份勞報單。`);
+  if (st) throw new Error(`${a.date} ${driverName(a.driverId)} 的任務已被勞報單（${statementLabel(st)}）涵蓋並凍結，不能再改額外金額。如需調整請先收回那份勞報單。`);
 }
 
 async function fetchTripPayLogs(assignmentIds) {
@@ -1317,10 +1317,10 @@ async function addTripExtra(assignmentId, amount, note) {
 // 三筆以上綁成同一組（group_id），顯示與刪除都以整組為單位。
 async function createSplitTransfer({ sourceId, keepAmount, targets, note }) {
   const src = state.data.assignments.find(x => x.id === sourceId);
-  if (!src) throw new Error('找不到來源車趟');
+  if (!src) throw new Error('找不到來源任務');
   if (!targets || !targets.length) throw new Error('請至少選一趟要分過去的車');
   const keep = Number(keepAmount);
-  if (!Number.isFinite(keep) || keep < 0) throw new Error('來源車趟保留金額要是 0 以上的數字');
+  if (!Number.isFinite(keep) || keep < 0) throw new Error('來源任務保留金額要是 0 以上的數字');
   const ids = new Set([sourceId]);
   const rows = [];
   const group = crypto.randomUUID();
@@ -1332,7 +1332,7 @@ async function createSplitTransfer({ sourceId, keepAmount, targets, note }) {
     if (ids.has(t.assignmentId)) throw new Error('同一趟不能重複選');
     ids.add(t.assignmentId);
     const a = state.data.assignments.find(x => x.id === t.assignmentId);
-    if (!a) throw new Error('找不到要分過去的車趟');
+    if (!a) throw new Error('找不到要分過去的任務');
     assertTripPayEditable(a);
     const add = Number(t.add);
     if (!Number.isFinite(add) || add < 0) throw new Error('各趟加的金額要是 0 以上的數字');
@@ -1364,7 +1364,7 @@ async function deleteTripPayLog(logId) {
   await syncExtraPay(ids);
 }
 
-// 已付款（現金／轉帳）：主控填「區間日期＋付款日期」，區間內這位夥伴已完成、還沒標已付的車趟
+// 已付款（現金／轉帳）：主控填「區間日期＋付款日期」，區間內這位夥伴已完成、還沒標已付的任務
 // 一次標為已付（付款金額依各趟報酬比例攤到每一趟，所以跨月時各月各自算得出已付多少）。
 // 只影響「可領淨額」，不影響勞報單金額，跟預支是兩個獨立功能；同一次付款共用 paid_group。
 // 只抓必要欄位，不連帶抓下貨點，區間再長也很輕。
@@ -1373,7 +1373,7 @@ async function fetchDriverTripsInRange(driverId, start, end) {
   const { data, error } = await supabase.from('assignments')
     .select('id, trip_date, driver_id, status, fare, payroll_fare_snapshot, extra_pay, paid_amount, pay_due_date')
     .eq('driver_id', driverId).gte('trip_date', start).lte('trip_date', end).order('trip_date').limit(1000);
-  if (error) throw new Error('讀取區間車趟失敗：' + error.message);
+  if (error) throw new Error('讀取區間任務失敗：' + error.message);
   return (data || []).map(r => ({
     id: r.id, date: r.trip_date, driverId: r.driver_id, status: r.status,
     fare: Number(r.fare), payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
@@ -1387,7 +1387,7 @@ function validatePaymentRange(start, end) {
   if ((new Date(end) - new Date(start)) / 86400000 > 62) throw new Error('一次付款的區間最長 62 天');
 }
 
-// 預覽／實際付款共用：區間內已完成、尚未標已付的車趟與合計。
+// 預覽／實際付款共用：區間內已完成、尚未標已付的任務與合計。
 function unpaidTripsOf(trips) {
   const list = trips.filter(t => t.status === 'completed' && !(Number(t.paidAmount) > 0));
   return { list, total: list.reduce((s, t) => s + tripPay(t), 0) };
@@ -1399,7 +1399,7 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
   if (method !== 'cash' && method !== 'transfer') throw new Error('請選擇付款方式');
   const trips = await fetchDriverTripsInRange(driverId, start, end);
   const { list, total } = unpaidTripsOf(trips);
-  if (!list.length) throw new Error('這個區間內沒有「已完成、尚未標已付」的車趟');
+  if (!list.length) throw new Error('這個區間內沒有「已完成、尚未標已付」的任務');
   const paying = (amount === '' || amount == null) ? total : Number(amount);
   if (!Number.isFinite(paying) || paying <= 0) throw new Error('付款金額要大於 0');
   if (paying > total + 0.005) throw new Error(`付款金額 $${paying} 超過區間內報酬合計 $${total}`);
@@ -1417,7 +1417,7 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
     paid_group: group, paid_period_start: start, paid_period_end: end
   }).eq('id', p.id)));
   const failed = results.find(r => r.error);
-  if (failed) throw new Error('記錄已付款失敗（部分車趟可能已更新，請重新整理後檢查）：' + failed.error.message);
+  if (failed) throw new Error('記錄已付款失敗（部分任務可能已更新，請重新整理後檢查）：' + failed.error.message);
   parts.forEach(p => {
     const a = state.data.assignments.find(x => x.id === p.id);
     if (a) Object.assign(a, { paidAmount: p.part, paidDate: payDate, paidMethod: method, paidGroup: group, paidPeriodStart: start, paidPeriodEnd: end });
@@ -1426,7 +1426,7 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
   return { count: list.length, total: paying, skipped: trips.filter(t => t.status === 'completed').length - list.length };
 }
 
-// 取消整次付款（同一個 paid_group 的所有車趟一起取消）。
+// 取消整次付款（同一個 paid_group 的所有任務一起取消）。
 async function cancelPaymentGroup(groupId) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments')
@@ -1440,8 +1440,8 @@ async function cancelPaymentGroup(groupId) {
 }
 
 // ---------------- 延後付款（掛帳）與待付款清單 ----------------
-// 夥伴同意晚一點領（例如 9/30 的報酬約好 11/15 才付）：主控把那段期間「已完成、還沒付」的車趟掛帳，
-// 記錄預計付款日；到了預計日轉帳後，用上面的區間付款登記，掛帳自動消失。只標記有掛帳的車趟，
+// 夥伴同意晚一點領（例如 9/30 的報酬約好 11/15 才付）：主控把那段期間「已完成、還沒付」的任務掛帳，
+// 記錄預計付款日；到了預計日轉帳後，用上面的區間付款登記，掛帳自動消失。只標記有掛帳的任務，
 // 舊月份沒有逐趟標過已付，不會被誤當成欠款。完全不影響勞報單與可領淨額計算。
 async function deferPayment({ driverId, start, end, dueDate, note }) {
   validatePaymentRange(start, end);
@@ -1450,11 +1450,11 @@ async function deferPayment({ driverId, start, end, dueDate, note }) {
   if (text.length > 60) throw new Error('備註請控制在60字以內');
   const trips = await fetchDriverTripsInRange(driverId, start, end);
   const targets = trips.filter(t => t.status === 'completed' && !(Number(t.paidAmount) > 0));
-  if (!targets.length) throw new Error('這個區間內沒有「已完成、尚未付款」的車趟可以掛帳');
+  if (!targets.length) throw new Error('這個區間內沒有「已完成、尚未付款」的任務可以掛帳');
   const supabase = getSupabase();
   const results = await Promise.all(targets.map(t => supabase.from('assignments').update({ pay_due_date: dueDate, pay_due_note: text || null }).eq('id', t.id)));
   const failed = results.find(r => r.error);
-  if (failed) throw new Error('掛帳失敗（部分車趟可能已更新，請重新整理後檢查）：' + failed.error.message);
+  if (failed) throw new Error('掛帳失敗（部分任務可能已更新，請重新整理後檢查）：' + failed.error.message);
   targets.forEach(t => {
     const a = state.data.assignments.find(x => x.id === t.id);
     if (a) { a.payDueDate = dueDate; a.payDueNote = text; }
@@ -1471,7 +1471,7 @@ async function cancelDeferredPayment(assignmentIds) {
   state._pendingPayCache = null;
 }
 
-// 所有掛帳中（已完成、有預計付款日、還沒付）的車趟，精簡欄位；driverId 給了就只抓那位（夥伴端用）。
+// 所有掛帳中（已完成、有預計付款日、還沒付）的任務，精簡欄位；driverId 給了就只抓那位（夥伴端用）。
 async function fetchDeferredTrips(driverId) {
   const supabase = getSupabase();
   let q = supabase.from('assignments')
@@ -1646,14 +1646,14 @@ function computePayrollDeductions(grossAmount, reimbursement = 0) {
 // 正式文件，預支不算扣款，凍結存檔時要用statementNetFromAdjustments()
 // 重新排除預支再算一次（見index.html該函式旁邊的說明）。
 // 勞報單勞務名稱：預設「貨物配送及到店協助理貨勞務」。主控可以依夥伴改名稱，但規則是名稱
-// 要符合系統記錄的實際工作——當月有完成車趟時，名稱必須含「配送」；當月沒有車趟才可自由填寫。
+// 要符合系統記錄的實際工作——當月有完成任務時，名稱必須含「配送」；當月沒有任務才可自由填寫。
 const DEFAULT_SERVICE_NAME = '到店協助理貨勞務';
 function validateServiceName(name, tripCount) {
   name = (name || '').trim();
   if (!name) return;
   if (name.length > 30) throw new Error('勞務名稱最多 30 個字');
   if (tripCount > 0 && !name.includes('理貨')) {
-    throw new Error(`勞務名稱「${name}」沒有寫到「理貨」，但這位夥伴本月在系統裡有 ${tripCount} 趟完成的車趟。名稱必須符合實際工作，請修改夥伴資料裡的勞務名稱（需含「理貨」）。`);
+    throw new Error(`勞務名稱「${name}」沒有寫到「理貨」，但這位夥伴本月在系統裡有 ${tripCount} 趟完成的任務。名稱必須符合實際工作，請修改夥伴資料裡的勞務名稱（需含「理貨」）。`);
   }
 }
 
@@ -1685,7 +1685,7 @@ async function confirmMonthlyStatement(driverId, month, live) {
 
 // ---------------- 區間勞報單（依實際付款期間開單） ----------------
 // 夥伴每週（或每次付款）請款時，主控可以自選日期區間開一張勞報單：金額由系統裡該區間的
-// 完成車趟與調整項（依調整項日期）算出來，不能手動改；給付日期記錄實際轉帳日。
+// 完成任務與調整項（依調整項日期）算出來，不能手動改；給付日期記錄實際轉帳日。
 // 區間不可跟同一位夥伴的其他勞報單（月結或區間）重疊，避免同一段期間重複開單。
 
 function statementRange(s) {
@@ -1713,7 +1713,7 @@ async function confirmPeriodStatement(driverId, start, end, payDate, live) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) throw new Error('請選擇正確的起訖日期');
   if (end < start) throw new Error('結束日期不能早於開始日期');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate || '')) throw new Error('請填寫實際給付日期');
-  if (end > todayStr()) throw new Error('結束日期不能是未來的日期（期間內的車趟要已經完成）');
+  if (end > todayStr()) throw new Error('結束日期不能是未來的日期（期間內的任務要已經完成）');
   const overlap = findOverlappingStatement(driverId, start, end);
   if (overlap) throw new Error(`這段期間跟已存在的勞報單（${statementLabel(overlap)}）重疊，不能重複開單。`);
   const supabase = getSupabase();
@@ -1808,7 +1808,7 @@ async function revokeStatements(ids) {
 
 // 夥伴首頁「同出發點今日出發狀況」：呼叫 schema.sql 裡的
 // security definer 函式 driver_depot_overview()，只回傳沒有金額的窄
-// 欄位（車次名稱/夥伴姓名/狀態），繞過夥伴只能查自己車趟的RLS限制，
+// 欄位（車次名稱/夥伴姓名/狀態），繞過夥伴只能查自己任務的RLS限制，
 // 但不會洩漏其他夥伴的薪資/請款資料。
 async function fetchDepotOverview(date) {
   const supabase = getSupabase();
@@ -1973,7 +1973,7 @@ async function refreshFuelClaims() {
   state.data.fuelClaims = (data || []).map(mapFuelClaim);
 }
 
-// 「尚未月結確認」名單用：只抓指定月份已完成車趟的精簡欄位（沒有下貨點），一樣分頁避開1000筆上限。
+// 「尚未月結確認」名單用：只抓指定月份已完成任務的精簡欄位（沒有下貨點），一樣分頁避開1000筆上限。
 // 同一個月份在這個 session 只查一次（state._settleCache），首頁提醒與勞報單頁共用。
 async function fetchCompletedTripsLite(monthStr) {
   const supabase = getSupabase();
