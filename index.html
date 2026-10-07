@@ -1075,7 +1075,7 @@ function undeliveredTodayGroups(shifts){
     .map(({a})=>({
       // 車次名稱後面直接帶出當班夥伴名字，不用另外切到週期任務清單查是誰在跑。
       routeLabel: `${routeName(a.routeId)} ${driverName(a.driverId)}`,
-      // 夥伴按過「開始行程」後狀態會變成 in_progress（還沒按之前是
+      // 夥伴按過「開始任務」後狀態會變成 in_progress（還沒按之前是
       // scheduled）——畫面前面打一個勾，讓主控一眼看出「這台已經出發在跑了」
       // 跟「還沒出發」的差別，不用一個一個點進週期任務清單確認。
       started: a.status==='in_progress',
@@ -4375,7 +4375,7 @@ function renderTodayDetail(todays){
         </span>
       </div>
       <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
-      ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
+      ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
         ${a.dropPoints.map(dp=>{
           const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
           const photoUrls = dpPhotoUrls(dp);
