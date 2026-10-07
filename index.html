@@ -4638,6 +4638,9 @@ function renderFuelPanel(){
   const readOnly = state.role!=='driver' || !!state.adminViewDriver;
   const dId = state.activeDriverId;
   const claims = state.data.fuelClaims.filter(c=>c.driverId===dId);
+  // 申報紀錄跟「查詢月份」連動：只列該月份（依發票日期）的，其他月份到該月份再看。
+  const viewMonth = state._myEarningsMonth || todayStr().slice(0,7);
+  const monthClaims = claims.filter(c=>c.date.startsWith(viewMonth));
   const editing = claims.find(c=>c.id===editingFuelClaimId && c.status==='pending');
   box.innerHTML = `
     <div class="panel">
@@ -4654,14 +4657,14 @@ function renderFuelPanel(){
       </div>
       <button class="btn amber" id="fcSubmit">${editing?'儲存修改':'送出申報'}</button>
       ${editing?'<button class="btn ghost" id="fcCancel">取消修改</button>':''}`}
-      <h4 style="margin:${readOnly?'0':'16px'} 0 6px;">${readOnly?'申報紀錄':'我的申報紀錄'}</h4>
+      <h4 style="margin:${readOnly?'0':'16px'} 0 6px;">${readOnly?'申報紀錄':'我的申報紀錄'}（${viewMonth}）</h4>
       <table>
         <thead><tr><th>類別</th><th>日期</th><th>金額</th><th>發票號碼</th><th>備註</th><th>狀態</th><th></th></tr></thead>
-        <tbody>${claims.map(c=>`<tr>
+        <tbody>${monthClaims.map(c=>`<tr>
           <td>${CLAIM_CATEGORY_LABEL[c.category]||'—'}</td><td>${c.date}</td><td class="amount">$${money(c.amount)}</td><td>${c.invoiceNo}</td><td>${escapeHtml(c.note)||'—'}</td>
           <td>${c.status==='confirmed'?'<span class="badge completed">已確認</span>':'<span class="badge pending">待確認</span>'}</td>
           <td>${!readOnly && c.status==='pending'?`<button class="btn ghost" data-fcedit="${c.id}">修改</button> <button class="btn danger" data-fcdel="${c.id}">刪除</button>`:''}</td>
-        </tr>`).join('') || '<tr><td colspan="7"><div class="empty">尚無申報紀錄</div></td></tr>'}</tbody>
+        </tr>`).join('') || `<tr><td colspan="7"><div class="empty">${viewMonth} 尚無申報紀錄</div></td></tr>`}</tbody>
       </table>
     </div>`;
   if(readOnly) return;
@@ -4707,7 +4710,7 @@ async function renderMyEarnings(c){
       <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">工作日期 ${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）${g.note?'・'+escapeHtml(g.note):''}　※ 金額為車趟報酬，實際匯款金額以扣除預支、扣稅等為準。</div>
     </div>`).join('');
   }).catch(()=>{});
-  document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; refresh(); };
+  document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; renderFuelPanel(); refresh(); };
   // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的車趟，
   // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列
   // 越查越大（司機身份本來就受RLS限制只看得到自己的車趟，查6個月內任一個月
