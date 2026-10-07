@@ -4350,7 +4350,9 @@ function renderToday(c){
       let html = '';
       // 本週已過去的日子：收成一行，點開才看（詳細紀錄在「歷史任務」）。
       const pastTasks = thisWeek.filter(d=>d<today).flatMap(d=>tasksOf(d).map(a=>({d,a})));
-      if(pastTasks.length) html += `<details class="sl-past"><summary>本週已過去的任務 ${pastTasks.length} 項 ▸</summary>${pastTasks.map(({d,a})=>`<div class="sl-day"><div class="sl-day-label">${dayName(d)}</div><div class="sl-rows">${row(a)}</div></div>`).join('')}</details>`;
+      // 同一天的任務放在同一個日期底下（日期只出現一次）。
+      const pastDays = [...new Set(pastTasks.map(x=>x.d))];
+      if(pastTasks.length) html += `<details class="sl-past"><summary>本週已過去的任務 ${pastTasks.length} 項 ▸</summary>${pastDays.map(d=>`<div class="sl-day"><div class="sl-day-label">${dayName(d)}</div><div class="sl-rows">${pastTasks.filter(x=>x.d===d).map(x=>row(x.a)).join('')}</div></div>`).join('')}</details>`;
       const renderRange = dates=>{
         let out = '', emptyRun = [];
         const flush = ()=>{ if(!emptyRun.length) return; out += `<div class="sl-empty">${emptyRun.length===1?dayName(emptyRun[0]):`${emptyRun[0].slice(5).replace('-','/')}～${emptyRun[emptyRun.length-1].slice(5).replace('-','/')}`}　無排班</div>`; emptyRun = []; };
@@ -4367,7 +4369,8 @@ function renderToday(c){
       if(thisUpcoming.length) html += renderRange(thisUpcoming);
       // 今天不在本週清單（理論上不會）時也要有今天標示，這裡不另外處理。
       const nextHasTasks = nextWeek.some(d=>tasksOf(d).length);
-      html += `<div class="sl-sub">下週</div>` + (nextHasTasks ? renderRange(nextWeek) : `<div class="sl-empty">下週 無排班（尚未公布或沒有任務）</div>`);
+      // 下週：有已發佈的任務才顯示，沒有就整段不出現。
+      if(nextHasTasks) html += `<div class="sl-sub">下週</div>` + renderRange(nextWeek);
       return html;
     })()}</div>
     <div class="schedule-grid">
