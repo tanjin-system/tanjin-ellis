@@ -232,7 +232,7 @@ function dataUrlToBytesAndType(dataUrl) {
 // 目標是100位承攬人員、1000+店家同時配送。主控端身份（RLS admin_all policy 是
 // using(true)，看得到全部承攬人員的資料）在那個規模下，即使窗口只抓14天，換算
 // 下來大約還是要抓大幾千筆下貨點紀錄；抓90天在那個規模下單次登入的JSON會到
-// 10幾MB，一定會感覺到卡頓，所以刻意縮到14天，只涵蓋「今日行程/本週班表」
+// 10幾MB，一定會感覺到卡頓，所以刻意縮到14天，只涵蓋「今日行程/本週期任務清單」
 // 這種天天在看的畫面（這兩個畫面另外各自呼叫 ensureAssignmentsRange 確保涵蓋
 // 實際顯示的區間，不完全依賴這裡的預設值）。承攬人員自己登入時因為 RLS
 // （driver_select_own policy 是 driver_id = auth_driver_id()）本來就只看得到
@@ -414,7 +414,7 @@ async function refreshAssignmentsRange(start, end) {
   }
 }
 
-// 薪資結算／請款結算／資料匯出這三個純報表畫面（只讀，不像週班表還要點格子
+// 薪資結算／請款結算／資料匯出這三個純報表畫面（只讀，不像週期任務清單還要點格子
 // 編輯/指派）改成完全不碰 state.data.assignments 共用陣列，查詢當下直接跟
 // 資料庫要「這次剛好需要的那一段」，用完就丟（存在呼叫端自己的區域變數，
 // 不寫回 state）。這樣畫面停留期間不管查的區間多大，都不會拖到其他任何
@@ -433,13 +433,13 @@ async function fetchAssignmentsInRange(start, end) {
 }
 
 // ensureAssignmentsRange() 只會往前補資料、從不清掉，如果放著不管，一個
-// 主控在同一個session裡多查幾次舊月份薪資、舊區間請款、舊週班表，
+// 主控在同一個session裡多查幾次舊月份薪資、舊區間請款、舊週期任務清單，
 // state.data.assignments 會一路累積下去——100承攬人員/1000店規模下，查個
 // 5、6次舊資料累積起來的量，跟直接抓90天窗口一樣重，等於繞了一圈又
 // 繞回原本要解決的問題。查歷史資料本身完全合理（要用就是要能查到），
 // 但查完離開那個畫面後，不該一直占用著拖慢其他所有畫面的篩選/掃描
 // 效能。這裡把 state.data.assignments 縮回「日常操作真的需要」的基本
-// 窗口（今日行程/週班表當週用），離開薪資結算/請款結算/資料匯出/週班表
+// 窗口（今日行程/週期任務清單當週用），離開薪資結算/請款結算/資料匯出/週期任務清單
 // 這些「查歷史資料」的分頁時呼叫（見 index.html goTab()），下次要查
 // 別的舊資料時 ensureAssignmentsRange() 會重新按需補抓，不影響查詢
 // 本身，只是不讓查過的舊資料一直賴著不走。
@@ -617,7 +617,7 @@ async function createOrigin(input) {
 // 路線名稱（例如「三洋工業零件中心 第一車 上午」）是新增路線當下把出發點
 // 名稱直接寫死存成文字，不會跟著出發點改名自動更新——如果只改 origins
 // 這張表，底下已存在的路線名稱會卡在改名前的舊字，變成到處都看得到卻
-// 改不掉的舊名字（承攬人員端、週班表、請款結算、薪資結算配送明細都顯示路線
+// 改不掉的舊名字（承攬人員端、週期任務清單、請款結算、薪資結算配送明細都顯示路線
 // 名稱）。所以出發點改名時，這裡一併把底下每一條路線的名稱依「現在的
 // label＋自己的 seq/shift」重新組一次、寫回去，不是只把舊字串換成新字串
 // ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟出發點同步。
@@ -866,7 +866,7 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   }
 }
 
-// 路線版本臨時更新（例如訂正下貨點順序、修正拆賬）時，週班表裡已經排好、
+// 路線版本臨時更新（例如訂正下貨點順序、修正拆賬）時，週期任務清單裡已經排好、
 // 但還沒開始/還沒完成的未來車趟，不會自動跟著變——建立車趟當下就把內容複製
 // 成快照了（見 createAssignment）。這裡是選配的「一鍵套用」：找出這條路線
 // 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的車趟，
@@ -953,9 +953,9 @@ async function createAssignment(input) {
   return full;
 }
 
-// ---------------- 週班表：下週自動延續本週＋發佈 ----------------
+// ---------------- 週期任務清單：下週自動延續本週＋發佈 ----------------
 // 發佈：未來週次的車趟預設是草稿（published=false，承攬人員端 RLS 看不到），主控排完按「發佈」才開放。
-// 自動延續：每週第一次打開週班表時，如果下週還沒補過（schedule_rollovers 沒有紀錄）且下週是空的，
+// 自動延續：每週第一次打開週期任務清單時，如果下週還沒補過（schedule_rollovers 沒有紀錄）且下週是空的，
 // 就把本週每一格（路線＋承攬人員＋星期幾）複製到下週，一律是草稿。先寫入紀錄再複製，之後刪掉哪格都不會再補回來。
 async function publishWeek(start, end) {
   const supabase = getSupabase();
@@ -985,7 +985,7 @@ async function rolloverNextWeekIfNeeded() {
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase.from('assignments').select('route_id, driver_id, trip_date, status')
       .gte('trip_date', thisWeek[0]).lte('trip_date', thisWeek[6]).neq('status', 'cancelled').order('id').range(from, from + 999);
-    if (error) throw new Error('讀取本週班表失敗：' + error.message);
+    if (error) throw new Error('讀取本週期任務清單失敗：' + error.message);
     src.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
@@ -1013,7 +1013,7 @@ async function rolloverNextWeekIfNeeded() {
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
     const { data, error } = await supabase.from('assignments').insert(chunk.map(c => c.row)).select('id, route_id, trip_date');
-    if (error) throw new Error('延續下週班表失敗：' + error.message);
+    if (error) throw new Error('延續下週期任務清單失敗：' + error.message);
     chunk.forEach(c => {
       const hit = (data || []).find(d => d.route_id === c.row.route_id && d.trip_date === c.row.trip_date);
       if (hit) created.push({ id: hit.id, dropPointIds: c.dropPointIds });
@@ -1026,7 +1026,7 @@ async function rolloverNextWeekIfNeeded() {
   }));
   for (let i = 0; i < pointRows.length; i += 500) {
     const { error } = await supabase.from('assignment_drop_points').insert(pointRows.slice(i, i + 500));
-    if (error) throw new Error('延續下週班表的下貨點失敗：' + error.message);
+    if (error) throw new Error('延續下週期任務清單的下貨點失敗：' + error.message);
   }
   await supabase.from('schedule_rollovers').update({ created_count: created.length }).eq('week_start', nextStart);
   } catch (err) {
@@ -1040,7 +1040,7 @@ async function rolloverNextWeekIfNeeded() {
   // 把新建的下週車趟讀進記憶體（含下貨點）
   const { data: full, error: fullErr } = await fetchAllAssignmentPages(() => supabase.from('assignments')
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', nextStart).lte('trip_date', nextEnd));
-  if (fullErr) throw new Error('讀取下週班表失敗：' + fullErr.message);
+  if (fullErr) throw new Error('讀取下週期任務清單失敗：' + fullErr.message);
   const have = new Set(state.data.assignments.map(a => a.id));
   (full || []).map(mapAssignment).forEach(a => { if (!have.has(a.id)) state.data.assignments.push(a); });
   state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));

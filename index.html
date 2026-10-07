@@ -371,7 +371,7 @@ async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
 // PDF做好後把內容放進那個分頁，用瀏覽器內建的PDF檢視器開啟，使用者自己用瀏覽器
 // 的分享／下載功能存檔即可，比強制觸發下載在各平台上都穩定。
 // heading省略時預設沿用title當PDF內文最上面顯示的標題（原本的行為，
-// 大部分報表就是要顯示自己的標題，例如「週班表_xxx」）；title本身永遠
+// 大部分報表就是要顯示自己的標題，例如「週期任務清單_xxx」）；title本身永遠
 // 只拿去當下載檔名用（已經有做過檔名安全字元替換），跟heading是兩件
 // 事——請款單特別傳空字串heading，因為請款單內文最上面已經自己放了
 // 「信興行銷有限公司」，不需要再重複顯示一次跟檔名一樣的標題。
@@ -392,7 +392,7 @@ function exportPrintable(title, bodyHtml, heading){
   const scrollY = window.scrollY || window.pageYOffset || 0;
   const wrap = document.createElement('div');
   // min-width 1050px 讓一般內容（例如請款單）維持原本習慣的寬度；width:max-content
-  // 讓內容本來就比較寬的表格（例如週班表，一週7天x早晚班共15欄，本來就設計成
+  // 讓內容本來就比較寬的表格（例如週期任務清單，一週7天x早晚班共15欄，本來就設計成
   // 用 white-space:nowrap 讓每一欄不擠字）可以自然撐開到實際需要的寬度，不會被
   // 硬性限制在1050px內導致最右邊的欄位（例如週六、週日）被截斷看不到。
   wrap.style.cssText = 'min-width:1050px; width:max-content; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
@@ -403,7 +403,7 @@ function exportPrintable(title, bodyHtml, heading){
       th,td{ padding:7px 9px; border:1px solid #999; text-align:left; }
       h1,h3{ margin:0 0 10px; }
       .amount{ font-family:monospace; font-weight:700; }
-      /* 畫面上用深色格子表示「這個班次不存在」（例如週班表的 grid-black），
+      /* 畫面上用深色格子表示「這個班次不存在」（例如週期任務清單的 grid-black），
          但印成PDF時大片純黑會像是壞掉，改成跟標籤格一致的淺灰。 */
       .grid-black{ background:#E7E9EC !important; }
       /* 防斷頁：表格列、面板區塊、標題都不允許被硬切成兩半 */
@@ -521,7 +521,7 @@ function exportPanelPrint(panelEl, title, heading){
   exportPrintable(title, clone.innerHTML, heading);
 }
 // 勞報單專用的直式PDF：每份 slipHtml（payrollSlipHtml() 產生的字串）固定佔
-// 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週班表那樣允許
+// 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週期任務清單那樣允許
 // 跨頁），符合「一位承攬人員只能呈現一張直式勞報單」的規定；slipHtmls 傳多筆
 // 時，每筆各自佔一頁，組成同一份合併PDF，方便一次下載全體承攬人員的勞報單。
 // 有代墊款的承攬人員，第2頁是 payrollAttachmentHtml() 的明細附件，緊接在該承攬人員
@@ -840,7 +840,7 @@ function getWeekDates(offset){
 const ADMIN_TABS = [
   {id:'home', label:'首頁'},
   {id:'announcements', label:'公告管理'},
-  {id:'schedule', label:'週班表'},
+  {id:'schedule', label:'週期任務清單'},
   {id:'drivers', label:'承攬人員資料'},
   {id:'channels', label:'通路管理'},
   {id:'dropPoints', label:'下貨點資料庫'},
@@ -888,8 +888,8 @@ function renderNav(){
   });
 }
 // 薪資結算／請款結算／資料匯出改成各自直接查資料庫、不寫回共用的
-// state.data.assignments 之後，只剩「週班表」還會為了查舊週把窗口往前補
-// 到超過日常需要的範圍（見 trimAssignmentsToBaseWindow 說明）。離開週班表、
+// state.data.assignments 之後，只剩「週期任務清單」還會為了查舊週把窗口往前補
+// 到超過日常需要的範圍（見 trimAssignmentsToBaseWindow 說明）。離開週期任務清單、
 // 切去別的分頁時，把窗口縮回日常操作真的需要的基本大小，避免查過的舊
 // 資料一直占著拖慢其他畫面——這是所有「切分頁」的共用入口（點側邊選單、
 // 或頁面內部「前往OOO」按鈕都會經過這裡），比只改 goTab() 更保險。
@@ -1052,7 +1052,7 @@ function undeliveredTodayGroups(shifts){
     // 依出發地排序，同出發地內再依車次/班次排序——不然這個清單原本是照
     // assignments陣列本身的順序（近似隨機），同一個出發點的車次會分散
     // 在畫面各處，主控要一台一台找很亂。有出發點資料才排得動的話用
-    // routeSortCompare（跟路線管理/週班表同一套排序邏輯），route資料
+    // routeSortCompare（跟路線管理/週期任務清單同一套排序邏輯），route資料
     // 缺失（理論上不會發生）就排到最後面，不讓程式整個掛掉。
     .sort((x,y)=>{
       if(!x.route) return 1;
@@ -1060,11 +1060,11 @@ function undeliveredTodayGroups(shifts){
       return routeSortCompare(x.route, y.route);
     })
     .map(({a})=>({
-      // 車次名稱後面直接帶出當班承攬人員名字，不用另外切到週班表查是誰在跑。
+      // 車次名稱後面直接帶出當班承攬人員名字，不用另外切到週期任務清單查是誰在跑。
       routeLabel: `${routeName(a.routeId)} ${driverName(a.driverId)}`,
       // 承攬人員按過「開始行程」後狀態會變成 in_progress（還沒按之前是
       // scheduled）——畫面前面打一個勾，讓主控一眼看出「這台已經出發在跑了」
-      // 跟「還沒出發」的差別，不用一個一個點進週班表確認。
+      // 跟「還沒出發」的差別，不用一個一個點進週期任務清單確認。
       started: a.status==='in_progress',
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
       // 監控清單裡，避免主控一直看到其實承攬人員已經回報過原因的店。
@@ -1083,7 +1083,7 @@ function undeliveredTodayGroups(shifts){
 // 行憲紀念日）是紀念性質的節日，不適合用「快樂」這種歡慶字眼，承攬人員端
 // 故意不顯示賀詞（用詞用「祝福」不是「放假通知」——車隊不一定真的休息，
 // 這個功能純粹是顯示用，不會自動擋掉那天的排班或出車，中秋節照樣可以
-// 正常排車出貨）；主控的週班表則不分節日性質，統一顯示節日名稱（排班
+// 正常排車出貨）；主控的週期任務清單則不分節日性質，統一顯示節日名稱（排班
 // 規劃用，不是賀詞）。日期是寫死的，明年要記得換成明年的行事曆（尤其
 // 農曆節日，每年國曆日期都不同）。
 const TAIWAN_HOLIDAYS_2026 = [
@@ -1157,7 +1157,7 @@ async function loadDepotOverview(driverId, date){
 async function renderHomeAdmin(c){
   const tiles = [
     {id:'announcements', label:'公告管理', sub:'發布訊息給全體承攬人員'},
-    {id:'schedule', label:'週班表', sub:'指派承攬人員與路線'},
+    {id:'schedule', label:'週期任務清單', sub:'指派承攬人員與路線'},
     {id:'drivers', label:'承攬人員資料', sub:'含車輛與銀行資訊'},
     {id:'channels', label:'通路管理', sub:'請款週期設定'},
     {id:'dropPoints', label:'下貨點資料庫', sub:'依通路分類'},
@@ -1222,7 +1222,7 @@ async function renderHomeAdmin(c){
     ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單承攬人員尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
-      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的車趟尚未發佈（承攬人員看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週班表</button></div>` : ''}
+      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的車趟尚未發佈（承攬人員看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往薪資結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位承攬人員尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
       ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆承攬人員代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
@@ -1916,7 +1916,7 @@ let editingOgId = null;
 function renderOrigins(c){
   c.innerHTML = `
     <h2 class="section-title">出發點資料庫</h2>
-    <p class="section-sub">先建立好常用出發點，路線與週班表中即可用選單挑選，不用每次手key。</p>
+    <p class="section-sub">先建立好常用出發點，路線與週期任務清單中即可用選單挑選，不用每次手key。</p>
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>地址</label><input id="ogAddr"></div>
@@ -2387,11 +2387,11 @@ function renderRouteDetail(rid){
           billingByChannel
         });
         delete routeDraft[rid2];
-        // 週班表裡已經排好、還沒完成的未來車次不會自動跟著新版本走（建立當下就
+        // 週期任務清單裡已經排好、還沒完成的未來車次不會自動跟著新版本走（建立當下就
         // 複製成快照了），這裡問一次要不要一鍵套用，避免每一趟都要手動重建。
         const futureCount = state.data.assignments.filter(a=>
           a.routeId===rid2 && a.date>=effDate && (a.status==='scheduled'||a.status==='in_progress')).length;
-        if(futureCount>0 && confirm(`週班表中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、承攬人員費用、請款拆賬）套用到這些車次嗎？承攬人員與日期不會改變，已完成的車次不受影響。`)){
+        if(futureCount>0 && confirm(`週期任務清單中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、承攬人員費用、請款拆賬）套用到這些車次嗎？承攬人員與日期不會改變，已完成的車次不受影響。`)){
           try{
             const { updated } = await regenerateFutureAssignments(rid2, effDate);
             alert(`已套用到 ${updated} 趟未來車次。`);
@@ -2403,7 +2403,7 @@ function renderRouteDetail(rid){
   });
 }
 
-// ---------- 週班表（直接指派承攬人員＋出發點，這裡才產生實際車趟） ----------
+// ---------- 週期任務清單（直接指派承攬人員＋出發點，這裡才產生實際車趟） ----------
 const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
 // 車次排序用：從「第X車...」抓出中文數字X換算成阿拉伯數字，抓不到的排到最後面
 // （維持原本相對順序，不會亂跳）。支援到「第十九車」，車隊規模通常用不到更多。
@@ -2437,15 +2437,15 @@ async function renderScheduleAdmin(c){
   // 每週第一次打開：下週還是空的就自動延續本週（草稿，承攬人員看不到，按「發佈」才開放）。背景進行，不擋畫面。
   rolloverNextWeekIfNeeded().then(r=>{
     if(!r) return;
-    state._rolloverMsg = r.created ? `已自動把本週班表延續到下週（${r.created} 趟，目前是草稿，承攬人員看不到；有異動請手動改，排好後按「發佈」）。` : '';
+    state._rolloverMsg = r.created ? `已自動把本週期任務清單延續到下週（${r.created} 趟，目前是草稿，承攬人員看不到；有異動請手動改，排好後按「發佈」）。` : '';
     if(state.tab==='schedule') renderContent();
-  }).catch(err=>{ state._rolloverChecked = null; console.error('自動延續下週班表失敗', err); });
+  }).catch(err=>{ state._rolloverChecked = null; console.error('自動延續下週期任務清單失敗', err); });
   // 往前翻週（state.weekOffset 可以一直往負的翻）翻超過近14天的預設窗口時，
   // 要先補齊那一週的資料再畫格子，不然會看到格子是空的、以為那週沒排班。
   if(state.data.assignmentsWindowStart && week1[0] < state.data.assignmentsWindowStart){
-    c.innerHTML = '<h2 class="section-title">週班表</h2><div class="empty">載入中...</div>';
+    c.innerHTML = '<h2 class="section-title">週期任務清單</h2><div class="empty">載入中...</div>';
     try{ await ensureAssignmentsRange(week1[0]); }
-    catch(e){ c.innerHTML = `<h2 class="section-title">週班表</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    catch(e){ c.innerHTML = `<h2 class="section-title">週期任務清單</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
     if(state.tab!=='schedule') return; // 使用者可能已經切走這一頁
   }
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
@@ -2460,8 +2460,8 @@ async function renderScheduleAdmin(c){
   })();
   const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
-    <h2 class="section-title">週班表</h2>
-    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派承攬人員、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。承攬人員費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週班表。</p>
+    <h2 class="section-title">週期任務清單</h2>
+    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派承攬人員、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。承攬人員費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週期任務清單。</p>
     <div class="panel no-print">
       <p style="font-size:12.5px; font-weight:600; margin:0 0 8px;">批次建立（例如整週一~五都跑同一路線）</p>
       <div class="grid4">
@@ -2505,7 +2505,7 @@ async function renderScheduleAdmin(c){
   document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; renderContent(); };
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; renderContent(); };
   document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); };
-  document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週班表_${week1[0]}_${week1[6]}`);
+  document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週期任務清單_${week1[0]}_${week1[6]}`);
   const publishBtn = document.getElementById('publishWeekBtn');
   if(publishBtn) publishBtn.onclick = async ()=>{
     const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
@@ -2561,10 +2561,10 @@ function renderWeekGrid(containerId, dates){
     if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
     // 驚嘆號的判斷改成「這趟只要有任何一個下貨點沒有status=completed」就顯示，
     // 不管是還沒處理、還是承攬人員已經填了未配達原因（通路未下單/央廚未出貨等）——
-    // 只要沒送達，不論理由，主控在週班表就該一眼看到要留意；原本只看 a.hasIssue
+    // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
     // 會漏掉「承攬人員把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
     // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的車趟明細顯示，
-    // 這裡週班表格子維持簡單，不重複塞理由文字）。
+    // 這裡週期任務清單格子維持簡單，不重複塞理由文字）。
     return `<td class="grid-cell" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
   }
   function assignmentInner(a){
@@ -2577,7 +2577,7 @@ function renderWeekGrid(containerId, dates){
     const feeLine = (a.fare || a.distanceKm || extra || paidTag) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(a.fare)}・${a.distanceKm||0}km${extraTag}${paidTag}</span>` : '';
     return `${driverName(a.driverId)}${tag}${issue}${feeLine}`;
   }
-  // 「星期一」／「週二到五」這種分成兩條路線、但在週班表合併成同一格的車次：不能只看
+  // 「星期一」／「週二到五」這種分成兩條路線、但在週期任務清單合併成同一格的車次：不能只看
   // 依星期幾挑中的那一條路線，如果同一天同一班另一條路線底下也有車趟（例如星期一那天
   // 實際用了「週二到五」版本，或同一位承攬人員兩條路線都排了），也要一起列出來，不然點
   // 承攬人員名字只看得到其中一趟、另一趟被藏起來。同一格有多趟時，每趟各自可以點擊，
@@ -2610,7 +2610,7 @@ function renderWeekGrid(containerId, dates){
   const blocks = origins.map(og=>{
     const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
     if(!routesHere.length) return '';
-    // 第七車/第八車這種「星期一報價」跟「週二到五」分成兩條路線的車次，週班表
+    // 第七車/第八車這種「星期一報價」跟「週二到五」分成兩條路線的車次，週期任務清單
     // 這裡只是顯示合併成一列，依每個日期欄位實際的星期幾去挑對應的那條路線——
     // 完全不影響請款/承攬人員費用/公里，那些金額仍然是各自路線（各自版本）原本
     // 存的資料，只是「同一列、不同欄位讀不同路線」而已。
@@ -2649,7 +2649,7 @@ function renderWeekGrid(containerId, dates){
       detailTr.dataset.forId = td.dataset.viewassign;
       const detailTd = document.createElement('td');
       detailTd.colSpan = tr.children.length;
-      // 這一列橫跨整張週班表（7天×2班，比螢幕寬很多），明細面板如果跟著撐滿，
+      // 這一列橫跨整張週期任務清單（7天×2班，比螢幕寬很多），明細面板如果跟著撐滿，
       // 右上角的「刪除」跟狀態標籤會被擠到畫面外看不到；限制成可視寬度並固定在
       // 左邊（sticky），表格橫向捲動時面板也不會跟著跑掉。
       const holder = document.createElement('div');
@@ -2702,7 +2702,7 @@ function renderQuickCreate(routeId, date){
     }catch(err){ alert(err.message); }
   };
 }
-// 週班表車趟明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
+// 週期任務清單車趟明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
 // 額外金額併進這一趟的報酬（我的報酬、薪資結算、勞報單、即時利潤自動跟著變，勞報單不單獨列項）；
 // 已付款只影響可領淨額，不影響勞報單金額，跟預支是兩個獨立功能。
 async function renderTripPaySection(a, el){
@@ -4293,7 +4293,7 @@ function renderExport(c){
 }
 
 // ---------- 承攬人員端：今日行程（預設畫面） ----------
-// 上午永遠排在下午前面——不管實際建立車趟的順序（週班表怎麼異動、
+// 上午永遠排在下午前面——不管實際建立車趟的順序（週期任務清單怎麼異動、
 // 哪個先建立），同一天同時有上午跟下午的車次時，畫面上一律上午在上。
 function assignmentShiftKey(a){
   const route = state.data.routes.find(r=>r.id===a.routeId);
