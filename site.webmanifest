@@ -1,7 +1,7 @@
 {
-  "name": "信興｜碳金展業服務團隊",
-  "short_name": "碳金展業",
-  "description": "信興碳金展業服務團隊調度與配送管理系統",
+  "name": "信興｜碳金營運中心",
+  "short_name": "碳金營運",
+  "description": "信興碳金營運中心調度與配送管理系統",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
