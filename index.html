@@ -4184,7 +4184,7 @@ function renderSettings(c){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `碳金 Hub系統備份_${todayStr()}.json`;
+    a.download = `碳金Hub系統備份_${todayStr()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
