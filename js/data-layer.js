@@ -1127,8 +1127,8 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
 
   const completedAt = new Date().toISOString();
-  // 補拍照片代表這個店點其實送達了，之前選的未配達原因（如果有）就不成立，
-  // 一起清掉，避免畫面同時顯示「已送達」又掛著一個舊的未配達原因標籤。
+  // 補拍照片代表這個店點其實送達了，之前選的未完成原因（如果有）就不成立，
+  // 一起清掉，避免畫面同時顯示「已完成」又掛著一個舊的未完成原因標籤。
   const { error: updErr } = await supabase.from('assignment_drop_points')
     .update({ status: 'completed', photo_url: path, completed_at: completedAt, issue_reason: null })
     .eq('id', dropPointId);
@@ -1137,14 +1137,14 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; }
 }
 
-// 未配達原因：夥伴在單一店點旁邊直接選填，不用等到整趟結束才填一個籠統的
+// 未完成原因：夥伴在單一店點旁邊直接選填，不用等到整趟結束才填一個籠統的
 // 備註。設定原因不代表這個店點「完成」（status 還是 pending，沒有送達
 // 證明照），只是有了解釋；主控端在「完成本趟」的判斷跟畫面顯示都會把它
 // 當作「已處理」看待。
 async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignment_drop_points').update({ issue_reason: reason }).eq('id', dropPointId);
-  if (error) throw new Error('儲存未配達原因失敗：' + error.message);
+  if (error) throw new Error('儲存未完成原因失敗：' + error.message);
   const a = state.data.assignments.find(x => x.id === assignmentId);
   const dp = a?.dropPoints.find(x => x.id === dropPointId);
   if (dp) dp.issueReason = reason;

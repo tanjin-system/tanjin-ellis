@@ -1079,7 +1079,7 @@ function undeliveredTodayGroups(shifts){
       // scheduled）——畫面前面打一個勾，讓主控一眼看出「這台已經出發在跑了」
       // 跟「還沒出發」的差別，不用一個一個點進週期任務清單確認。
       started: a.status==='in_progress',
-      // 已經選了未配達原因的店點視為「已處理」（有解釋了），不算在即時
+      // 已經選了未完成原因的店點視為「已處理」（有解釋了），不算在即時
       // 監控清單裡，避免主控一直看到其實夥伴已經回報過原因的店。
       // 店名不再加通路名稱前綴（畫面上已經夠擠了，通路名稱對主控來說不是
       // 必要資訊）。
@@ -2573,7 +2573,7 @@ function renderWeekGrid(containerId, dates){
     const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
     if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
     // 驚嘆號的判斷改成「這趟只要有任何一個店點沒有status=completed」就顯示，
-    // 不管是還沒處理、還是夥伴已經填了未配達原因（通路未下單/央廚未出貨等）——
+    // 不管是還沒處理、還是夥伴已經填了未完成原因（通路未下單/央廚未出貨等）——
     // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
     // 會漏掉「夥伴把每個店點都填了原因、allHandled視為true、結案時沒觸發
     // has_issue」的情況（詳細是哪個店點、什麼原因，只在點進去的任務明細顯示，
@@ -2896,7 +2896,7 @@ function renderAssignmentDetail(id, box){
         <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換夥伴</button>
       </div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由夥伴端自行操作，完成後會自動封存，主控端無需再次確認。</p>
-      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':dp.issueReason?`<span class="badge pending">未配達：${dp.issueReason}</span>`:'<span class="badge pending">待送達</span>'}</div>`).join('')}
+      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待送達</span>'}</div>`).join('')}
       <div class="note" id="afPaySection" style="margin-top:10px;"><div class="empty">載入額外金額與已付款…</div></div>
       <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
       <div id="afOverrideBox"></div>
@@ -4380,13 +4380,13 @@ function renderTodayDetail(todays){
           const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
           const photoUrls = dpPhotoUrls(dp);
           const statusBadge = dp.status==='completed'
-            ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已送達${photoUrls.length?'・點擊看照片':''}</span>`
+            ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
             : '<span class="badge pending">待送達</span>';
           return `
           <div class="drop-point-driver" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
             ${statusBadge}
-            ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未配達：${dp.issueReason}</span>` : ''}
+            ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未完成：${dp.issueReason}</span>` : ''}
             <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
               ${photoCount<3 ? `
               <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>
@@ -4407,12 +4407,12 @@ function renderTodayDetail(todays){
           </div>`;
         }).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
-        ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未配達原因，結束時需填寫備註說明原因</p>':''}
+        ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;
   }).join('');
-  // 照片改成跟歷史班表一樣，點擊「已送達」才載入——手機背景切換常把頁面砍掉
-  // 重開，之前「一開頁面就自動載入當天所有已送達照片」會讓同一批照片被
+  // 照片改成跟歷史班表一樣，點擊「已完成」才載入——手機背景切換常把頁面砍掉
+  // 重開，之前「一開頁面就自動載入當天所有已完成照片」會讓同一批照片被
   // 重複下載很多次，是 Storage 流量爆量的主因之一。
   const dpById = {};
   todays.forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
@@ -4433,7 +4433,7 @@ function renderTodayDetail(todays){
       const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
       let issueNote;
       if(!allHandled){
-        const note = prompt('尚有店點未完成拍照、也沒有選擇未配達原因，請說明原因（此備註主控端會看到）：');
+        const note = prompt('尚有店點未完成拍照、也沒有選擇未完成原因，請說明原因（此備註主控端會看到）：');
         if(note===null) return;
         if(!note.trim()){ alert('請填寫備註原因'); return; }
         issueNote = note.trim();
@@ -4443,7 +4443,7 @@ function renderTodayDetail(todays){
     };
   });
   // 「拍照上傳」跟「上傳照片」兩顆按鈕共用同一套「填下一格」邏輯：一個
-  // 店點最多3格照片，第1格是主要送達證明照（決定這個點是否算已送達），
+  // 店點最多3格照片，第1格是主要送達證明照（決定這個點是否算已完成），
   // 第2、3格是附加照片。不管是先按拍照還是先用相簿上傳、按第幾次，都是
   // 「填下一個還空著的格子」，沒有「重新拍照＝覆蓋」這種概念了——按鈕
   // 名稱/行為固定，同一顆「拍照上傳」按第一次拍主要照片，再按同一顆按
@@ -4528,7 +4528,7 @@ function renderTodayDetail(todays){
       })();
     };
   });
-  // 未配達原因：選了代表這個店點暫時不會有送達照片，直接存檔，不用等到
+  // 未完成原因：選了代表這個店點暫時不會有送達照片，直接存檔，不用等到
   // 整趟結束才統一填一個籠統的備註；選完之後如果夥伴還是補拍了照片，
   // uploadDropPointPhoto() 會自動把這裡的原因清掉（見 data-layer.js）。
   box.querySelectorAll('[data-issue]').forEach(sel=>{
@@ -4602,8 +4602,8 @@ async function renderHistory(c){
               ${a.dropPoints.map(dp=>{
                 const photoUrls = dpPhotoUrls(dp);
                 const statusBadge = dp.status==='completed'
-                  ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已送達${photoUrls.length?'・點擊看照片':''}</span>`
-                  : `<span class="badge pending">未配達${dp.issueReason?'：'+dp.issueReason:''}</span>`;
+                  ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
+                  : `<span class="badge pending">未完成${dp.issueReason?'：'+dp.issueReason:''}</span>`;
                 return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photo && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`;
               }).join('')}
             </div>
