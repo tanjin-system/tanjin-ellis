@@ -2903,6 +2903,32 @@ function renderQuickCreate(routeId, date){
 // 週期任務清單任務明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
 // 額外金額併進這一趟的報酬（我的報酬、報酬結算、勞報單、即時利潤自動跟著變，勞報單不單獨列項）；
 // 已付款只影響可領淨額，不影響勞報單金額，跟預支是兩個獨立功能。
+// 主控：把這個任務還沒完成的幾個店點「臨時交給支援夥伴」。只改店點由誰到場，不動任何帳；
+// 拆分金額（選填）只是顯示給支援夥伴看，不計入報酬／請款／勞報單。
+function renderSupportSection(a, el){
+  if(!el) return;
+  if(a.status==='completed' || a.published===false){ el.innerHTML = ''; return; }
+  const free = a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.helperId);
+  if(!free.length){ el.innerHTML = ''; return; }
+  el.innerHTML = `<details class="note" style="margin-top:8px;"><summary style="cursor:pointer; font-weight:600;">臨時交給支援夥伴（只移店點，帳不動）</summary>
+    <div style="font-size:12px; color:var(--ink-soft); margin:6px 0;">勾選要交出去的店點，支援夥伴會在他的「今日任務」看到並自己拍照上傳；原夥伴那幾個店點就不能再拍。報酬、請款、拆店調撥完全不變。</div>
+    ${free.map(dp=>`<label style="display:flex; align-items:center; gap:8px; padding:4px 0; font-size:13px;"><input type="checkbox" class="sdPick" value="${dp.id}" style="width:auto;"> ${escapeHtml(dpLabel(dp))}（${escapeHtml(channelName(dp.channelId))}）</label>`).join('')}
+    <div class="field" style="margin-top:6px;"><label>支援夥伴</label><select id="sdHelper"><option value="">選擇支援夥伴</option>${state.data.drivers.filter(d=>d.status==='active' && d.id!==a.driverId).map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>拆分金額（選填，只顯示給支援夥伴看，不計入任何帳）</label><input id="sdAmount" type="number" inputmode="numeric"></div>
+    <button class="btn amber" id="sdSave" style="padding:6px 12px;">交給支援夥伴</button>
+  </details>`;
+  const rt = state.data.routes.find(x=>x.id===a.routeId);
+  enhanceDriverSelect(el.querySelector('#sdHelper'), { getOrigin: ()=> rt ? rt.originAddr : null });
+  el.querySelector('#sdSave').onclick = async ()=>{
+    const ids = [...el.querySelectorAll('.sdPick:checked')].map(x=>x.value);
+    const helperId = el.querySelector('#sdHelper').value;
+    if(!ids.length){ alert('請至少勾選一個店點'); return; }
+    if(!helperId){ alert('請選擇支援夥伴'); return; }
+    if(!confirm(`把 ${ids.length} 個店點交給 ${driverName(helperId)} 支援嗎？\n他會在今日任務看到並自己拍照；原夥伴那幾個店點就不能再拍。帳完全不動。`)) return;
+    try{ await createDelegation({ assignmentId:a.id, helperId, dropPointIds:ids, amount: el.querySelector('#sdAmount').value }); renderContent(); }
+    catch(err){ alert(err.message); }
+  };
+}
 async function renderTripPaySection(a, el){
   if(!el) return;
   let logs = [];
@@ -3081,7 +3107,8 @@ function renderAssignmentDetail(id, box){
         <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換夥伴</button>
       </div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由夥伴端自行操作，完成後會自動封存，主控端無需再次確認。</p>
-      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待完成</span>'}</div>`).join('')}
+      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待完成</span>'}${dp.helperId?` <span class="badge" style="background:#E3EEF7; color:#2F6EA5;">${dp.status==='completed'?'支援完成':'支援中'}：${escapeHtml(dp.helperName||'')}</span>${dp.status!=='completed'?` <button class="btn ghost" data-revokedel="${dp.delegationId}" style="padding:2px 8px; font-size:11.5px;">收回</button>`:''}`:''}</div>`).join('')}
+      <div id="afSupportSection"></div>
       <div class="note" id="afPaySection" style="margin-top:10px;"><div class="empty">載入額外金額與已付款…</div></div>
       <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
       <div id="afOverrideBox"></div>
@@ -3103,6 +3130,10 @@ function renderAssignmentDetail(id, box){
     try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
     catch(err){ alert(err.message); }
   };
+  renderSupportSection(a, box.querySelector('#afSupportSection'));
+  box.querySelectorAll('[data-revokedel]').forEach(b=>{
+    b.onclick = async ()=>{ if(!confirm('把這批交給支援夥伴、還沒完成的店點收回嗎？（已完成的不會動）')) return; try{ await revokeDelegation(a.id, b.dataset.revokedel); renderContent(); }catch(err){ alert(err.message); } };
+  });
   renderTripPaySection(a, box.querySelector('#afPaySection'));
   box.querySelector('#afOverrideToggle').onclick = ()=>{
     const box2 = box.querySelector('#afOverrideBox');
@@ -4580,31 +4611,23 @@ function openWeekTripPreview(assignmentId){
 }
 function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
-  if(!todays.length){ box.innerHTML = '<div class="empty">今天沒有排定任務</div>'; return; }
-  box.innerHTML = todays.map(a=>{
-    const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
-    return `<div class="panel">
-      <div class="toolbar">
-        <strong>${routeName(a.routeId)}</strong>
-        <span>
-          ${a.status==='scheduled'?'<span class="badge pending">尚未開始</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':''}
-          <a class="btn ghost" href="${lineShareLink(`【任務提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
-        </span>
-      </div>
-      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
-      ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
-        ${a.dropPoints.map(dp=>{
-          const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
-          const photoUrls = dpPhotoUrls(dp);
-          const statusBadge = dp.status==='completed'
-            ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
-            : '<span class="badge pending">待完成</span>';
-          return `
+  // 「交給我支援」的店點（資料庫只讓我看到被交給我的那幾個）：另外一張卡片，沒有開始／完成按鈕、不顯示報酬。
+  const supportToday = state.data.assignments.filter(a=>a.isSupport && a.date===todayStr());
+  if(!todays.length && !supportToday.length){ box.innerHTML = '<div class="empty">今天沒有排定任務</div>'; return; }
+  // 一個店點一列（狀態、拍照／上傳／導航按鈕、未完成原因）；readonly＝已交給支援夥伴，原夥伴只看狀態不能再動。
+  const dpRow = (a, dp, readonly)=>{
+    const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
+    const photoUrls = dpPhotoUrls(dp);
+    const statusBadge = dp.status==='completed'
+      ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
+      : '<span class="badge pending">待完成</span>';
+    return `
           <div class="drop-point-driver" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
             ${statusBadge}
+            ${readonly ? `<span class="badge" style="background:#E3EEF7; color:#2F6EA5;">由${escapeHtml(dp.helperName||'支援夥伴')}支援</span>` : ''}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未完成：${dp.issueReason}</span>` : ''}
-            <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+            ${readonly ? '' : `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
               ${photoCount<3 ? `
               <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>
               <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${dp.id}" style="display:none;">
@@ -4620,19 +4643,37 @@ function renderTodayDetail(todays){
                 <option value="">－選擇原因－</option>
                 ${['通路未下單','央廚未出貨','便當翻覆','遲到拒收'].map(r=>`<option value="${r}" ${dp.issueReason===r?'selected':''}>${r}</option>`).join('')}
               </select>
-            </div>` : ''}
+            </div>` : ''}`}
           </div>`;
-        }).join('')}
+  };
+  const supportHtml = supportToday.map(a=>`<div class="panel" style="border-color:#2F6EA5; border-width:2px;">
+      <div class="toolbar"><strong>支援：${routeName(a.routeId)}</strong><span class="badge" style="background:#E3EEF7; color:#2F6EA5;">原夥伴：${escapeHtml(a.originalDriverName||'—')}</span></div>
+      <p style="font-size:12.5px; color:var(--ink-soft);">這是臨時交給您支援的店點（${a.dropPoints.length} 個），到店後直接拍照上傳即可，不需要再傳給原夥伴。完成後原夥伴會自動看到。</p>
+      ${a.dropPoints.map(dp=>dpRow(a, dp, false)).join('')}
+    </div>`).join('');
+  box.innerHTML = todays.map(a=>{
+    const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
+    return `<div class="panel">
+      <div class="toolbar">
+        <strong>${routeName(a.routeId)}</strong>
+        <span>
+          ${a.status==='scheduled'?'<span class="badge pending">尚未開始</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':''}
+          <a class="btn ghost" href="${lineShareLink(`【任務提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
+        </span>
+      </div>
+      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+      ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
+        ${a.dropPoints.map(dp=>dpRow(a, dp, !!dp.helperId)).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成任務（自動封存進歷史任務）</button>
         ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;
-  }).join('');
+  }).join('') + supportHtml;
   // 照片改成跟歷史任務一樣，點擊「已完成」才載入——手機背景切換常把頁面砍掉
   // 重開，之前「一開頁面就自動載入當天所有已完成照片」會讓同一批照片被
   // 重複下載很多次，是 Storage 流量爆量的主因之一。
   const dpById = {};
-  todays.forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
+  [...todays, ...supportToday].forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
   box.querySelectorAll('[data-dpid]').forEach(el=>{
     const dp = dpById[el.dataset.dpid];
     const urls = dp ? dpPhotoUrls(dp) : [];
@@ -4803,6 +4844,15 @@ async function renderHistory(c){
   c.innerHTML = `
     <h2 class="section-title">歷史任務</h2>
     <p class="section-sub">本月已完成並封存的任務紀錄，不可再編輯。</p>
+    ${(()=>{
+      // 臨時支援別人的店點：只列有完成的，拆分金額是主控填的顯示用數字，不影響我的報酬。
+      const sup = state.data.assignments.filter(a=>a.isSupport && a.date>=lookbackStart && a.dropPoints.some(d=>d.status==='completed')).sort((x,y)=>y.date.localeCompare(x.date));
+      if(!sup.length) return '';
+      return `<div class="panel"><h3 style="margin:0 0 6px;">支援紀錄（本月）</h3>${sup.map(a=>{
+        const done = a.dropPoints.filter(d=>d.status==='completed').length;
+        return `<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13.5px;"><strong>${a.date.slice(5).replace('-','/')} ${routeName(a.routeId)}</strong><br><span style="color:var(--ink-soft); font-size:12.5px;">支援 ${escapeHtml(a.originalDriverName||'')} 的店點：完成 ${done}／${a.dropPoints.length}${a.supportAmount!=null?`　拆分金額 $${money(a.supportAmount)}（僅供參考）`:''}</span></div>`;
+      }).join('')}</div>`;
+    })()}
     ${dateKeys.map(date=>{
       const items = groups[date];
       return `<div class="date-group" data-key="${date}">
@@ -5458,6 +5508,7 @@ async function flushLive(){
     }));
     if(q.assignments.size) state.data.assignments.sort((a,b)=>a.date.localeCompare(b.date));
     if(q.assignmentsDel.size){ state.data.assignments = state.data.assignments.filter(x=>!q.assignmentsDel.has(x.id)); }
+    if(state.role==='driver' && !state.adminViewDriver && q.assignments.size) await syncSupportStops();
     if(q.assignments.size || q.assignmentsDel.size) touched.add('assignments');
     if(q.statements.size){
       const { data } = await supabase.from('statements').select('*').in('id', [...q.statements]);
@@ -5514,7 +5565,7 @@ async function refreshHomeDataIfIdle(){
     // 主控要看到「本月至今」的即時利潤，夥伴首頁只需要「今天」的行程數字。
     const today = todayStr();
     if(state.role==='admin'){ await refreshAssignmentsRange(today.slice(0,7)+'-01', today); await refreshFuelClaims(); }
-    else await refreshAssignmentsRange(today, today);
+    else { await refreshAssignmentsRange(today, today); await syncSupportStops(); }
     // 夥伴首頁的「同任務起點今日出發狀況」是另外呼叫loadDepotOverview()
     // 查的（夥伴身份是走RPC，不在loadAllData()裡），有自己的一層快取
     // （depotOverviewCache），這裡一起清掉，讓renderContent()重新渲染時
@@ -5541,7 +5592,7 @@ async function catchUpAfterResume(){
   try{
     const today = todayStr();
     if(state.role==='admin'){ await refreshAssignmentsRange(getWeekDates(0)[0], getWeekDates(1)[6]); await refreshFuelClaims(); }
-    else await refreshAssignmentsRange(today, ymd(addDays(today, 14)));
+    else { await refreshAssignmentsRange(today, ymd(addDays(today, 14))); await syncSupportStops(); }
     tryLiveRender();
   }catch(e){ console.error('回到前景補抓資料失敗', e); }
 }
@@ -5570,6 +5621,7 @@ async function bootApp(){
     const me = state.data.drivers.find(d=>d.id===auth.driver.id);
     if(!me || me.status!=='active'){ clearAuth(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
     if(me.forceCodeReset){ renderForceCodeResetGate(me.id, me.name); return; }
+    await syncSupportStops();   // 臨時交給我支援的店點（沒有就是空的）
   }
   showApp();
 }

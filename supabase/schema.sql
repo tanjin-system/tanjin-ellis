@@ -1078,3 +1078,26 @@ create policy driver_update_own on assignments for update to app_driver using (d
 -- Realtime publication 原本只有 assignments / assignment_drop_points，現在加上 statements（勞報單／簽名）、
 -- adjustments（調整項）、fuel_claims（代墊申報）；RLS 照樣套用（夥伴只收得到自己的）。
 alter publication supabase_realtime add table statements, adjustments, fuel_claims;
+
+-- PART 21：臨時支援——把店點交給支援夥伴（2026-10-08，已在線上資料庫直接執行過）
+-- 只改「店點由誰到場拍照」，任務／報酬／請款／拆店調撥／勞報單完全不動。
+-- stop_delegations：一次交付一筆（assignment_id、helper_id、amount＝只顯示用的拆分金額，不計帳、note），只有主控能讀寫。
+-- assignment_drop_points 新增 helper_id（支援夥伴）、helper_name、delegation_id、completed_by（完成者，由觸發器寫入）。
+-- RLS：支援夥伴能看／更新 helper_id=自己 的店點（看不到原任務，所以報酬看不到）；原夥伴看得到但 helper_id 有值就不能更新；
+--   附加媒體、Storage 照片（路徑第一層是任務 id）的 policy 也加上「是這任務的支援夥伴」的條件。
+-- my_support_context(p_from, p_to)：security definer，只回傳支援夥伴需要的任務脈絡（日期、路線、原夥伴姓名、拆分金額）。
+create table if not exists stop_delegations (id uuid primary key default gen_random_uuid(), assignment_id uuid not null references assignments(id) on delete cascade, helper_id uuid not null references drivers(id), amount numeric, note text, created_at timestamptz not null default now());
+alter table stop_delegations enable row level security;
+grant select, insert, update, delete on stop_delegations to app_admin;
+create policy admin_all on stop_delegations for all to app_admin using (true) with check (true);
+alter table assignment_drop_points add column if not exists helper_id uuid references drivers(id) on delete set null;
+alter table assignment_drop_points add column if not exists helper_name text;
+alter table assignment_drop_points add column if not exists delegation_id uuid references stop_delegations(id) on delete set null;
+alter table assignment_drop_points add column if not exists completed_by uuid references drivers(id) on delete set null;
+create index if not exists idx_adp_helper on assignment_drop_points(helper_id) where helper_id is not null;
+create or replace function set_dp_completed_by() returns trigger language plpgsql as $$ begin if new.status = 'completed' and old.status is distinct from 'completed' and auth_driver_id() is not null then new.completed_by := auth_driver_id(); end if; return new; end; $$;
+create trigger trg_dp_completed_by before update on assignment_drop_points for each row execute function set_dp_completed_by();
+-- assignment_drop_points：driver_select_own = helper_id=我 or 我的任務；driver_update_own = helper_id=我 or (helper_id is null and 我的任務)
+-- assignment_drop_point_media：select/insert 加上 helper_id=我（原夥伴 insert 需 helper_id is null）
+-- storage.objects（assignment-photos）select/insert/update 加上 exists(assignment_drop_points where assignment_id=路徑第一層 and helper_id=我)
+-- my_support_context(date,date)：見線上資料庫函式，grant execute to app_driver

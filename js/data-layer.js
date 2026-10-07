@@ -101,6 +101,7 @@ function mapAssignment(row) {
       photo: null,
       photoCleared: p.photo_cleared,
       issueReason: p.issue_reason || null,
+      helperId: p.helper_id || null, helperName: p.helper_name || '', delegationId: p.delegation_id || null, completedBy: p.completed_by || null,
       // 主要送達證明照以外的附加照片/影片（見 assignment_drop_point_media）；
       // url 要另外呼叫 resolvePhotoUrls() 才會補上簽名連結，跟 photo 欄位同一套機制。
       media: (p.assignment_drop_point_media || []).map(m => ({ id: m.id, path: m.media_url, type: m.media_type, url: null }))
@@ -1045,6 +1046,84 @@ async function rolloverNextWeekIfNeeded() {
   (full || []).map(mapAssignment).forEach(a => { if (!have.has(a.id)) state.data.assignments.push(a); });
   state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
   return { created: created.length, skipped };
+}
+
+// ---------------- 臨時支援：把幾個店點交給支援夥伴 ----------------
+// 只動「店點由誰到場拍照」，任務本身、報酬、請款、拆店調撥、勞報單完全不受影響。
+// 支援夥伴能看到並更新被交給他的店點（資料庫 RLS 擋住其他任何資料）；原夥伴交出去的店點不能再動。
+// amount 只是顯示給支援夥伴看的「拆分金額」（選填），不計入任何帳。
+async function createDelegation({ assignmentId, helperId, dropPointIds, amount, note }) {
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (!a) throw new Error('找不到這個任務');
+  if (a.published === false) throw new Error('這個任務還是草稿，請先發佈才能交給支援夥伴。');
+  if (a.status === 'completed') throw new Error('任務已完成，不能再交給支援夥伴。');
+  const helper = state.data.drivers.find(d => d.id === helperId && d.status === 'active');
+  if (!helper) throw new Error('請選擇在職的支援夥伴');
+  if (helperId === a.driverId) throw new Error('支援夥伴不能是原本的夥伴');
+  if (!dropPointIds || !dropPointIds.length) throw new Error('請至少勾選一個店點');
+  const dps = a.dropPoints.filter(d => dropPointIds.includes(d.id));
+  if (dps.length !== dropPointIds.length) throw new Error('有店點不屬於這個任務');
+  if (dps.some(d => d.status === 'completed' || d.helperId)) throw new Error('已完成或已經交給別人的店點不能再交出去，請取消勾選。');
+  const amt = amount === '' || amount == null ? null : Number(amount);
+  if (amt != null && !Number.isFinite(amt)) throw new Error('拆分金額要是數字');
+  const supabase = getSupabase();
+  const { data: del, error } = await supabase.from('stop_delegations').insert({
+    assignment_id: assignmentId, helper_id: helperId, amount: amt, note: (note || '').trim() || null
+  }).select().single();
+  if (error) throw new Error('建立支援失敗：' + error.message);
+  const { error: upErr } = await supabase.from('assignment_drop_points')
+    .update({ helper_id: helperId, helper_name: helper.name, delegation_id: del.id }).in('id', dropPointIds);
+  if (upErr) {
+    await supabase.from('stop_delegations').delete().eq('id', del.id);
+    throw new Error('交給支援夥伴失敗：' + upErr.message);
+  }
+  dps.forEach(d => { d.helperId = helperId; d.helperName = helper.name; d.delegationId = del.id; });
+}
+
+// 收回：只收回「還沒完成」的店點；已完成的留給原本的支援夥伴（紀錄不動）。
+async function revokeDelegation(assignmentId, delegationId) {
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (!a) throw new Error('找不到這個任務');
+  const mine = a.dropPoints.filter(d => d.delegationId === delegationId);
+  const pending = mine.filter(d => d.status !== 'completed');
+  if (!pending.length) throw new Error('這批店點都已經完成，沒有可以收回的。');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignment_drop_points')
+    .update({ helper_id: null, helper_name: null, delegation_id: null }).in('id', pending.map(d => d.id));
+  if (error) throw new Error('收回失敗：' + error.message);
+  pending.forEach(d => { d.helperId = null; d.helperName = ''; d.delegationId = null; });
+  if (pending.length === mine.length) await supabase.from('stop_delegations').delete().eq('id', delegationId);
+}
+
+// 夥伴端：抓「交給我支援」的店點，組成跟一般任務同樣格式的物件（isSupport:true）放進
+// state.data.assignments，這樣拍照、選未完成原因、導航這些既有流程不用另外寫。
+// 範圍：本月 1 號～今天＋14 天。放進去的物件 driverId 是原本的夥伴，所以不會混進自己的任務清單/報酬。
+async function syncSupportStops() {
+  if (state.role !== 'driver' || state.adminViewDriver || !state.activeDriverId) return;
+  const supabase = getSupabase();
+  const today = todayStr();
+  const from = today.slice(0, 7) + '-01';
+  const to = ymd(addDays(today, 14));
+  const { data: ctx, error } = await supabase.rpc('my_support_context', { p_from: from, p_to: to });
+  if (error) { console.error('讀取支援任務失敗', error.message); return; }
+  let built = [];
+  if (ctx && ctx.length) {
+    const ids = ctx.map(c => c.assignment_id);
+    const { data: dps, error: e2 } = await supabase.from('assignment_drop_points')
+      .select('*, assignment_drop_point_media(*)').eq('helper_id', state.activeDriverId).in('assignment_id', ids);
+    if (e2) { console.error('讀取支援店點失敗', e2.message); return; }
+    built = ctx.map(c => {
+      const a = mapAssignment({
+        id: c.assignment_id, trip_date: c.trip_date, route_id: c.route_id, driver_id: c.original_driver_id,
+        origin_snapshot: c.origin, fare: 0, status: c.status, published: true, run_no: 1,
+        assignment_drop_points: (dps || []).filter(d => d.assignment_id === c.assignment_id)
+      });
+      a.isSupport = true; a.supportAmount = c.support_amount != null ? Number(c.support_amount) : null; a.originalDriverName = c.original_driver_name || '';
+      return a;
+    });
+    await resolvePhotoUrls(built);
+  }
+  state.data.assignments = state.data.assignments.filter(a => !a.isSupport).concat(built);
 }
 
 async function deleteAssignment(assignmentId) {
