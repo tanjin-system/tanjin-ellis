@@ -1266,7 +1266,7 @@ async function renderHomeAdmin(c){
 }
 function renderHomeDriver(c){
   const dId = state.activeDriverId;
-  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.date===todayStr() && a.status!=='completed');
+  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===todayStr() && a.status!=='completed');
   const tiles = [
     {id:'today', label:'今日行程', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無排班'},
     {id:'history', label:'歷史班表', sub:'已完成紀錄'},
@@ -4302,7 +4302,7 @@ function assignmentShiftKey(a){
 function renderToday(c){
   const dId = state.activeDriverId;
   const today = todayStr();
-  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.date===today && a.status!=='completed')
+  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===today && a.status!=='completed')
     .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
   const weekDates = [...getWeekDates(0), ...getWeekDates(1)];
   c.innerHTML = `
@@ -4313,7 +4313,7 @@ function renderToday(c){
     <p class="section-sub" style="margin-top:-6px;">點擊「待出發」的車次可預覽當天行程與司機費用。</p>
     <div class="schedule-grid">
       ${weekDates.map(d=>{
-        const items = state.data.assignments.filter(a=>a.driverId===dId && a.date===d)
+        const items = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===d)
           .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
         return `<div class="day-card"><div class="day-label">${d.slice(5)}（星期${WEEKDAY_ZH[(new Date(d+'T00:00:00').getDay()+6)%7]}）${d===today?'・今天':''}</div>
           ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待出發</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
