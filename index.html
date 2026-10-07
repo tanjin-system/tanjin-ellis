@@ -1298,7 +1298,7 @@ function renderHomeDriver(c){
   const dId = state.activeDriverId;
   const todays = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===todayStr() && a.status!=='completed');
   const tiles = [
-    {id:'today', label:'今日任務', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無排班'},
+    {id:'today', label:'今日任務', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無任務'},
     {id:'history', label:'歷史任務', sub:'已完成紀錄'},
     {id:'my-earnings', label:'我的報酬', sub:'本月即時金額'},
     {id:'my-statement', label:'對帳單', sub:'月結與回簽'},
@@ -4355,7 +4355,7 @@ function renderToday(c){
       if(pastTasks.length) html += `<details class="sl-past"><summary>本週已過去的任務 ${pastTasks.length} 項 ▸</summary>${pastDays.map(d=>`<div class="sl-day"><div class="sl-day-label">${dayName(d)}</div><div class="sl-rows">${pastTasks.filter(x=>x.d===d).map(x=>row(x.a)).join('')}</div></div>`).join('')}</details>`;
       const renderRange = dates=>{
         let out = '', emptyRun = [];
-        const flush = ()=>{ if(!emptyRun.length) return; out += `<div class="sl-empty">${emptyRun.length===1?dayName(emptyRun[0]):`${emptyRun[0].slice(5).replace('-','/')}～${emptyRun[emptyRun.length-1].slice(5).replace('-','/')}`}　無排班</div>`; emptyRun = []; };
+        const flush = ()=>{ if(!emptyRun.length) return; out += `<div class="sl-empty">${emptyRun.length===1?dayName(emptyRun[0]):`${emptyRun[0].slice(5).replace('-','/')}～${emptyRun[emptyRun.length-1].slice(5).replace('-','/')}`}　無任務</div>`; emptyRun = []; };
         dates.forEach(d=>{
           const items = tasksOf(d);
           if(!items.length){ emptyRun.push(d); return; }
@@ -4378,7 +4378,7 @@ function renderToday(c){
         const items = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===d)
           .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
         return `<div class="day-card"><div class="day-label">${d.slice(5)}（星期${WEEKDAY_ZH[(new Date(d+'T00:00:00').getDay()+6)%7]}）${d===today?'・今天':''}</div>
-          ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待完成</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無排班</div>'}
+          ${items.map(a=>`<div class="trip-chip ${a.status==='completed'?'locked':''}" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong><br>${a.status==='completed'?'<span class="badge locked">已完成</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':'<span class="badge pending">待完成</span>'}</div>`).join('') || '<div style="color:var(--ink-soft);font-size:11px;">無任務</div>'}
         </div>`;
       }).join('')}
     </div>
