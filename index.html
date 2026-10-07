@@ -100,13 +100,16 @@
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
   .modal-box .toolbar{ margin-bottom:10px; }
-  .sig-modal-backdrop{ position:fixed; inset:0; background:#15181D; z-index:300; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
-  .sig-modal-canvas-wrap{ position:relative; background:#fff; border-radius:8px; overflow:hidden; flex:none; }
-  .sig-modal-canvas-wrap canvas{ width:100%; height:100%; touch-action:none; display:block; }
-  .sig-watermark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:13vw; color:rgba(0,0,0,.06); font-weight:700; pointer-events:none; letter-spacing:2vw; white-space:nowrap; }
-  .sig-modal-actions{ display:flex; justify-content:space-between; align-items:center; padding:10px 20px 20px; flex-shrink:0; }
-  .sig-modal-actions .sig-side{ display:flex; gap:10px; align-items:center; }
-  .sig-icon-btn{ font-size:30px; background:none; border:none; cursor:pointer; padding:8px 16px; border-radius:10px; line-height:1; }
+  /* 簽名視窗：滿版（橫向簽名板，直拿手機時旋轉90度），見 openSignatureModal() */
+  .sig-full{ position:fixed; inset:0; background:#15181D; z-index:300; overflow:hidden; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  #sigStage{ position:absolute; background:#fff; transform-origin:0 0; touch-action:none; }
+  #sigStage canvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; display:block; }
+  .sig-watermark{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12vmax; color:rgba(0,0,0,.06); font-weight:700; pointer-events:none; letter-spacing:1.5vmax; white-space:nowrap; }
+  .sig-hint{ position:absolute; left:0; right:0; bottom:10px; text-align:center; font-size:13px; color:#8A929C; pointer-events:none; }
+  .sig-bar{ position:absolute; top:0; left:0; right:0; display:flex; justify-content:space-between; align-items:center; padding:10px 14px; pointer-events:none; }
+  .sig-bar button{ pointer-events:auto; }
+  .sig-side{ display:flex; gap:10px; align-items:center; }
+  .sig-icon-btn{ font-size:26px; background:none; border:none; cursor:pointer; padding:6px 14px; border-radius:10px; line-height:1; }
   .sig-icon-btn.confirm{ background:#2C6B44; }
   .sig-icon-btn.cancel{ background:#B5493A; }
   .form-tabs{ display:flex; gap:14px; margin-bottom:14px; border-bottom:1px solid var(--border); }
@@ -117,6 +120,7 @@
   .driver-card-name{ font-weight:600; font-size:14.5px; }
   .driver-card-sub{ font-size:12px; color:var(--ink-soft); margin-top:4px; line-height:1.7; }
   .driver-card-actions{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:10px; }
+  .sig-bar .sig-clear-link{ color:#1B2129; background:rgba(0,0,0,.08); }
   .sig-clear-link{ color:#fff; font-size:13px; background:rgba(255,255,255,.15); border:none; border-radius:6px; padding:8px 14px; cursor:pointer; }
   .version-block{ border:1px solid var(--border); border-radius:var(--radius); padding:10px; margin-bottom:8px; }
   .version-block.open{ border-color:var(--amber); }
@@ -4835,14 +4839,10 @@ function renderMyProfile(c){
   };
 }
 
-// 簽名畫布記錄下來的圖片形狀，跟簽名當下手機實際橫拿還是直拿有關（尤其
-// iOS Safari 在簽名視窗開著時轉方向，畫布尺寸不一定會正確跟著重算），存進
-// 勞報單「所得人簽章」欄位時，欄位是固定高度、盡量佔滿寬度顯示——如果存的
-// 圖片是「直的」（窄高），欄位就只能把它壓成一條極窄的直線，看起來像轉了
-// 90度或整個消失。這裡在送出前統一處理：先掃描找出真正有畫到墨水的範圍
-// （裁掉四周空白，讓簽名盡量佔滿欄位），裁完如果還是「高度大於寬度」就整張
-// 轉90度──保證不管簽名當下手機怎麼拿，存起來的圖一定是橫式、能撐滿欄位。
-function normalizeSignatureDataUrl(canvas){
+// 簽名圖處理成「貼在勞報單簽章欄」的樣子：只留筆跡範圍（裁掉空白、留一點邊距）、背景透明、
+// 縮到適合簽章欄的大小（最寬 640、最高 220，等比例），這樣貼上去不會太小、也不會超出欄位。
+// 簽名板一律是橫向的畫布（直拿手機時畫面會旋轉成橫向，座標已經轉正），所以這裡不用再旋轉。
+function buildSignatureForSlip(canvas){
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   let minX=w, minY=h, maxX=0, maxY=0, found=false;
@@ -4858,99 +4858,136 @@ function normalizeSignatureDataUrl(canvas){
     }
   }
   if(!found) return canvas.toDataURL('image/png');
-  const pad = 20;
+  const pad = 14;
   minX = Math.max(0, minX-pad); minY = Math.max(0, minY-pad);
   maxX = Math.min(w, maxX+pad); maxY = Math.min(h, maxY+pad);
   const cropW = maxX-minX, cropH = maxY-minY;
-  const landscape = cropW >= cropH;
+  const scale = Math.min(1, 640/cropW, 220/cropH);
   const out = document.createElement('canvas');
-  out.width = landscape ? cropW : cropH;
-  out.height = landscape ? cropH : cropW;
-  const octx = out.getContext('2d');
-  octx.fillStyle = '#fff'; octx.fillRect(0,0,out.width,out.height);
-  if(landscape){
-    octx.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
-  } else {
-    octx.translate(out.width, 0);
-    octx.rotate(Math.PI/2);
-    octx.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
-  }
+  out.width = Math.max(1, Math.round(cropW*scale));
+  out.height = Math.max(1, Math.round(cropH*scale));
+  out.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, out.width, out.height);
   return out.toDataURL('image/png');
 }
-// 全畫面簽名視窗：點「已確認報酬」才跳出來簽，簽完按☑️送出、按❌取消不送出。
-// 簽名框固定顯示成橫式（見下方 applyBoxSize()），不依賴偵測手機當下是橫放
-// 還是直放——先前試過「跟著裝置方向調整」跟「CSS強制轉90度模擬橫向」兩種
-// 做法，都會在部分手機瀏覽器上出狀況（尤其簽名視窗開著時轉方向，畫布不一
-// 定會正確跟著重算尺寸），改成固定寬高比的框最可靠。
+// 滿版橫式簽名視窗：點「已確認報酬並簽名」才開，蓋滿整個螢幕、鎖住背景捲動。
+// 手機如果是直的，簽名板會旋轉 90 度（請把手機橫過來握著簽；握反了按「翻轉」），手機本身已經是橫向就直接用；
+// 筆跡座標一律換算回橫向畫布，所以存出來的簽名一定是正的橫式。簽完先預覽貼在勞報單簽章欄的樣子，再按「確認送出」。
 function openSignatureModal(record){
   const host = document.getElementById('sigModalHost');
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  let flip = false, drawing = false, hasSignature = false;
+  const prevOverflow = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
   host.innerHTML = `
-    <div class="sig-modal-backdrop" id="sigBackdrop">
-      <div id="sigInner" style="display:flex; flex-direction:column; align-items:stretch;">
-        <div class="sig-modal-canvas-wrap">
-          <div class="sig-watermark">請簽名</div>
-          <canvas id="sigPad"></canvas>
-        </div>
-        <div class="sig-modal-actions">
-          <div class="sig-side"><button class="sig-clear-link" id="sigClear">清除重簽</button></div>
+    <div class="sig-full" id="sigFull">
+      <div id="sigStage">
+        <canvas id="sigPad"></canvas>
+        <div class="sig-watermark">請簽名</div>
+        <div id="sigHint" class="sig-hint"></div>
+        <div class="sig-bar">
+          <div class="sig-side">
+            <button class="sig-clear-link" id="sigClear">清除重簽</button>
+            <button class="sig-clear-link" id="sigFlip" style="display:none;">翻轉方向</button>
+          </div>
           <div class="sig-side">
             <button class="sig-icon-btn cancel" id="sigCancel" title="取消">❌</button>
-            <button class="sig-icon-btn confirm" id="sigConfirm" title="確認送出">☑️</button>
+            <button class="sig-icon-btn confirm" id="sigConfirm" title="完成簽名">☑️</button>
           </div>
         </div>
       </div>
     </div>`;
+  const full = document.getElementById('sigFull');
+  const stage = document.getElementById('sigStage');
   const canvas = document.getElementById('sigPad');
-  const wrapEl = canvas.parentElement;
-  const innerEl = document.getElementById('sigInner');
   const ctx = canvas.getContext('2d');
-  // 簽名框「不論手機當下橫拿還是直拿，一律強制顯示成寬扁的橫式方框」——
-  // 不依賴偵測裝置目前是橫向還是直向（部分手機瀏覽器在簽名視窗開著時轉
-  // 方向，畫布尺寸並不會正確跟著重算，靠偵測方向來決定畫布形狀並不可靠）。
-  // 固定寬高比（寬是高的1.8倍），依畫面剩餘空間算出能放的最大尺寸，這樣
-  // 使用者永遠是對著一個橫式的框簽名，簽出來的筆畫天生就是橫式。
-  const ASPECT = 1.8;
-  function applyBoxSize(){
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const actionsH = 70, gap = 16, sidePad = 24;
-    const maxW = vw - sidePad*2;
-    const maxH = vh - actionsH - gap - sidePad*2;
-    let w = maxW, h = w/ASPECT;
-    if(h > maxH){ h = maxH; w = h*ASPECT; }
-    innerEl.style.width = w+'px';
-    wrapEl.style.width = w+'px';
-    wrapEl.style.height = h+'px';
+  const hint = document.getElementById('sigHint');
+  const flipBtn = document.getElementById('sigFlip');
+  const DPR = 2;
+  full.addEventListener('touchmove', e=>e.preventDefault(), { passive:false });
+  // Android 可以真的全螢幕＋鎖橫向（iPhone 不支援，靠旋轉簽名板）；失敗就算了，不影響簽名。
+  if(!isIOS){
+    try{ const r = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); if(r && r.then) r.then(()=>{ try{ screen.orientation.lock('landscape').catch(()=>{}); }catch(e){} }).catch(()=>{}); }catch(e){}
   }
-  function resizeCanvas(){
-    applyBoxSize();
-    const rect = wrapEl.getBoundingClientRect();
-    const prev = canvas.width ? canvas.toDataURL('image/png') : null;
-    canvas.width = rect.width * 2; canvas.height = rect.height * 2;
-    ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.strokeStyle = '#1B2129';
+  function layout(){
+    const W = window.innerWidth, H = window.innerHeight;
+    const rotated = H > W;
+    const lw = rotated ? H : W, lh = rotated ? W : H; // 簽名板自己的（橫向）寬高
+    stage.style.width = lw+'px'; stage.style.height = lh+'px';
+    if(!rotated){ stage.style.left = '0px'; stage.style.top = '0px'; stage.style.transform = 'none'; }
+    else if(!flip){ stage.style.left = W+'px'; stage.style.top = '0px'; stage.style.transform = 'rotate(90deg)'; }
+    else { stage.style.left = '0px'; stage.style.top = H+'px'; stage.style.transform = 'rotate(-90deg)'; }
+    flipBtn.style.display = rotated ? '' : 'none';
+    hint.textContent = rotated ? '請把手機橫過來握著簽名（字是倒的就按「翻轉方向」）' : '';
+    const prev = (canvas.width && hasSignature) ? canvas.toDataURL('image/png') : null;
+    canvas.width = lw*DPR; canvas.height = lh*DPR;
+    ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1B2129';
     if(prev){ const img = new Image(); img.onload = ()=> ctx.drawImage(img,0,0,canvas.width,canvas.height); img.src = prev; }
   }
-  resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
-  window.addEventListener('orientationchange', resizeCanvas);
-  let drawing = false, hasSignature = false;
+  // 螢幕座標 → 簽名板（橫向）座標
   function pos(e){
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
-    return { x:(e.clientX-rect.left)*scaleX, y:(e.clientY-rect.top)*scaleY };
+    const W = window.innerWidth, H = window.innerHeight;
+    let lx, ly;
+    if(H <= W){ lx = e.clientX; ly = e.clientY; }
+    else if(!flip){ lx = e.clientY; ly = W - e.clientX; }
+    else { lx = H - e.clientY; ly = e.clientX; }
+    return { x: lx*DPR, y: ly*DPR };
   }
-  canvas.addEventListener('pointerdown', e=>{ drawing=true; hasSignature=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); });
+  layout();
+  window.addEventListener('resize', layout);
+  window.addEventListener('orientationchange', layout);
+  canvas.addEventListener('pointerdown', e=>{ drawing=true; hasSignature=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+0.01,p.y); ctx.stroke(); });
   canvas.addEventListener('pointermove', e=>{ if(!drawing) return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); });
-  window.addEventListener('pointerup', ()=>{ drawing=false; });
+  window.addEventListener('pointerup', onUp);
+  function onUp(){ drawing=false; }
+  function close(){
+    window.removeEventListener('resize', layout); window.removeEventListener('orientationchange', layout); window.removeEventListener('pointerup', onUp);
+    document.body.style.overflow = prevOverflow;
+    try{ if(document.fullscreenElement) document.exitFullscreen(); screen.orientation.unlock(); }catch(e){}
+    host.innerHTML = '';
+  }
   document.getElementById('sigClear').onclick = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); hasSignature=false; };
-  document.getElementById('sigCancel').onclick = ()=>{ window.removeEventListener('resize', resizeCanvas); window.removeEventListener('orientationchange', resizeCanvas); host.innerHTML=''; };
-  document.getElementById('sigConfirm').onclick = async ()=>{
+  flipBtn.onclick = ()=>{ flip = !flip; layout(); };
+  document.getElementById('sigCancel').onclick = close;
+  document.getElementById('sigConfirm').onclick = ()=>{
     if(!hasSignature){ alert('請先簽名再送出'); return; }
-    try{
-      await signStatement(record.id, normalizeSignatureDataUrl(canvas));
-      window.removeEventListener('resize', resizeCanvas); window.removeEventListener('orientationchange', resizeCanvas);
-      host.innerHTML='';
-      renderContent();
-    }catch(err){ alert(err.message); }
+    const sigUrl = buildSignatureForSlip(canvas);
+    close();
+    showSignaturePreview(record, sigUrl);
+  };
+}
+// 簽完先預覽「貼在勞報單簽章欄」的樣子（跟勞報單用同樣的欄位與圖片大小限制），確認才送出，不滿意回去重簽。
+function showSignaturePreview(record, sigUrl){
+  const host = document.getElementById('sigModalHost');
+  const payDate = record.payDate || (()=>{ const [y,m] = record.month.split('-').map(Number); const d = new Date(y, m, 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-15`; })();
+  const prevOverflow = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+  host.innerHTML = `
+    <div class="sig-full" style="display:flex; align-items:center; justify-content:center; padding:16px; overflow:auto;">
+      <div style="background:#fff; border-radius:12px; padding:16px; width:100%; max-width:560px; color:#1B2129;">
+        <div style="font-weight:700; margin-bottom:6px;">請確認簽名（勞報單上的樣子）</div>
+        <div style="font-size:12.5px; color:#5B6470; margin-bottom:8px;">${statementLabel(record)}　報酬總額 $${money(record.net)}　實領金額 $${money(record.actualNet)}</div>
+        <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+          <tr style="border-top:1px solid #D8DADF; border-bottom:1px solid #D8DADF;">
+            <td style="width:22%; padding:8px 6px;">所得人簽章</td>
+            <td style="width:38%; padding:8px 6px; height:72px;"><img src="${sigUrl}" style="max-height:56px; max-width:100%;"></td>
+            <td style="width:18%; padding:8px 6px;">給付日期</td>
+            <td style="padding:8px 6px;">${payDate}</td>
+          </tr>
+        </table>
+        <div style="display:flex; gap:10px; margin-top:14px;">
+          <button class="btn ghost" id="sigRedo" style="flex:1;">重簽</button>
+          <button class="btn amber" id="sigSend" style="flex:2;">確認送出</button>
+        </div>
+        <button class="btn ghost" id="sigAbort" style="width:100%; margin-top:8px;">取消</button>
+      </div>
+    </div>`;
+  const end = ()=>{ document.body.style.overflow = prevOverflow; host.innerHTML = ''; };
+  document.getElementById('sigRedo').onclick = ()=>{ end(); openSignatureModal(record); };
+  document.getElementById('sigAbort').onclick = end;
+  document.getElementById('sigSend').onclick = async ()=>{
+    const btn = document.getElementById('sigSend'); btn.disabled = true;
+    try{ await signStatement(record.id, sigUrl); end(); renderContent(); }
+    catch(err){ alert(err.message); btn.disabled = false; }
   };
 }
 function renderMyStatement(c){
