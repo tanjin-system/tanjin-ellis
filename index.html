@@ -185,7 +185,16 @@ function escapeHtml(s){
 // ---------- 通用查找 ----------
 function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d?d.name:'未指派'; }
 function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
-function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?r.name:'—'; }
+// 路線顯示名稱：「第一車…第九車」一律顯示成 R1～R9，前面接任務起點名稱、不留空格，例如
+// 「橙泰橙 第一車 上午」→「橙泰橙R1上午」。只改畫面顯示，資料庫裡存的路線名稱不動。
+function seqToR(text){
+  return (text||'').replace(/第([一二三四五六七八九十]+)車/g, (m, c)=>{ const n = seqSortKey('第'+c+'車'); return n<9999 ? 'R'+n : m; });
+}
+function routeDisplayName(name){
+  if(!/第[一二三四五六七八九十]+車/.test(name||'')) return name||'';
+  return seqToR(name).replace(/\s+/g, '');
+}
+function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?routeDisplayName(r.name):'—'; }
 function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(addr); }
 // 路線規劃用的多點導航連結：任務起點固定當起點，停靠站依「我們給的順序」
 // 依序放進waypoints。原本有加optimize:true想交給Google自動排出最順的
@@ -795,7 +804,7 @@ function buildSlipHtmls(driver, record, assignments){
   };
 }
 // 勞報單（正式稅務/勞務文件）月結確認時要用的淨額，跟上面driverMonthly()
-// 算給「我的報酬/薪資結算」即時參考用的net故意不一樣：預支是薪資提前
+// 算給「我的報酬/報酬結算」即時參考用的net故意不一樣：預支是薪資提前
 // 請領，不是扣款，不該讓這張要簽名的正式文件把預支再扣一次（不然夥伴
 // 等於同一筆錢被扣兩次）；一般加項/減項不受影響，照樣計入。「我的報酬」
 // 那邊維持原本邏輯（含預支扣減），是為了讓夥伴/主控隨時看到「實際還能
@@ -806,7 +815,7 @@ function statementNetFromAdjustments(tripTotal, adjustments){
   return { adjTotal, net: tripTotal+adjTotal };
 }
 // 首頁「即時利潤」只是給主控一眼看大概損益的參考數字，不是正式請款/薪資
-// 文件（那兩個分別在請款結算、薪資結算，各自照自己的規則精確計算，完全
+// 文件（那兩個分別在請款結算、報酬結算，各自照自己的規則精確計算，完全
 // 不受這裡影響）。故意統一用「自然月（1號至今天）」同一個時間範圍去算
 // 收入(請款)跟支出(薪資)，而不是讓每個通路各自套用自己的請款週期——
 // 薪資本來就是固定自然月結算，如果收入那邊各通路分別用自己的週期（例如
@@ -850,7 +859,7 @@ const ADMIN_TABS = [
   {id:'dropPoints', label:'店點資料庫'},
   {id:'origins', label:'任務起點資料庫'},
   {id:'routes', label:'路線管理'},
-  {id:'payroll', label:'薪資結算'},
+  {id:'payroll', label:'報酬結算'},
   {id:'slips', label:'勞報單'},
   {id:'billing', label:'請款結算'},
   {id:'export', label:'資料匯出'},
@@ -891,7 +900,7 @@ function renderNav(){
     };
   });
 }
-// 薪資結算／請款結算／資料匯出改成各自直接查資料庫、不寫回共用的
+// 報酬結算／請款結算／資料匯出改成各自直接查資料庫、不寫回共用的
 // state.data.assignments 之後，只剩「週期任務清單」還會為了查舊週把窗口往前補
 // 到超過日常需要的範圍（見 trimAssignmentsToBaseWindow 說明）。離開週期任務清單、
 // 切去別的分頁時，把窗口縮回日常操作真的需要的基本大小，避免查過的舊
@@ -1145,7 +1154,7 @@ function computeDepotOverviewLocal(driverId, date){
     .filter(({route})=> route && route.originAddr===myRoute.originAddr)
     .sort((x,y)=> routeSortCompare(x.route, y.route))
     .map(({a, route})=>({
-      assignmentId:a.id, routeName:route.name, driverName:driverName(a.driverId), status:a.status,
+      assignmentId:a.id, routeName:routeDisplayName(route.name), driverName:driverName(a.driverId), status:a.status,
       seq:route.seq, shift:route.shift
     }));
 }
@@ -1167,7 +1176,7 @@ async function renderHomeAdmin(c){
     {id:'dropPoints', label:'店點資料庫', sub:'依通路分類'},
     {id:'origins', label:'任務起點資料庫', sub:'常用出發地'},
     {id:'routes', label:'路線管理', sub:'版本化店點順序'},
-    {id:'payroll', label:'薪資結算', sub:'調整項與可領淨額'},
+    {id:'payroll', label:'報酬結算', sub:'調整項與可領淨額'},
     {id:'slips', label:'勞報單', sub:'月結、區間開單與簽名'},
     {id:'billing', label:'請款結算', sub:'通路請款拆分'},
     {id:'export', label:'資料匯出', sub:'區間匯出並封存'},
@@ -1227,9 +1236,9 @@ async function renderHomeAdmin(c){
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
       ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
-      ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往薪資結算</button></div>` : ''}
+      ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往報酬結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
-      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
+      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
     </div>` : ''}
@@ -1246,7 +1255,7 @@ async function renderHomeAdmin(c){
         <tr><td>夥伴薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
         <tr><td><strong>利潤總額</strong></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
       </table>
-      <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟薪資結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟報酬結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3>
@@ -2080,7 +2089,7 @@ function routeRowHtml(r){
   const hasBoth = openVersion && openVersion.driverFare != null && billingVersion && billingVersion.billingTotal != null;
   const marginText = hasBoth ? `$${money(billingVersion.billingTotal - openVersion.driverFare)}` : '—';
   return `<tr>
-    <td>${r.name}</td>
+    <td>${routeDisplayName(r.name)}</td>
     <td class="amount">${fareText}</td>
     <td class="amount">${billingText}</td>
     <td class="amount">${marginText}</td>
@@ -2178,7 +2187,7 @@ function renderRouteDetail(rid){
   const draft = ensureDraft(r);
   detailEl.innerHTML = `
     <div class="panel">
-      <div class="toolbar"><strong>${r.name}</strong>
+      <div class="toolbar"><strong>${routeDisplayName(r.name)}</strong>
         ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
       </div>
       <p style="font-size:12.5px; color:var(--ink-soft);">任務起點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改任務起點請新增一條路線）</p>
@@ -2271,7 +2280,7 @@ function renderRouteDetail(rid){
   });
   detailEl.querySelectorAll('[data-delroute]').forEach(btn=>{
     btn.onclick = async ()=>{
-      if(!confirm(`確定要刪除路線「${r.name}」嗎？這條路線還沒有任何歷史版本紀錄，刪除後會永久消失、無法復原。`)) return;
+      if(!confirm(`確定要刪除路線「${routeDisplayName(r.name)}」嗎？這條路線還沒有任何歷史版本紀錄，刪除後會永久消失、無法復原。`)) return;
       try{
         await deleteRoute(btn.dataset.delroute);
         delete routeDraft[btn.dataset.delroute]; expandedRouteId=null;
@@ -2460,7 +2469,7 @@ async function renderScheduleAdmin(c){
     const known = new Set(state.data.origins.map(og=>og.address));
     const rest = all.filter(r=>!known.has(r.originAddr));
     if(rest.length) groups.push({ label: '（未指定任務起點）', list: rest });
-    return groups.filter(g=>g.list.length).map(g=>`<optgroup label="${escapeHtml(g.label)}">${g.list.map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</optgroup>`).join('');
+    return groups.filter(g=>g.list.length).map(g=>`<optgroup label="${escapeHtml(g.label)}">${g.list.map(r=>`<option value="${r.id}">${escapeHtml(routeDisplayName(r.name))}</option>`).join('')}</optgroup>`).join('');
   })();
   const originFilterOpts = '<option value="">全部任務起點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
@@ -2631,7 +2640,7 @@ function renderWeekGrid(containerId, dates){
       }
       const candidatesOf = shift => family.filter(r=>r.shift===shift);
       const cells = dates.map(d=> slotCellHtml(candidatesOf('AM'), routeForDate('AM',d), d) + slotCellHtml(candidatesOf('PM'), routeForDate('PM',d), d)).join('');
-      return `<tr><td class="row-label">${baseSeq}</td>${cells}</tr>`;
+      return `<tr><td class="row-label">${seqToR(baseSeq)}</td>${cells}</tr>`;
     }).join('');
     return `<div class="origin-title">${og.label||og.address}</div>
       <div class="panel" style="overflow-x:auto; padding:8px;">
@@ -2685,7 +2694,7 @@ function renderQuickCreate(routeId, date){
   const og = state.data.origins.find(o=>o.address===route.originAddr);
   box.innerHTML = `
     <div class="panel">
-      <h3 style="margin-top:0;">指派：${date} · ${route.name}</h3>
+      <h3 style="margin-top:0;">指派：${date} · ${routeDisplayName(route.name)}</h3>
       <p style="font-size:12.5px;">任務起點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
       <p style="font-size:12.5px; color:var(--ink-soft);">里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
       <div class="field"><label>夥伴</label><select id="qDriver">${driverOpts}</select></div>
@@ -2707,7 +2716,7 @@ function renderQuickCreate(routeId, date){
   };
 }
 // 週期任務清單任務明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
-// 額外金額併進這一趟的報酬（我的報酬、薪資結算、勞報單、即時利潤自動跟著變，勞報單不單獨列項）；
+// 額外金額併進這一趟的報酬（我的報酬、報酬結算、勞報單、即時利潤自動跟著變，勞報單不單獨列項）；
 // 已付款只影響可領淨額，不影響勞報單金額，跟預支是兩個獨立功能。
 async function renderTripPaySection(a, el){
   if(!el) return;
@@ -2940,7 +2949,7 @@ function renderAssignmentDetail(id, box){
   };
 }
 
-// ---------- 薪資結算 ----------
+// ---------- 報酬結算 ----------
 // 給付單位資訊固定不變，不隨夥伴/月份變動。
 const PAYROLL_PAYER_NAME = '信興行銷有限公司';
 const PAYROLL_PAYER_TAX_ID = '62091835';
@@ -3055,7 +3064,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
     </div>`;
 }
 let payrollTripsExpanded = false; // 該夥伴配送明細（日期/路線/車資）預設收合，跟其他清單一致
-// 薪資結算頁（算錢：調整項、報酬明細、可領淨額）與勞報單頁（文件：月結確認、區間勞報單、簽名、
+// 報酬結算頁（算錢：調整項、報酬明細、可領淨額）與勞報單頁（文件：月結確認、區間勞報單、簽名、
 // 下載）共用同一份畫面程式，用 mode 決定要顯示哪些區塊；夥伴／月份選擇存在 state，兩頁連動。
 function renderPayroll(c){ return renderPayrollPage(c, 'pay'); }
 function renderSlips(c){ return renderPayrollPage(c, 'slip'); }
@@ -3064,14 +3073,14 @@ function renderPayrollPage(c, mode){
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
   // 勞報單頁：選了夥伴，整個畫面（收件匣、尚未回簽、尚未月結、月結與區間勞報單）都只看這一位；
-  // 選「全部夥伴」才看總覽清單。薪資結算頁沒有「全部」，一定是某一位。
+  // 選「全部夥伴」才看總覽清單。報酬結算頁沒有「全部」，一定是某一位。
   let scope = isSlip ? (state._payDriverId || '') : '';
   if(scope && !state.data.drivers.some(d=>d.id===scope)) scope = '';
   if(isSlip) state._payDriverId = scope;
   const inScope = x => !scope || x.driverId===scope;
   const inbox = state.data.statements.filter(s=>inScope(s) && (s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
   c.innerHTML = `
-    <h2 class="section-title">${isSlip ? '勞報單' : '薪資結算'}</h2>
+    <h2 class="section-title">${isSlip ? '勞報單' : '報酬結算'}</h2>
     <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，夥伴才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位夥伴的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
     <div class="panel no-print" style="position:sticky; top:0; z-index:20; box-shadow:0 2px 6px rgba(27,33,41,.12);">
       <div class="grid2">
@@ -3305,7 +3314,7 @@ function renderPayrollPage(c, mode){
       };
     });
   }
-  // ---- 延後付款（薪資結算頁）：掛帳表單與待付款清單 ----
+  // ---- 延後付款（報酬結算頁）：掛帳表單與待付款清單 ----
   const dfStatusBadge = st => st==='overdue' ? '<span class="badge" style="background:#FBE9E7; color:var(--danger);">已逾期</span>' : st==='today' ? '<span class="badge pending">今天到期</span>' : st==='soon' ? '<span class="badge pending">3 天內</span>' : '';
   async function renderDeferredPanel(){
     const el = document.getElementById('deferredList');
@@ -3552,7 +3561,7 @@ function renderPayrollPage(c, mode){
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
-          <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
+          <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看報酬結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
         ${statementDriftNote(record, live)}
         ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放夥伴回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放夥伴簽名。'}</div>` : ''}
@@ -3618,7 +3627,7 @@ function renderPayrollPage(c, mode){
       catch(err){ alert(err.message); }
     };
   }
-  // 夥伴／月份選擇存在 state，薪資結算頁與勞報單頁共用，切頁不用重選。
+  // 夥伴／月份選擇存在 state，報酬結算頁與勞報單頁共用，切頁不用重選。
   const pDriverEl = document.getElementById('pDriver');
   if(state._payDriverId && [...pDriverEl.options].some(o=>o.value===state._payDriverId)) pDriverEl.value = state._payDriverId;
   state._payDriverId = pDriverEl.value;
@@ -3859,7 +3868,7 @@ function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
       const periodAmtCells = channelIds.map(cid=>`<td class="amount">$${money(Math.round((r.byChannel[cid]||0)*r.dayCount))}</td>`).join('');
       const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
       return `<tr>
-        <td>${period}</td><td>${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${stripWeekdayLabel(r.route.seq)}</td>
+        <td>${period}</td><td>${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td>
         <td>${r.dropLabel}</td>
         ${storeCells}<td>${totalStores}</td><td>${r.km??'—'}</td><td class="amount">$${money(Math.round(r.dailyTotal))}</td>
         ${pctCells}<td class="amount">$${money(Math.round(r.dailyTotal*r.dayCount))}</td>${periodAmtCells}
@@ -3934,7 +3943,7 @@ function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
       const pcts = channelIds.map(cid=> r.dailyTotal? Number(((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1)) : 0);
       const periodAmts = channelIds.map(cid=> Math.round((r.byChannel[cid]||0)*r.dayCount));
       const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
-      dAoa.push([period, r.dayCount, r.route.shift==='AM'?'上午':'下午', stripWeekdayLabel(r.route.seq), r.dropLabel, ...storeCounts, totalStores, r.km??'', Math.round(r.dailyTotal), ...pcts, Math.round(r.dailyTotal*r.dayCount), ...periodAmts]);
+      dAoa.push([period, r.dayCount, r.route.shift==='AM'?'上午':'下午', seqToR(stripWeekdayLabel(r.route.seq)), r.dropLabel, ...storeCounts, totalStores, r.km??'', Math.round(r.dailyTotal), ...pcts, Math.round(r.dailyTotal*r.dayCount), ...periodAmts]);
     });
     addAOASheet(wb, `${originLabel(addr)}配送明細`, dAoa, [{ s:{r:0,c:0}, e:{r:0,c:dAoa[1].length-1} }]);
   });
@@ -4224,7 +4233,7 @@ function renderExport(c){
     const rows = [];
     state.data.routes.forEach(route=>{
       route.versions.forEach(v=>{
-        if(v.end) rows.push({ ...v, routeId: route.id, routeName: route.name });
+        if(v.end) rows.push({ ...v, routeId: route.id, routeName: routeDisplayName(route.name) });
       });
     });
     return rows;
@@ -4638,7 +4647,7 @@ function renderFuelPanel(){
   const box = document.getElementById('meFuel');
   if(!box) return;
   // 主控「檢視夥伴」模式只讀：看得到夥伴填的申報紀錄，但不能代填，也不能在這裡改／刪
-  // （待確認的請到薪資結算處理）。
+  // （待確認的請到報酬結算處理）。
   const readOnly = state.role!=='driver' || !!state.adminViewDriver;
   const dId = state.activeDriverId;
   const claims = state.data.fuelClaims.filter(c=>c.driverId===dId);
@@ -4649,7 +4658,7 @@ function renderFuelPanel(){
   box.innerHTML = `
     <div class="panel">
       <h3 style="margin-top:0;">代墊費用申報（加油／車輛保養）</h3>
-      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：夥伴本人登入後才能填寫申報；待確認的申報請到「薪資結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油或車輛保養時，請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
+      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：夥伴本人登入後才能填寫申報；待確認的申報請到「報酬結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油或車輛保養時，請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
       <div class="grid3">
         <div class="field"><label>類別</label><select id="fcCategory">${Object.entries(CLAIM_CATEGORY_LABEL).map(([k,v])=>`<option value="${k}" ${(editing?editing.category:'fuel')===k?'selected':''}>${v}</option>`).join('')}</select></div>
         <div class="field"><label>日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
@@ -4715,7 +4724,7 @@ async function renderMyEarnings(c){
     </div>`).join('');
   }).catch(()=>{});
   document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; renderFuelPanel(); refresh(); };
-  // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的任務，
+  // 跟報酬結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的任務，
   // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列
   // 越查越大（夥伴身份本來就受RLS限制只看得到自己的任務，查6個月內任一個月
   // 都很輕量）。
@@ -5024,7 +5033,7 @@ function renderMyStatement(c){
     const driver = state.data.drivers.find(d=>d.id===dId);
     const label = statementLabel(record);
     // 勞報單上的「共完成N趟」要以整個期間為準：state.data.assignments 預設只載入最近14天，
-    // 所以跟薪資結算、我的報酬一樣，直接跟資料庫要這段期間的任務。
+    // 所以跟報酬結算、我的報酬一樣，直接跟資料庫要這段期間的任務。
     box.innerHTML = '<div class="empty">載入中...</div>';
     let monthAssignments;
     const [rangeStart, rangeEnd] = statementRange(record);

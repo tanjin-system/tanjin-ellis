@@ -236,7 +236,7 @@ function dataUrlToBytesAndType(dataUrl) {
 // 這種天天在看的畫面（這兩個畫面另外各自呼叫 ensureAssignmentsRange 確保涵蓋
 // 實際顯示的區間，不完全依賴這裡的預設值）。夥伴自己登入時因為 RLS
 // （driver_select_own policy 是 driver_id = auth_driver_id()）本來就只看得到
-// 自己的任務，不會跟著全系統規模一起變大，14天以外需要的地方（薪資結算、
+// 自己的任務，不會跟著全系統規模一起變大，14天以外需要的地方（報酬結算、
 // 請款結算查舊月份、資料匯出與封存、夥伴歷史班表）都用 ensureAssignmentsRange()
 // 按需補抓缺口，不受這個預設窗口大小影響。
 const ASSIGNMENTS_WINDOW_DAYS = 14;
@@ -414,7 +414,7 @@ async function refreshAssignmentsRange(start, end) {
   }
 }
 
-// 薪資結算／請款結算／資料匯出這三個純報表畫面（只讀，不像週期任務清單還要點格子
+// 報酬結算／請款結算／資料匯出這三個純報表畫面（只讀，不像週期任務清單還要點格子
 // 編輯/指派）改成完全不碰 state.data.assignments 共用陣列，查詢當下直接跟
 // 資料庫要「這次剛好需要的那一段」，用完就丟（存在呼叫端自己的區域變數，
 // 不寫回 state）。這樣畫面停留期間不管查的區間多大，都不會拖到其他任何
@@ -439,7 +439,7 @@ async function fetchAssignmentsInRange(start, end) {
 // 繞回原本要解決的問題。查歷史資料本身完全合理（要用就是要能查到），
 // 但查完離開那個畫面後，不該一直占用著拖慢其他所有畫面的篩選/掃描
 // 效能。這裡把 state.data.assignments 縮回「日常操作真的需要」的基本
-// 窗口（今日行程/週期任務清單當週用），離開薪資結算/請款結算/資料匯出/週期任務清單
+// 窗口（今日行程/週期任務清單當週用），離開報酬結算/請款結算/資料匯出/週期任務清單
 // 這些「查歷史資料」的分頁時呼叫（見 index.html goTab()），下次要查
 // 別的舊資料時 ensureAssignmentsRange() 會重新按需補抓，不影響查詢
 // 本身，只是不讓查過的舊資料一直賴著不走。
@@ -617,7 +617,7 @@ async function createOrigin(input) {
 // 路線名稱（例如「三洋工業零件中心 第一車 上午」）是新增路線當下把任務起點
 // 名稱直接寫死存成文字，不會跟著任務起點改名自動更新——如果只改 origins
 // 這張表，底下已存在的路線名稱會卡在改名前的舊字，變成到處都看得到卻
-// 改不掉的舊名字（夥伴端、週期任務清單、請款結算、薪資結算配送明細都顯示路線
+// 改不掉的舊名字（夥伴端、週期任務清單、請款結算、報酬結算配送明細都顯示路線
 // 名稱）。所以任務起點改名時，這裡一併把底下每一條路線的名稱依「現在的
 // label＋自己的 seq/shift」重新組一次、寫回去，不是只把舊字串換成新字串
 // ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟任務起點同步。
@@ -1259,7 +1259,7 @@ async function bulkDeleteAdjustments(ids) {
 
 // ---------------- 趟報酬：額外金額（臨時加錢／拆店調撥）與已付款 ----------------
 // 夥伴單趟報酬＝凍結車資（或排定車資）＋額外金額（assignments.extra_pay）。額外金額是併進
-// 趟報酬的，所以我的報酬、薪資結算、勞報單、首頁即時利潤全部自動跟著變，不用另外處理；
+// 趟報酬的，所以我的報酬、報酬結算、勞報單、首頁即時利潤全部自動跟著變，不用另外處理；
 // 逐筆來源紀錄放在 trip_pay_adjustments（只有主控能看），extra_pay 永遠＝該趟所有紀錄的加總。
 // 客戶請款是另外手動輸入的數字，完全不受影響。
 function tripPay(a) {
@@ -1816,7 +1816,7 @@ async function fetchDepotOverview(date) {
   if (error) { console.error('取得同任務起點車隊狀況失敗:', error.message); return []; }
   return (data || []).map(r => ({
     assignmentId: r.assignment_id,
-    routeName: r.route_name,
+    routeName: routeDisplayName(r.route_name),
     driverName: r.driver_name,
     status: r.status,
     seq: r.seq,
