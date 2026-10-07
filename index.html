@@ -88,6 +88,23 @@
   .store-name{ font-size:16px; font-weight:700; color:var(--danger); }
   .week-nav{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
   .schedule-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; overflow-x:auto; }
+  /* 手機（窄螢幕）的本週任務總覽改成直式清單：一天一列，今天置頂醒目、過去已完成收合、沒任務的日子壓成一行；
+     電腦版維持原本的七天格子。 */
+  .schedule-list{ display:none; }
+  @media (max-width:700px){ .schedule-grid{ display:none; } .schedule-list{ display:block; } }
+  .sl-day{ margin-bottom:10px; }
+  .sl-day-label{ font-size:12.5px; font-weight:700; color:var(--ink-soft); margin:0 0 4px; }
+  .sl-day.today .sl-day-label{ color:var(--ink); }
+  .sl-day.today .sl-rows{ border-color:var(--amber); box-shadow:0 0 0 1px var(--amber) inset; }
+  .sl-rows{ background:#fff; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+  .sl-row{ display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid var(--border); font-size:14px; }
+  .sl-row:first-child{ border-top:none; }
+  .sl-row strong{ font-weight:700; }
+  .sl-st{ font-size:12.5px; white-space:nowrap; font-weight:600; }
+  .sl-st.wait{ color:#B26A12; } .sl-st.run{ color:#2F6EA5; } .sl-st.done{ color:#8A929C; }
+  .sl-empty{ font-size:12.5px; color:var(--ink-soft); padding:2px 2px 8px; }
+  .sl-sub{ font-size:12.5px; font-weight:700; margin:12px 0 6px; }
+  .sl-past summary{ cursor:pointer; font-size:12.5px; color:var(--ink-soft); padding:6px 2px 10px; }
   .day-card{ background:#FAF9F7; border:1px solid var(--border); border-radius:var(--radius); padding:8px; min-height:110px; }
   .day-card .day-label{ font-size:11.5px; color:var(--ink-soft); margin-bottom:6px; font-weight:600; }
   .trip-chip{ background:#fff; border:1px solid var(--border); border-left:3px solid var(--teal); border-radius:2px; padding:5px 7px; margin-bottom:5px; font-size:11px; cursor:pointer; }
@@ -4324,6 +4341,35 @@ function renderToday(c){
     <div id="todayDetail"></div>
     <h3 style="margin-top:20px;">本週任務總覽</h3>
     <p class="section-sub" style="margin-top:-6px;">點擊「待完成」的任務可預覽當天行程與報酬。</p>
+    <div class="schedule-list">${(()=>{
+      const dayName = d=> `${d.slice(5).replace('-','/')}（${WEEKDAY_ZH[(new Date(d+'T00:00:00').getDay()+6)%7]}）`;
+      const tasksOf = d=> state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===d).sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
+      const st = a=> a.status==='completed' ? '<span class="sl-st done">✓ 已完成</span>' : a.status==='in_progress' ? '<span class="sl-st run">● 執行中</span>' : '<span class="sl-st wait">○ 待完成</span>';
+      const row = a=> `<div class="sl-row" ${a.status==='scheduled'?`data-previewtrip="${a.id}" style="cursor:pointer;"`:''}><strong>${routeName(a.routeId)}</strong>${st(a)}</div>`;
+      const thisWeek = getWeekDates(0), nextWeek = getWeekDates(1);
+      let html = '';
+      // 本週已過去的日子：收成一行，點開才看（詳細紀錄在「歷史任務」）。
+      const pastTasks = thisWeek.filter(d=>d<today).flatMap(d=>tasksOf(d).map(a=>({d,a})));
+      if(pastTasks.length) html += `<details class="sl-past"><summary>本週已過去的任務 ${pastTasks.length} 項 ▸</summary>${pastTasks.map(({d,a})=>`<div class="sl-day"><div class="sl-day-label">${dayName(d)}</div><div class="sl-rows">${row(a)}</div></div>`).join('')}</details>`;
+      const renderRange = dates=>{
+        let out = '', emptyRun = [];
+        const flush = ()=>{ if(!emptyRun.length) return; out += `<div class="sl-empty">${emptyRun.length===1?dayName(emptyRun[0]):`${emptyRun[0].slice(5).replace('-','/')}～${emptyRun[emptyRun.length-1].slice(5).replace('-','/')}`}　無排班</div>`; emptyRun = []; };
+        dates.forEach(d=>{
+          const items = tasksOf(d);
+          if(!items.length){ emptyRun.push(d); return; }
+          flush();
+          out += `<div class="sl-day ${d===today?'today':''}"><div class="sl-day-label">${dayName(d)}${d===today?'・今天':''}</div><div class="sl-rows">${items.map(row).join('')}</div></div>`;
+        });
+        flush();
+        return out;
+      };
+      const thisUpcoming = thisWeek.filter(d=>d>=today);
+      if(thisUpcoming.length) html += renderRange(thisUpcoming);
+      // 今天不在本週清單（理論上不會）時也要有今天標示，這裡不另外處理。
+      const nextHasTasks = nextWeek.some(d=>tasksOf(d).length);
+      html += `<div class="sl-sub">下週</div>` + (nextHasTasks ? renderRange(nextWeek) : `<div class="sl-empty">下週 無排班（尚未公布或沒有任務）</div>`);
+      return html;
+    })()}</div>
     <div class="schedule-grid">
       ${weekDates.map(d=>{
         const items = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===d)
