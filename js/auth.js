@@ -1,7 +1,7 @@
 // 登入流程：呼叫 Vercel Serverless Function（/api/auth-*）驗證 PIN／代碼（後端用 service role key 比對，
 // 前端完全看不到 admin_pin / access_code 本人），成功後拿到自訂 JWT 存進 localStorage，
 // 之後 getSupabase() 每個請求都會帶上這個 token。
-// UX 跟 demo 完全一樣：主控輸PIN、承攬人員輸4碼代碼，只是驗證的地方換到後端。
+// UX 跟 demo 完全一樣：主控輸PIN、夥伴輸4碼代碼，只是驗證的地方換到後端。
 
 const AUTH_STORAGE_KEY = 'fleet_auth_token';
 const AUTH_ROLE_KEY = 'fleet_auth_role';
@@ -59,9 +59,9 @@ async function loginAsDriver(code) {
   return body;
 }
 
-// 渲染登入畫面到 #loginGate；跟 demo 的登入畫面配置相同（主控PIN / 承攬人員代碼 兩種入口）。
+// 渲染登入畫面到 #loginGate；跟 demo 的登入畫面配置相同（主控PIN / 夥伴代碼 兩種入口）。
 // 每次呼叫都要重新把 #loginGate 顯示出來、把 #appLayout 藏起來——不然像「登出後
-// 想切換身份」這種情境，畫面會卡在上一個已登入的主控/承攬人員畫面上，看不到登入表單。
+// 想切換身份」這種情境，畫面會卡在上一個已登入的主控/夥伴畫面上，看不到登入表單。
 function renderLoginGate(message) {
   const appLayout = document.getElementById('appLayout');
   if (appLayout) appLayout.style.display = 'none';
@@ -73,7 +73,7 @@ function renderLoginGate(message) {
     <div class="field">
       <label>身份</label>
       <select id="loginRole">
-        <option value="driver">承攬人員帳號</option>
+        <option value="driver">夥伴帳號</option>
         <option value="admin">主控帳號</option>
       </select>
     </div>
@@ -135,11 +135,11 @@ function renderLoginGate(message) {
   };
 }
 
-// 承攬人員首次登入(或主控重新產生代碼後)強制要求自訂新代碼的畫面，蓋在 #loginGate 上——
-// 跟 renderLoginGate 一樣先把 #appLayout 藏起來，這樣承攬人員在設定新代碼前完全碰不到
-// 系統其他任何畫面。設定成功後不直接放行——退回登入畫面，強制承攬人員實際用新代碼
+// 夥伴首次登入(或主控重新產生代碼後)強制要求自訂新代碼的畫面，蓋在 #loginGate 上——
+// 跟 renderLoginGate 一樣先把 #appLayout 藏起來，這樣夥伴在設定新代碼前完全碰不到
+// 系統其他任何畫面。設定成功後不直接放行——退回登入畫面，強制夥伴實際用新代碼
 // 重新登入一次（確認新代碼真的能用），登入成功後 bootApp() 會自動導向「我的資料」
-// （見 index.html 的 renderNav()：承攬人員本人資料未填妥時一律鎖定在該頁)。
+// （見 index.html 的 renderNav()：夥伴本人資料未填妥時一律鎖定在該頁)。
 const DRIVER_CODE_MIN_LEN = 4;
 const DRIVER_CODE_MAX_LEN = 12;
 

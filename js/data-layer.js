@@ -124,7 +124,7 @@ function mapAdjustment(row) {
   };
 }
 
-// 承攬人員代墊申報的類別：加油、車輛保養（資料表沿用 fuel_claims 名稱，category 欄位區分）。
+// 夥伴代墊申報的類別：加油、車輛保養（資料表沿用 fuel_claims 名稱，category 欄位區分）。
 const CLAIM_CATEGORY_LABEL = { fuel: '加油', maintenance: '車輛保養' };
 
 function mapFuelClaim(row) {
@@ -229,19 +229,19 @@ function dataUrlToBytesAndType(dataUrl) {
 // 分頁更常從頭冷啟動、更常整批重抓，延遲感特別明顯。
 //
 // 這個天數要照「系統設計要撐住的規模」訂，不是照「現在資料量看起來夠不夠」訂：
-// 目標是100位承攬人員、1000+店家同時配送。主控端身份（RLS admin_all policy 是
-// using(true)，看得到全部承攬人員的資料）在那個規模下，即使窗口只抓14天，換算
+// 目標是100位夥伴、1000+店家同時配送。主控端身份（RLS admin_all policy 是
+// using(true)，看得到全部夥伴的資料）在那個規模下，即使窗口只抓14天，換算
 // 下來大約還是要抓大幾千筆下貨點紀錄；抓90天在那個規模下單次登入的JSON會到
 // 10幾MB，一定會感覺到卡頓，所以刻意縮到14天，只涵蓋「今日行程/本週期任務清單」
 // 這種天天在看的畫面（這兩個畫面另外各自呼叫 ensureAssignmentsRange 確保涵蓋
-// 實際顯示的區間，不完全依賴這裡的預設值）。承攬人員自己登入時因為 RLS
+// 實際顯示的區間，不完全依賴這裡的預設值）。夥伴自己登入時因為 RLS
 // （driver_select_own policy 是 driver_id = auth_driver_id()）本來就只看得到
 // 自己的車趟，不會跟著全系統規模一起變大，14天以外需要的地方（薪資結算、
-// 請款結算查舊月份、資料匯出與封存、承攬人員歷史班表）都用 ensureAssignmentsRange()
+// 請款結算查舊月份、資料匯出與封存、夥伴歷史班表）都用 ensureAssignmentsRange()
 // 按需補抓缺口，不受這個預設窗口大小影響。
 const ASSIGNMENTS_WINDOW_DAYS = 14;
 
-// 目錄資料（承攬人員/通路/出發點/下貨點/路線，含路線巢狀的全部版本跟版本下貨點）
+// 目錄資料（夥伴/通路/出發點/下貨點/路線，含路線巢狀的全部版本跟版本下貨點）
 // 幾乎不會變動，但份量是 loadAllData() 裡最大的一塊（尤其是路線，每條都
 // 巢狀帶著全部歷史版本）。這裡先查 catalog_meta 這個單一時間戳記（見
 // schema.sql PART 9，目錄表格任一張有異動，觸發器就會更新它），跟瀏覽器
@@ -264,10 +264,10 @@ async function fetchAllAssignmentPages(buildQuery) {
   return { data: all, error: null };
 }
 
-// 目錄快取必須依「登入身份」分開存：資料庫權限（RLS）讓承攬人員只看得到自己的承攬人員資料等，
-// 承攬人員登入抓回來的目錄是「縮水版」；如果跟主控共用同一份快取，同一個瀏覽器先用承攬人員
-// 身份測試、再用主控登入，只要目錄版本沒變，主控就會拿到只有1位承攬人員的縮水快取，
-// 看起來像承攬人員資料全部不見（實際資料庫完好）。主控一份，每位承攬人員各自一份。
+// 目錄快取必須依「登入身份」分開存：資料庫權限（RLS）讓夥伴只看得到自己的夥伴資料等，
+// 夥伴登入抓回來的目錄是「縮水版」；如果跟主控共用同一份快取，同一個瀏覽器先用夥伴
+// 身份測試、再用主控登入，只要目錄版本沒變，主控就會拿到只有1位夥伴的縮水快取，
+// 看起來像夥伴資料全部不見（實際資料庫完好）。主控一份，每位夥伴各自一份。
 // 版本號碼後綴 v2：舊版（沒分身份）的快取直接作廢，不再被讀取。
 function catalogCacheSuffix() {
   const driverId = state.role === 'driver' ? (state.activeDriverId || 'unknown') : null;
@@ -295,10 +295,10 @@ async function loadAllData() {
   } catch (e) { /* 版本比對只是加速用，任何失敗都當作沒快取，退回正常整包重抓 */ }
 
   // 安全性修補：settings 表（含 admin_pin）依 schema.sql 設計刻意「只有 app_admin 能碰，
-  // app_driver 完全不可見」，故意不 grant app_driver 任何權限，避免承攬人員讀到明文主控PIN。
-  // 但這代表承攬人員身份查 settings 一定會收到 permission denied 錯誤——原本這裡不分身份
-  // 都查，會讓下面的 for...throw 直接把承攬人員的整個 loadAllData() 打斷，承攬人員端因此完全
-  // 無法登入使用。改成只有 admin 才查 settings，承攬人員端用空殼帶過即可（承攬人員端本來就
+  // app_driver 完全不可見」，故意不 grant app_driver 任何權限，避免夥伴讀到明文主控PIN。
+  // 但這代表夥伴身份查 settings 一定會收到 permission denied 錯誤——原本這裡不分身份
+  // 都查，會讓下面的 for...throw 直接把夥伴的整個 loadAllData() 打斷，夥伴端因此完全
+  // 無法登入使用。改成只有 admin 才查 settings，夥伴端用空殼帶過即可（夥伴端本來就
   // 沒有任何畫面會用到 adminPin）。
   const isAdmin = state.role === 'admin';
   const assignmentsWindowStart = ymd(addDays(todayStr(), -ASSIGNMENTS_WINDOW_DAYS));
@@ -314,12 +314,12 @@ async function loadAllData() {
     assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', assignmentsWindowStart)),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
-    // billing_adjustments 只 grant app_admin，承攬人員身份查會 permission denied，只有 admin 才查。
+    // billing_adjustments 只 grant app_admin，夥伴身份查會 permission denied，只有 admin 才查。
     ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
     // 公告：admin/driver 都能查，driver 只查得到 active=true 的（RLS擋掉下架的），
     // 不需要另外分身份寫兩個查詢。
     announcementsRes: supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false }),
-    // 承攬人員加油申報：承攬人員只查得到自己的（RLS），主控看全部。
+    // 夥伴加油申報：夥伴只查得到自己的（RLS），主控看全部。
     fuelClaimsRes: supabase.from('fuel_claims').select('*').order('fuel_date', { ascending: false })
   };
   const keys = Object.keys(queries);
@@ -389,9 +389,9 @@ async function ensureAssignmentsRange(startDate) {
 }
 
 // 首頁待著不動時的背景自動刷新（見 index.html refreshHomeDataIfIdle）原本是
-// 每25秒重新呼叫整支 loadAllData()——連承攬人員/通路/出發點/路線（含每條路線的
+// 每25秒重新呼叫整支 loadAllData()——連夥伴/通路/出發點/路線（含每條路線的
 // 全部版本與版本下貨點）這些幾乎不會變動的目錄資料也一起重抓一次。在100位
-// 承攬人員同時上線的規模下，這代表每25秒就有100個並發連線各自重抓一次幾乎相同
+// 夥伴同時上線的規模下，這代表每25秒就有100個並發連線各自重抓一次幾乎相同
 // 的目錄資料，是完全不必要的資料庫負擔。首頁背景刷新真正需要跟上即時狀態
 // 的只有車趟資料（請款-薪資即時利潤、今日尚未配送完成），改成只重新抓「這個
 // 範圍內」的車趟、直接整段覆蓋（不是像 ensureAssignmentsRange 那樣只補缺口，
@@ -434,7 +434,7 @@ async function fetchAssignmentsInRange(start, end) {
 
 // ensureAssignmentsRange() 只會往前補資料、從不清掉，如果放著不管，一個
 // 主控在同一個session裡多查幾次舊月份薪資、舊區間請款、舊週期任務清單，
-// state.data.assignments 會一路累積下去——100承攬人員/1000店規模下，查個
+// state.data.assignments 會一路累積下去——100夥伴/1000店規模下，查個
 // 5、6次舊資料累積起來的量，跟直接抓90天窗口一樣重，等於繞了一圈又
 // 繞回原本要解決的問題。查歷史資料本身完全合理（要用就是要能查到），
 // 但查完離開那個畫面後，不該一直占用著拖慢其他所有畫面的篩選/掃描
@@ -458,7 +458,7 @@ async function fetchAssignment(id) {
   return assignment;
 }
 
-// ---------------- 承攬人員 ----------------
+// ---------------- 夥伴 ----------------
 
 async function createDriver(input) {
   const supabase = getSupabase();
@@ -471,7 +471,7 @@ async function createDriver(input) {
     id_number: input.idNumber || null,
     status: input.status || 'active'
   }).select().single();
-  if (error) throw new Error('新增承攬人員失敗：' + error.message);
+  if (error) throw new Error('新增夥伴失敗：' + error.message);
   const driver = mapDriver(data);
   state.data.drivers.push(driver);
   return driver;
@@ -486,7 +486,7 @@ async function regenerateDriverAccessCode(driverId) {
   if (driver) { driver.accessCode = data.access_code; driver.forceCodeReset = true; }
 }
 
-// 承攬人員自己設定新的登入代碼（首次登入，或主控重新產生代碼後）：
+// 夥伴自己設定新的登入代碼（首次登入，或主控重新產生代碼後）：
 // 只有本人（driver_id 來自 JWT）能改自己這一列的 access_code/force_code_reset，
 // 改完就把 force_code_reset 清成 false，之後登入不會再被強制要求重設。
 async function changeMyAccessCode(driverId, newCode) {
@@ -508,18 +508,18 @@ async function deleteOrDeactivateDriver(driverId) {
   if (referenced) {
     const inactiveAt = new Date().toISOString();
     const { error } = await supabase.from('drivers').update({ status: 'inactive', inactive_at: inactiveAt }).eq('id', driverId);
-    if (error) throw new Error('停用承攬人員失敗：' + error.message);
+    if (error) throw new Error('停用夥伴失敗：' + error.message);
     const driver = state.data.drivers.find(d => d.id === driverId);
     if (driver) { driver.status = 'inactive'; driver.inactiveAt = inactiveAt; }
     return 'deactivated';
   }
   const { error } = await supabase.from('drivers').delete().eq('id', driverId);
-  if (error) throw new Error('刪除承攬人員失敗：' + error.message);
+  if (error) throw new Error('刪除夥伴失敗：' + error.message);
   state.data.drivers = state.data.drivers.filter(d => d.id !== driverId);
   return 'deleted';
 }
 
-// 承攬人員端「我的資料」頁可編輯欄位（跟 schema.sql 裡 app_driver 的欄位權限一致）
+// 夥伴端「我的資料」頁可編輯欄位（跟 schema.sql 裡 app_driver 的欄位權限一致）
 async function updateDriverProfile(driverId, fields) {
   const payload = {};
   if ('name' in fields) payload.name = fields.name || null;
@@ -534,7 +534,7 @@ async function updateDriverProfile(driverId, fields) {
   if ('account' in fields) payload.bank_account = fields.account || null;
   if ('holder' in fields) payload.bank_holder = fields.holder || null;
   if ('idNumber' in fields) payload.id_number = fields.idNumber || null;
-  // 職業工會欄位只有主控（admin）能改，承攬人員端欄位權限（schema.sql）沒有開放這兩欄。
+  // 職業工會欄位只有主控（admin）能改，夥伴端欄位權限（schema.sql）沒有開放這兩欄。
   if ('unionInsured' in fields) payload.union_insured = !!fields.unionInsured;
   if ('unionProofPath' in fields) payload.union_proof_path = fields.unionProofPath || null;
   // 勞報單勞務名稱（空白＝用預設）：只有主控能改，月結確認時才凍結進 statements.service_name。
@@ -617,7 +617,7 @@ async function createOrigin(input) {
 // 路線名稱（例如「三洋工業零件中心 第一車 上午」）是新增路線當下把出發點
 // 名稱直接寫死存成文字，不會跟著出發點改名自動更新——如果只改 origins
 // 這張表，底下已存在的路線名稱會卡在改名前的舊字，變成到處都看得到卻
-// 改不掉的舊名字（承攬人員端、週期任務清單、請款結算、薪資結算配送明細都顯示路線
+// 改不掉的舊名字（夥伴端、週期任務清單、請款結算、薪資結算配送明細都顯示路線
 // 名稱）。所以出發點改名時，這裡一併把底下每一條路線的名稱依「現在的
 // label＋自己的 seq/shift」重新組一次、寫回去，不是只把舊字串換成新字串
 // ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟出發點同步。
@@ -694,7 +694,7 @@ async function updateDropPoint(dpId, input) {
   // 通路（所屬分類）改變時，同步套用到「所有」引用這個下貨點的車趟快照
   // （不分完成與否——請款明細/配送紀錄一律依下貨點資料庫目前的分類顯示）。
   // 已完成的車趟，資料庫那邊（見 sync_drop_point_channel()）也會一併補算
-  // 一次請款拆賬金額，這裡重新抓一次那些車趟同步最新的金額快照；承攬人員費用
+  // 一次請款拆賬金額，這裡重新抓一次那些車趟同步最新的金額快照；夥伴費用
   // 不受影響。
   if (channelChanged) {
     const { error: syncErr } = await supabase.rpc('sync_drop_point_channel', { p_drop_point_id: dpId, p_channel_id: input.channelId });
@@ -809,7 +809,7 @@ function computeChannelSplitByStoreCount(dropPointIds, billingTotal) {
 // 新增/覆寫一個版本的下貨點順序後，重新計算這條路線所有版本的生效區間
 // （每個版本的 end = 下一個版本 start 前一天，最後一個版本 end = null）。
 // finance = { distanceKm, driverFare, billingTotal } 是這個版本人工填寫的
-// 里程／承攬人員費用／請款總額；請款總額依通路自動拆賬，算好的結果一併存起來，
+// 里程／夥伴費用／請款總額；請款總額依通路自動拆賬，算好的結果一併存起來，
 // 之後這個版本底下每一趟車建立時都直接複製這份快照，不用每趟重算。
 async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   const route = state.data.routes.find(r => r.id === routeId);
@@ -870,8 +870,8 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
 // 但還沒開始/還沒完成的未來車趟，不會自動跟著變——建立車趟當下就把內容複製
 // 成快照了（見 createAssignment）。這裡是選配的「一鍵套用」：找出這條路線
 // 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的車趟，
-// 把下貨點清單、里程、承攬人員費用、請款拆賬全部重新套用成當時該生效版本的
-// 內容，承攬人員／日期／車次都不動。已完成的車趟本來就凍結（付過的承攬人員費用、
+// 把下貨點清單、里程、夥伴費用、請款拆賬全部重新套用成當時該生效版本的
+// 內容，夥伴／日期／車次都不動。已完成的車趟本來就凍結（付過的夥伴費用、
 // 請款金額都不該回頭被重算），不在套用範圍內。
 async function regenerateFutureAssignments(routeId, fromDate) {
   const route = state.data.routes.find(r => r.id === routeId);
@@ -912,7 +912,7 @@ async function regenerateFutureAssignments(routeId, fromDate) {
 
 // ---------------- 車趟指派與生命週期 ----------------
 
-// 承攬人員費用／里程／請款金額不再由排班時人工輸入，改成直接複製路線當時生效
+// 夥伴費用／里程／請款金額不再由排班時人工輸入，改成直接複製路線當時生效
 // 版本裡已經填好的數字（見 saveRouteVersion 的 finance 參數）。找不到生效版本
 // 或版本還沒填費用時，就先以 0/null 建立，之後可以在路線管理補上再重新產生車趟，
 // 或於車趟管理個別調整（見 updateAssignmentFinance，供例外狀況覆寫用）。
@@ -922,7 +922,7 @@ async function createAssignment(input) {
   const version = route.versions.find(v => input.date >= v.start && (!v.end || input.date <= v.end));
   const dropPointIds = version ? version.dropPointIds : [];
 
-  // fare 可在排班當下手動填「調整金額」覆寫路線版本的承攬人員費用（例如這一趟臨時加點、
+  // fare 可在排班當下手動填「調整金額」覆寫路線版本的夥伴費用（例如這一趟臨時加點、
   // 繞遠路），留空則沿用版本預設值，跟 updateAssignmentFinance() 事後覆寫是同一個欄位。
   const fareOverride = input.fare !== undefined && input.fare !== '' && input.fare !== null ? Number(input.fare) : null;
   const supabase = getSupabase();
@@ -933,7 +933,7 @@ async function createAssignment(input) {
     distance_km: version?.distanceKm ?? null,
     billing_total_snapshot: version?.billingTotal ?? null,
     billing_by_channel_snapshot: version?.billingByChannel ?? null,
-    // 本週（含以前）的車趟排好就生效；之後週次的車趟先是草稿（只有主控看得到），按「發佈」才開放給承攬人員。
+    // 本週（含以前）的車趟排好就生效；之後週次的車趟先是草稿（只有主控看得到），按「發佈」才開放給夥伴。
     published: input.published ?? (input.date <= getWeekDates(0)[6]),
     status: 'scheduled'
   }).select().single();
@@ -954,9 +954,9 @@ async function createAssignment(input) {
 }
 
 // ---------------- 週期任務清單：下週自動延續本週＋發佈 ----------------
-// 發佈：未來週次的車趟預設是草稿（published=false，承攬人員端 RLS 看不到），主控排完按「發佈」才開放。
+// 發佈：未來週次的車趟預設是草稿（published=false，夥伴端 RLS 看不到），主控排完按「發佈」才開放。
 // 自動延續：每週第一次打開週期任務清單時，如果下週還沒補過（schedule_rollovers 沒有紀錄）且下週是空的，
-// 就把本週每一格（路線＋承攬人員＋星期幾）複製到下週，一律是草稿。先寫入紀錄再複製，之後刪掉哪格都不會再補回來。
+// 就把本週每一格（路線＋夥伴＋星期幾）複製到下週，一律是草稿。先寫入紀錄再複製，之後刪掉哪格都不會再補回來。
 async function publishWeek(start, end) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update({ published: true })
@@ -1054,15 +1054,15 @@ async function deleteAssignment(assignmentId) {
   state.data.assignments = state.data.assignments.filter(a => a.id !== assignmentId);
 }
 
-// 臨時異動：已排定或已出發的車趟需要臨時換承攬人員（例如原本排定的承攬人員臨時請假），
+// 臨時異動：已排定或已出發的車趟需要臨時換夥伴（例如原本排定的夥伴臨時請假），
 // 不用刪除重建整趟車趟（那樣會遺失已經拍的照片、下貨點順序等資料）。
 // 已完成的車趟不開放異動，維持「完成即封存」的設計。
 async function reassignAssignmentDriver(assignmentId, newDriverId) {
   const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a && a.status === 'completed') throw new Error('已完成的車趟不可異動承攬人員。');
+  if (a && a.status === 'completed') throw new Error('已完成的車趟不可異動夥伴。');
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).eq('id', assignmentId);
-  if (error) throw new Error('換承攬人員失敗：' + error.message);
+  if (error) throw new Error('換夥伴失敗：' + error.message);
   if (a) a.driverId = newDriverId;
 }
 
@@ -1074,9 +1074,9 @@ async function markAssignmentDeparted(assignmentId) {
   if (a) a.status = 'in_progress';
 }
 
-// issueNote 有值代表「尚有下貨點未拍照回報」時承攬人員填寫的原因說明，跟 demo 的
+// issueNote 有值代表「尚有下貨點未拍照回報」時夥伴填寫的原因說明，跟 demo 的
 // 「完成本趟」流程一致：同一次操作把 status/has_issue/issue_note 一起送出。
-// 完成時間（completed_at）與承攬人員報酬凍結快照（payroll_fare_snapshot）由資料庫
+// 完成時間（completed_at）與夥伴報酬凍結快照（payroll_fare_snapshot）由資料庫
 // 觸發器自動處理；請款金額不再自動計算，改由主控在車趟管理裡人工輸入
 // （見 updateAssignmentFinance()），這裡送出後重新抓一次該筆車趟同步最新狀態。
 async function markAssignmentComplete(assignmentId, issueNote) {
@@ -1092,7 +1092,7 @@ async function markAssignmentComplete(assignmentId, issueNote) {
   return full;
 }
 
-// 車趟管理的人工輸入：承攬人員費用、里程、各通路請款金額都由主控直接 key in，
+// 車趟管理的人工輸入：夥伴費用、里程、各通路請款金額都由主控直接 key in，
 // 不再依公里數/下貨點數套公式換算。billingByChannel 是 {channelId: amount} 的物件，
 // 只需要包含這趟車實際牽涉到的通路；總額在這裡直接加總，不留給資料庫算。
 async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billingByChannel }) {
@@ -1117,7 +1117,7 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const { bytes, contentType } = dataUrlToBytesAndType(dataUrl);
   const path = `${assignmentId}/${dropPointId}.jpg`;
   const supabase = getSupabase();
-  // upsert:true 讓同一個下貨點重複呼叫這個函式時（承攬人員「重新拍照」）直接覆蓋掉
+  // upsert:true 讓同一個下貨點重複呼叫這個函式時（夥伴「重新拍照」）直接覆蓋掉
   // 同一個路徑的舊照片，不需要另外處理刪除舊檔——這也是「重新拍照」能重用這支
   // 既有函式、不用另外寫一支的原因。
   const { error: upErr } = await supabase.storage.from('assignment-photos').upload(path, bytes, { contentType, upsert: true });
@@ -1137,7 +1137,7 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; }
 }
 
-// 未配達原因：承攬人員在單一下貨點旁邊直接選填，不用等到整趟結束才填一個籠統的
+// 未配達原因：夥伴在單一下貨點旁邊直接選填，不用等到整趟結束才填一個籠統的
 // 備註。設定原因不代表這個下貨點「完成」（status 還是 pending，沒有送達
 // 證明照），只是有了解釋；主控端在「完成本趟」的判斷跟畫面顯示都會把它
 // 當作「已處理」看待。
@@ -1155,7 +1155,7 @@ async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
 // [{bytes, contentType, mediaType}, ...]，圖片已經過 compressImageFile 壓縮、
 // 影片則是原始檔案位元組（不做壓縮）。
 // 路徑第一層資料夾一定要是 assignmentId（跟 uploadDropPointPhoto 用同一套規則），
-// Storage 的 RLS policy 是用路徑第一層資料夾比對承攬人員是否為這張 assignment 的
+// Storage 的 RLS policy 是用路徑第一層資料夾比對夥伴是否為這張 assignment 的
 // 車手——之前這裡路徑是 extra/xxx（第一層資料夾是字面上的"extra"，比對不到
 // 任何 assignment），導致附加照片上傳100%被RLS擋下、報「new row violates
 // row-level security policy」。
@@ -1258,7 +1258,7 @@ async function bulkDeleteAdjustments(ids) {
 }
 
 // ---------------- 趟報酬：額外金額（臨時加錢／拆店調撥）與已付款 ----------------
-// 承攬人員單趟報酬＝凍結車資（或排定車資）＋額外金額（assignments.extra_pay）。額外金額是併進
+// 夥伴單趟報酬＝凍結車資（或排定車資）＋額外金額（assignments.extra_pay）。額外金額是併進
 // 趟報酬的，所以我的報酬、薪資結算、勞報單、首頁即時利潤全部自動跟著變，不用另外處理；
 // 逐筆來源紀錄放在 trip_pay_adjustments（只有主控能看），extra_pay 永遠＝該趟所有紀錄的加總。
 // 客戶請款是另外手動輸入的數字，完全不受影響。
@@ -1364,7 +1364,7 @@ async function deleteTripPayLog(logId) {
   await syncExtraPay(ids);
 }
 
-// 已付款（現金／轉帳）：主控填「區間日期＋付款日期」，區間內這位承攬人員已完成、還沒標已付的車趟
+// 已付款（現金／轉帳）：主控填「區間日期＋付款日期」，區間內這位夥伴已完成、還沒標已付的車趟
 // 一次標為已付（付款金額依各趟報酬比例攤到每一趟，所以跨月時各月各自算得出已付多少）。
 // 只影響「可領淨額」，不影響勞報單金額，跟預支是兩個獨立功能；同一次付款共用 paid_group。
 // 只抓必要欄位，不連帶抓下貨點，區間再長也很輕。
@@ -1440,7 +1440,7 @@ async function cancelPaymentGroup(groupId) {
 }
 
 // ---------------- 延後付款（掛帳）與待付款清單 ----------------
-// 承攬人員同意晚一點領（例如 9/30 的報酬約好 11/15 才付）：主控把那段期間「已完成、還沒付」的車趟掛帳，
+// 夥伴同意晚一點領（例如 9/30 的報酬約好 11/15 才付）：主控把那段期間「已完成、還沒付」的車趟掛帳，
 // 記錄預計付款日；到了預計日轉帳後，用上面的區間付款登記，掛帳自動消失。只標記有掛帳的車趟，
 // 舊月份沒有逐趟標過已付，不會被誤當成欠款。完全不影響勞報單與可領淨額計算。
 async function deferPayment({ driverId, start, end, dueDate, note }) {
@@ -1471,7 +1471,7 @@ async function cancelDeferredPayment(assignmentIds) {
   state._pendingPayCache = null;
 }
 
-// 所有掛帳中（已完成、有預計付款日、還沒付）的車趟，精簡欄位；driverId 給了就只抓那位（承攬人員端用）。
+// 所有掛帳中（已完成、有預計付款日、還沒付）的車趟，精簡欄位；driverId 給了就只抓那位（夥伴端用）。
 async function fetchDeferredTrips(driverId) {
   const supabase = getSupabase();
   let q = supabase.from('assignments')
@@ -1486,7 +1486,7 @@ async function fetchDeferredTrips(driverId) {
     extraPay: Number(r.extra_pay || 0), payDueDate: r.pay_due_date, payDueNote: r.pay_due_note || ''
   }));
 }
-// 同一位承攬人員＋同一個預計付款日＋同一備註 合成一筆待付款。
+// 同一位夥伴＋同一個預計付款日＋同一備註 合成一筆待付款。
 function groupDeferred(trips) {
   const map = new Map();
   trips.forEach(t => {
@@ -1528,7 +1528,7 @@ function deferredStatus(due) {
   return days <= 3 ? 'soon' : 'later';
 }
 
-// ---------------- 客戶請款例外調整（跟承攬人員薪資調整項是兩回事） ----------------
+// ---------------- 客戶請款例外調整（跟夥伴薪資調整項是兩回事） ----------------
 
 async function createBillingAdjustment(input) {
   const supabase = getSupabase();
@@ -1549,9 +1549,9 @@ async function deleteBillingAdjustment(id) {
   state.data.billingAdjustments = state.data.billingAdjustments.filter(a => a.id !== id);
 }
 
-// ---------------- 公告（主控發布給全體承攬人員看的訊息） ----------------
+// ---------------- 公告（主控發布給全體夥伴看的訊息） ----------------
 
-// audience 'all'：全體承攬人員；'selected'：只有 driverIds 列出的那幾位看得到。
+// audience 'all'：全體夥伴；'selected'：只有 driverIds 列出的那幾位看得到。
 async function createAnnouncement(input) {
   const supabase = getSupabase();
   const audience = input.audience === 'selected' ? 'selected' : 'all';
@@ -1593,7 +1593,7 @@ async function updateAnnouncement(id, input) {
   if (idx >= 0) state.data.announcements[idx] = { ...mapAnnouncement(data), driverIds };
 }
 
-// 下架用軟刪除（active=false）而不是直接刪除列——承攬人員那邊 RLS 只擋掉
+// 下架用軟刪除（active=false）而不是直接刪除列——夥伴那邊 RLS 只擋掉
 // active=false 的，不代表歷史上發過這則公告的紀錄要一起消失，主控自己
 // 這邊（不受 active 篩選）還是看得到、可以重新上架。
 async function setAnnouncementActive(id, active) {
@@ -1611,7 +1611,7 @@ async function deleteAnnouncement(id) {
   state.data.announcements = state.data.announcements.filter(a => a.id !== id);
 }
 
-// 全體承攬人員固定套用同一個所得類別；如果貴公司實際適用的所得類別不是這個，
+// 全體夥伴固定套用同一個所得類別；如果貴公司實際適用的所得類別不是這個，
 // 請直接改這個常數即可，不用逐月手動修改每張勞報單。
 const PAYROLL_INCOME_TYPE = '執行業務所得';
 // 稅務／二代健保補充保費費率與起扣門檻。⚠️ 這兩個數字（10% 扣繳率、
@@ -1621,10 +1621,10 @@ const PAYROLL_INCOME_TYPE = '執行業務所得';
 const PAYROLL_TAX_RATE = 0.10;
 const PAYROLL_NHI_RATE = 0.0211;
 const PAYROLL_WITHHOLD_THRESHOLD = 20000;
-// reimbursement＝承攬人員代墊款（例如油資，憑證開公司統編）：這筆錢已經包含在
-// 報酬總額裡一起付給承攬人員，但屬於代墊還款、不是所得，扣稅／補充保費的門檻
+// reimbursement＝夥伴代墊款（例如油資，憑證開公司統編）：這筆錢已經包含在
+// 報酬總額裡一起付給夥伴，但屬於代墊還款、不是所得，扣稅／補充保費的門檻
 // 判斷跟計算基礎只用「報酬總額 − 代墊款」（所得額）；實領金額＝報酬總額 −
-// 稅 − 補充保費，承攬人員實際收到的錢跟沒有代墊時的算法一致。
+// 稅 − 補充保費，夥伴實際收到的錢跟沒有代墊時的算法一致。
 function computePayrollDeductions(grossAmount, reimbursement = 0) {
   const amt = Math.round(Number(grossAmount) || 0);
   const reimb = Math.min(Math.max(Math.round(Number(reimbursement) || 0), 0), Math.max(amt, 0));
@@ -1645,7 +1645,7 @@ function computePayrollDeductions(grossAmount, reimbursement = 0) {
 // 不直接用live.adjTotal/live.net——那是含預支扣減的即時參考值，勞報單是
 // 正式文件，預支不算扣款，凍結存檔時要用statementNetFromAdjustments()
 // 重新排除預支再算一次（見index.html該函式旁邊的說明）。
-// 勞報單勞務名稱：預設「貨物配送及到店協助理貨勞務」。主控可以依承攬人員改名稱，但規則是名稱
+// 勞報單勞務名稱：預設「貨物配送及到店協助理貨勞務」。主控可以依夥伴改名稱，但規則是名稱
 // 要符合系統記錄的實際工作——當月有完成車趟時，名稱必須含「配送」；當月沒有車趟才可自由填寫。
 const DEFAULT_SERVICE_NAME = '到店協助理貨勞務';
 function validateServiceName(name, tripCount) {
@@ -1653,7 +1653,7 @@ function validateServiceName(name, tripCount) {
   if (!name) return;
   if (name.length > 30) throw new Error('勞務名稱最多 30 個字');
   if (tripCount > 0 && !name.includes('理貨')) {
-    throw new Error(`勞務名稱「${name}」沒有寫到「理貨」，但這位承攬人員本月在系統裡有 ${tripCount} 趟完成的車趟。名稱必須符合實際工作，請修改承攬人員資料裡的勞務名稱（需含「理貨」）。`);
+    throw new Error(`勞務名稱「${name}」沒有寫到「理貨」，但這位夥伴本月在系統裡有 ${tripCount} 趟完成的車趟。名稱必須符合實際工作，請修改夥伴資料裡的勞務名稱（需含「理貨」）。`);
   }
 }
 
@@ -1684,9 +1684,9 @@ async function confirmMonthlyStatement(driverId, month, live) {
 }
 
 // ---------------- 區間勞報單（依實際付款期間開單） ----------------
-// 承攬人員每週（或每次付款）請款時，主控可以自選日期區間開一張勞報單：金額由系統裡該區間的
+// 夥伴每週（或每次付款）請款時，主控可以自選日期區間開一張勞報單：金額由系統裡該區間的
 // 完成車趟與調整項（依調整項日期）算出來，不能手動改；給付日期記錄實際轉帳日。
-// 區間不可跟同一位承攬人員的其他勞報單（月結或區間）重疊，避免同一段期間重複開單。
+// 區間不可跟同一位夥伴的其他勞報單（月結或區間）重疊，避免同一段期間重複開單。
 
 function statementRange(s) {
   return s.periodStart ? [s.periodStart, s.periodEnd] : [s.month + '-01', monthEndStr(s.month)];
@@ -1765,8 +1765,8 @@ async function signStatement(statementId, signatureDataUrl) {
   if (s) { s.status = 'signed'; s.signedAt = signedAt; s.signatureDataUrl = signatureDataUrl; }
 }
 
-// 主控退回簽名：把已回簽的勞報單退回「待回簽」狀態，讓承攬人員可以重新簽名
-// （例如簽名簽錯、看不清楚）。不刪除舊的簽名圖檔（承攬人員重簽時 signStatement()
+// 主控退回簽名：把已回簽的勞報單退回「待回簽」狀態，讓夥伴可以重新簽名
+// （例如簽名簽錯、看不清楚）。不刪除舊的簽名圖檔（夥伴重簽時 signStatement()
 // 會用同一個路徑 upsert 覆蓋掉），只重置狀態欄位。
 async function rejectStatementSignature(statementId) {
   const supabase = getSupabase();
@@ -1794,7 +1794,7 @@ async function rejectStatementSignatures(ids) {
 
 // 收回月結：帳務有問題時，把已經月結確認的勞報單整份刪除，那個月份回到「尚未月結
 // 確認」，就可以重新新增／刪除調整項、修正後再月結確認一次。跟「退回簽名」不同：
-// 退回簽名只是讓承攬人員重簽，金額仍是凍結的；收回是連凍結金額一起作廢。承攬人員端會
+// 退回簽名只是讓夥伴重簽，金額仍是凍結的；收回是連凍結金額一起作廢。夥伴端會
 // 看不到這份勞報單；已簽名的簽名圖檔不刪（路徑是舊的狀態id，重新月結後不會被用到，
 // 檔案很小、在私有bucket裡，留著不影響）。
 async function revokeStatements(ids) {
@@ -1806,10 +1806,10 @@ async function revokeStatements(ids) {
   state.data.statements = state.data.statements.filter(x => !idSet.has(x.id));
 }
 
-// 承攬人員首頁「同出發點今日出發狀況」：呼叫 schema.sql 裡的
+// 夥伴首頁「同出發點今日出發狀況」：呼叫 schema.sql 裡的
 // security definer 函式 driver_depot_overview()，只回傳沒有金額的窄
-// 欄位（車次名稱/承攬人員姓名/狀態），繞過承攬人員只能查自己車趟的RLS限制，
-// 但不會洩漏其他承攬人員的薪資/請款資料。
+// 欄位（車次名稱/夥伴姓名/狀態），繞過夥伴只能查自己車趟的RLS限制，
+// 但不會洩漏其他夥伴的薪資/請款資料。
 async function fetchDepotOverview(date) {
   const supabase = getSupabase();
   const { data, error } = await supabase.rpc('driver_depot_overview', { p_date: date });
@@ -1824,7 +1824,7 @@ async function fetchDepotOverview(date) {
   }));
 }
 
-// 承攬人員自己按「確認簽名」把 signed 鎖定成 confirmed，鎖定後承攬人員端不再顯示
+// 夥伴自己按「確認簽名」把 signed 鎖定成 confirmed，鎖定後夥伴端不再顯示
 // 「重新簽名」按鈕（例如主控已經拿這份簽名去申報國稅局之後，就不該再讓
 // 簽名內容悄悄變掉）。主控的退回簽名不受這個狀態影響，隨時能退回重簽。
 async function confirmSignature(statementId) {
@@ -1880,7 +1880,7 @@ async function fetchUsageStats() {
   return { dbSizeBytes, storageBuckets, storageTotalBytes };
 }
 
-// ---------------- 承攬人員加油申報（承攬人員填、主控確認後轉成代墊款） ----------------
+// ---------------- 夥伴加油申報（夥伴填、主控確認後轉成代墊款） ----------------
 
 function normalizeInvoiceNo(raw) {
   return String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1964,7 +1964,7 @@ async function confirmFuelClaim(id) {
   claim.adjustmentId = adj.id;
 }
 
-// 首頁背景刷新用：承攬人員隨時可能新增申報，主控停在首頁時要能看到最新的待確認數量
+// 首頁背景刷新用：夥伴隨時可能新增申報，主控停在首頁時要能看到最新的待確認數量
 // （fuel_claims 沒有訂閱 Realtime，資料量也很小，直接整張重抓）。
 async function refreshFuelClaims() {
   const supabase = getSupabase();
@@ -2001,7 +2001,7 @@ async function getSettleTrips(monthStr, force) {
   return state._settleCache.trips;
 }
 
-// 「無需月結」標記：某位承攬人員某個月不需要月結（不影響任何金額），從尚未月結名單與首頁提醒消失，可恢復。
+// 「無需月結」標記：某位夥伴某個月不需要月結（不影響任何金額），從尚未月結名單與首頁提醒消失，可恢復。
 async function ensureSettleSkips() {
   if (state._settleSkips) return state._settleSkips;
   const supabase = getSupabase();
@@ -2026,7 +2026,7 @@ async function removeSettleSkip(driverId, monthStr) {
   (await ensureSettleSkips()).delete(`${driverId}|${monthStr}`);
 }
 
-// 某個月份「還沒被月結／區間勞報單涵蓋、也沒標無需月結」的承攬人員與趟數、報酬總額（精簡趟資料＋已載入的調整項）。
+// 某個月份「還沒被月結／區間勞報單涵蓋、也沒標無需月結」的夥伴與趟數、報酬總額（精簡趟資料＋已載入的調整項）。
 function unsettledRows(monthStr, liteTrips) {
   return state.data.drivers.map(d => {
     if (settleSkipped(d.id, monthStr)) return null;
@@ -2045,7 +2045,7 @@ function settleReminderMonth() {
   return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 }
 
-// ---------------- 承攬人員「已投保職業工會」證明圖檔（僅主控可上傳／查看） ----------------
+// ---------------- 夥伴「已投保職業工會」證明圖檔（僅主控可上傳／查看） ----------------
 
 // 私有 bucket driver-docs，只有 app_admin 有權限（見 schema.sql PART 12），路徑
 // {driverId}/union-{時間}.jpg。回傳儲存路徑，由呼叫端寫進 drivers.union_proof_path。
