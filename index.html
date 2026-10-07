@@ -1056,7 +1056,7 @@ function renderAnnouncementListBody(){
 function undeliveredTodayGroups(shifts){
   const today = todayStr();
   return state.data.assignments
-    // 車次本身一旦完成（夥伴按了「完成本趟」），剩下沒送達的店點一定
+    // 車次本身一旦完成（夥伴按了「完成任務」），剩下沒送達的店點一定
     // 已經有原因了（不論是逐店選的原因，還是結束時補填的整趟備註），
     // 不該再留在即時監控清單裡。
     .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
@@ -2896,7 +2896,7 @@ function renderAssignmentDetail(id, box){
         <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換夥伴</button>
       </div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由夥伴端自行操作，完成後會自動封存，主控端無需再次確認。</p>
-      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待送達</span>'}</div>`).join('')}
+      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待完成</span>'}</div>`).join('')}
       <div class="note" id="afPaySection" style="margin-top:10px;"><div class="empty">載入額外金額與已付款…</div></div>
       <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
       <div id="afOverrideBox"></div>
@@ -4381,7 +4381,7 @@ function renderTodayDetail(todays){
           const photoUrls = dpPhotoUrls(dp);
           const statusBadge = dp.status==='completed'
             ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
-            : '<span class="badge pending">待送達</span>';
+            : '<span class="badge pending">待完成</span>';
           return `
           <div class="drop-point-driver" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
@@ -4406,7 +4406,7 @@ function renderTodayDetail(todays){
             </div>` : ''}
           </div>`;
         }).join('')}
-        <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史任務）</button>
+        <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成任務（自動封存進歷史任務）</button>
         ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;

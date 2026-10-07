@@ -1075,7 +1075,7 @@ async function markAssignmentDeparted(assignmentId) {
 }
 
 // issueNote 有值代表「尚有店點未拍照回報」時夥伴填寫的原因說明，跟 demo 的
-// 「完成本趟」流程一致：同一次操作把 status/has_issue/issue_note 一起送出。
+// 「完成任務」流程一致：同一次操作把 status/has_issue/issue_note 一起送出。
 // 完成時間（completed_at）與夥伴報酬凍結快照（payroll_fare_snapshot）由資料庫
 // 觸發器自動處理；請款金額不再自動計算，改由主控在任務管理裡人工輸入
 // （見 updateAssignmentFinance()），這裡送出後重新抓一次該筆任務同步最新狀態。
@@ -1139,7 +1139,7 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
 
 // 未完成原因：夥伴在單一店點旁邊直接選填，不用等到整趟結束才填一個籠統的
 // 備註。設定原因不代表這個店點「完成」（status 還是 pending，沒有送達
-// 證明照），只是有了解釋；主控端在「完成本趟」的判斷跟畫面顯示都會把它
+// 證明照），只是有了解釋；主控端在「完成任務」的判斷跟畫面顯示都會把它
 // 當作「已處理」看待。
 async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
   const supabase = getSupabase();
