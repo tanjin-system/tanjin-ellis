@@ -171,8 +171,8 @@ function pad(n){ return String(n).padStart(2,'0'); }
 function ymd(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function addDays(dateStr, days){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return d; }
 function monthEndStr(monthStr){ const [y,m] = monthStr.split('-').map(Number); return ymd(new Date(y,m,0)); }
-// 安全性修補：司機端可自由輸入的文字（目前是 issueNote 異常備註）在塞進 innerHTML 前
-// 一定要先跳脫，否則司機可以在備註裡放 <img onerror=...> 之類的內容，主控端打開該筆
+// 安全性修補：承攬人員端可自由輸入的文字（目前是 issueNote 異常備註）在塞進 innerHTML 前
+// 一定要先跳脫，否則承攬人員可以在備註裡放 <img onerror=...> 之類的內容，主控端打開該筆
 // 車趟時就會在主控瀏覽器執行，偷走主控的登入token（有全庫存取權）。
 function escapeHtml(s){
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -192,7 +192,7 @@ function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destinati
 // 給Google，Google純粧照著跑，不會也不能自動幫忙重排。
 // 每個停靠站的文字用「代號 地址」（例如"A店 台中市西屯區..."）而不是
 // 只用地址：Google地圖的行程列表上顯示的就是我們傳進去的這串文字，
-// 帶代號可以讓司機/主控一眼看出是哪間店，地址還留著確保能查到正確地
+// 帶代號可以讓承攬人員/主控一眼看出是哪間店，地址還留著確保能查到正確地
 // 點（單純店名容易撞名、查到別的地方去）。
 function buildMultiStopMapsLink(originAddr, stops){
   const items = (stops||[]).filter(s=>s && s.address);
@@ -323,7 +323,7 @@ function openCameraCapture(maxShots){
     shootBtn.onclick = ()=>{
       // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
       // 是黑的），這種情況直接當作失敗退回檔案選擇，不要硬拍出一張空白
-      // 照片讓司機以為拍成功了。
+      // 照片讓承攬人員以為拍成功了。
       if(!video.videoWidth || !video.videoHeight){ settle(shots.length ? { dataUrls:shots } : { fallback:true }); return; }
       const maxDim = 1000;
       let width = video.videoWidth, height = video.videoHeight;
@@ -522,9 +522,9 @@ function exportPanelPrint(panelEl, title, heading){
 }
 // 勞報單專用的直式PDF：每份 slipHtml（payrollSlipHtml() 產生的字串）固定佔
 // 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週班表那樣允許
-// 跨頁），符合「一位司機只能呈現一張直式勞報單」的規定；slipHtmls 傳多筆
-// 時，每筆各自佔一頁，組成同一份合併PDF，方便一次下載全體司機的勞報單。
-// 有代墊款的司機，第2頁是 payrollAttachmentHtml() 的明細附件，緊接在該司機
+// 跨頁），符合「一位承攬人員只能呈現一張直式勞報單」的規定；slipHtmls 傳多筆
+// 時，每筆各自佔一頁，組成同一份合併PDF，方便一次下載全體承攬人員的勞報單。
+// 有代墊款的承攬人員，第2頁是 payrollAttachmentHtml() 的明細附件，緊接在該承攬人員
 // 勞報單後面（也是各自佔一頁）。
 async function exportPayrollPortraitPdf(slipHtmls, filename){
   if(!slipHtmls || !slipHtmls.length){ alert('沒有可產生的勞報單內容'); return; }
@@ -665,7 +665,7 @@ function currentChannelPeriodEnd(channel, todayStr){
   return null;
 }
 // 同一個出發點／車次／班次如果因為停靠站不同拆成好幾條路線（例如「第八車
-// （週二到週五）」是給司機跑的實際版本，「第八車(星期一)」是對客戶報價的
+// （週二到週五）」是給承攬人員跑的實際版本，「第八車(星期一)」是對客戶報價的
 // 版本），這裡把它們視為同一家族：找出家族裡標「星期一／週一」的那條路線。
 function findRouteFamily(route){
   const baseSeq = stripWeekdayLabel(route.seq);
@@ -679,8 +679,8 @@ function findMondayQuoteRoute(route){
 // ——路線管理的拆賬是主控手動輸入／確認過的金額，車趟完成當下資料庫自動
 // 算出來的 a.billingSnapshot 只是formula估算值，兩邊算法本來就不保證一致，
 // 這正是請款結算跟路線管理對不起來的原因。只有在路線被刪除、或該版本從未
-// 設定過拆賬金額時，才退回用車趟自己的快照／即時試算頂著（司機薪資不受
-// 影響，司機費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
+// 設定過拆賬金額時，才退回用車趟自己的快照／即時試算頂著（承攬人員薪資不受
+// 影響，承攬人員費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
 function effectiveByChannelForAssignment(a){
   const route = state.data.routes.find(r=>r.id===a.routeId);
   if(route){
@@ -755,7 +755,7 @@ function driverMonthly(driverId, monthStr, assignmentsList = state.data.assignme
   const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
   const tripTotal = trips.reduce((s,a)=> s+tripPay(a), 0);
   const adjustments = state.data.adjustments.filter(a=> a.driverId===driverId && a.month===monthStr);
-  // 代墊款（reimbursement）已經包含在車趟報酬裡一起付給司機，只是勞報單要拆出來
+  // 代墊款（reimbursement）已經包含在車趟報酬裡一起付給承攬人員，只是勞報單要拆出來
   // 不算所得，不影響報酬總額，所以不計入加減項。
   const adjTotal = adjustments.reduce((s,a)=> a.type==='reimbursement' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
   const reimbursement = adjustments.filter(a=>a.type==='reimbursement').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
@@ -792,9 +792,9 @@ function buildSlipHtmls(driver, record, assignments){
 }
 // 勞報單（正式稅務/勞務文件）月結確認時要用的淨額，跟上面driverMonthly()
 // 算給「我的報酬/薪資結算」即時參考用的net故意不一樣：預支是薪資提前
-// 請領，不是扣款，不該讓這張要簽名的正式文件把預支再扣一次（不然司機
+// 請領，不是扣款，不該讓這張要簽名的正式文件把預支再扣一次（不然承攬人員
 // 等於同一筆錢被扣兩次）；一般加項/減項不受影響，照樣計入。「我的報酬」
-// 那邊維持原本邏輯（含預支扣減），是為了讓司機/主控隨時看到「實際還能
+// 那邊維持原本邏輯（含預支扣減），是為了讓承攬人員/主控隨時看到「實際還能
 // 拿到多少現金」的即時參考數字，跟這裡刻意不同、不用同步。
 function adjTypeLabel(type){ return type==='advance' ? '預支' : type==='reimbursement' ? '代墊款（憑證開公司）' : type==='add' ? '加項' : '減項'; }
 function statementNetFromAdjustments(tripTotal, adjustments){
@@ -841,7 +841,7 @@ const ADMIN_TABS = [
   {id:'home', label:'首頁'},
   {id:'announcements', label:'公告管理'},
   {id:'schedule', label:'週班表'},
-  {id:'drivers', label:'司機資料'},
+  {id:'drivers', label:'承攬人員資料'},
   {id:'channels', label:'通路管理'},
   {id:'dropPoints', label:'下貨點資料庫'},
   {id:'origins', label:'出發點資料庫'},
@@ -861,7 +861,7 @@ const DRIVER_TABS = [
   {id:'profile', label:'我的資料'}
 ];
 // 電話、銀行資訊、身分證／居留證號為必填(車牌/車型選填)——身分證字號是
-// 勞報單「所得人」欄位要用的，沒有這個勞報單資料不完整。司機本人（非主控
+// 勞報單「所得人」欄位要用的，沒有這個勞報單資料不完整。承攬人員本人（非主控
 // 檢視）資料未填妥前，鎖定在「我的資料」頁，其他分頁停用，直到補齊必填
 // 欄位並儲存為止。
 function isDriverProfileRequiredComplete(d){
@@ -912,31 +912,31 @@ function renderContent(){
   }
 }
 function goTab(id){ switchTab(id); }
-// ---------- 公告管理（主控發布，全體司機首頁看得到） ----------
+// ---------- 公告管理（主控發布，全體承攬人員首頁看得到） ----------
 let editingAnnouncementId = null;
-// 發送對象的司機勾選清單（只列在職司機，停用司機沒有登入系統的可能，
+// 發送對象的承攬人員勾選清單（只列在職承攬人員，停用承攬人員沒有登入系統的可能，
 // 挑他們沒有意義）；prefix 用來讓「新增」跟「編輯中」的checkbox各自有
 // 不衝突的class名稱。
 function driverPickerHtml(prefix, selectedIds){
   return state.data.drivers.filter(d=>d.status==='active').map(d=>
     `<label style="display:inline-flex; align-items:center; gap:4px; margin:0 12px 6px 0; font-weight:400;"><input type="checkbox" value="${d.id}" class="${prefix}DriverCheck" ${selectedIds.includes(d.id)?'checked':''} style="width:auto;">${escapeHtml(d.name)}</label>`
-  ).join('') || '<span style="font-size:12.5px; color:var(--ink-soft);">目前沒有在職司機</span>';
+  ).join('') || '<span style="font-size:12.5px; color:var(--ink-soft);">目前沒有在職承攬人員</span>';
 }
 function audienceSummary(a){
-  if(a.audience!=='selected') return '全體司機';
-  return a.driverIds.length ? a.driverIds.map(driverName).join('、') : '（尚未指定司機）';
+  if(a.audience!=='selected') return '全體承攬人員';
+  return a.driverIds.length ? a.driverIds.map(driverName).join('、') : '（尚未指定承攬人員）';
 }
 function renderAnnouncements(c){
   c.innerHTML = `
     <h2 class="section-title">公告管理</h2>
-    <p class="section-sub">發布的公告會顯示在司機的「首頁」，可以發給全體司機、或只發給指定的一位/幾位司機。下架是暫時收回、不是刪除，可以隨時重新上架；真的不需要了才用「刪除」。</p>
+    <p class="section-sub">發布的公告會顯示在承攬人員的「首頁」，可以發給全體承攬人員、或只發給指定的一位/幾位承攬人員。下架是暫時收回、不是刪除，可以隨時重新上架；真的不需要了才用「刪除」。</p>
     <div class="panel">
       <div class="field"><label>標題</label><input id="anTitle" placeholder="例：中秋節出車異動通知"></div>
       <div class="field"><label>內容</label><textarea id="anContent" style="min-height:80px;" placeholder="請輸入公告內容"></textarea></div>
       <div class="field" style="max-width:200px;"><label>發送對象</label>
         <select id="anAudience">
-          <option value="all">全體司機</option>
-          <option value="selected">指定司機</option>
+          <option value="all">全體承攬人員</option>
+          <option value="selected">指定承攬人員</option>
         </select>
       </div>
       <div id="anDriverPicker" style="display:none; margin-bottom:10px;">${driverPickerHtml('an', [])}</div>
@@ -953,7 +953,7 @@ function renderAnnouncements(c){
     const audience = document.getElementById('anAudience').value;
     const driverIds = [...document.querySelectorAll('.anDriverCheck:checked')].map(cb=>cb.value);
     if(!title || !content){ alert('請填寫標題與內容'); return; }
-    if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位司機，或改選「全體司機」'); return; }
+    if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位承攬人員，或改選「全體承攬人員」'); return; }
     try{
       await createAnnouncement({ title, content, audience, driverIds });
       renderContent();
@@ -973,8 +973,8 @@ function renderAnnouncementListBody(){
           <div class="field"><label>內容</label><textarea id="eanContent" style="min-height:80px;">${escapeHtml(a.content)}</textarea></div>
           <div class="field" style="max-width:200px;"><label>發送對象</label>
             <select id="eanAudience">
-              <option value="all" ${a.audience!=='selected'?'selected':''}>全體司機</option>
-              <option value="selected" ${a.audience==='selected'?'selected':''}>指定司機</option>
+              <option value="all" ${a.audience!=='selected'?'selected':''}>全體承攬人員</option>
+              <option value="selected" ${a.audience==='selected'?'selected':''}>指定承攬人員</option>
             </select>
           </div>
           <div id="eanDriverPicker" style="${a.audience==='selected'?'':'display:none;'} margin-bottom:10px;">${driverPickerHtml('ean', a.driverIds)}</div>
@@ -1013,7 +1013,7 @@ function renderAnnouncementListBody(){
       const audience = document.getElementById('eanAudience').value;
       const driverIds = [...document.querySelectorAll('.eanDriverCheck:checked')].map(cb=>cb.value);
       if(!title || !content){ alert('請填寫標題與內容'); return; }
-      if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位司機，或改選「全體司機」'); return; }
+      if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位承攬人員，或改選「全體承攬人員」'); return; }
       try{ await updateAnnouncement(btn.dataset.saveedit, { title, content, audience, driverIds }); editingAnnouncementId = null; renderAnnouncementListBody(); }
       catch(err){ alert(err.message); }
     };
@@ -1038,12 +1038,12 @@ function renderAnnouncementListBody(){
 // 06:00–14:00這個區間顯示，下午車次只在14:00–18:30這個區間顯示（主控
 // 明確指定的兩個時段，不是「還沒處理完就一直留著」）；呼叫端（見
 // renderHomeAdmin）依現在時間決定要傳哪個班次進來。每次開系統/重新
-// 整理都是重新算一次「現在」的狀態，下貨點一旦被司機標記完成，下次
+// 整理都是重新算一次「現在」的狀態，下貨點一旦被承攬人員標記完成，下次
 // 渲染這個清單就會自動不見，不需要另外做「清除」動作。
 function undeliveredTodayGroups(shifts){
   const today = todayStr();
   return state.data.assignments
-    // 車次本身一旦完成（司機按了「完成本趟」），剩下沒送達的下貨點一定
+    // 車次本身一旦完成（承攬人員按了「完成本趟」），剩下沒送達的下貨點一定
     // 已經有原因了（不論是逐店選的原因，還是結束時補填的整趟備註），
     // 不該再留在即時監控清單裡。
     .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
@@ -1060,14 +1060,14 @@ function undeliveredTodayGroups(shifts){
       return routeSortCompare(x.route, y.route);
     })
     .map(({a})=>({
-      // 車次名稱後面直接帶出當班司機名字，不用另外切到週班表查是誰在跑。
+      // 車次名稱後面直接帶出當班承攬人員名字，不用另外切到週班表查是誰在跑。
       routeLabel: `${routeName(a.routeId)} ${driverName(a.driverId)}`,
-      // 司機按過「開始行程」後狀態會變成 in_progress（還沒按之前是
+      // 承攬人員按過「開始行程」後狀態會變成 in_progress（還沒按之前是
       // scheduled）——畫面前面打一個勾，讓主控一眼看出「這台已經出發在跑了」
       // 跟「還沒出發」的差別，不用一個一個點進週班表確認。
       started: a.status==='in_progress',
       // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
-      // 監控清單裡，避免主控一直看到其實司機已經回報過原因的店。
+      // 監控清單裡，避免主控一直看到其實承攬人員已經回報過原因的店。
       // 店名不再加通路名稱前綴（畫面上已經夠擠了，通路名稱對主控來說不是
       // 必要資訊）。
       points: a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.issueReason).map(dp=>dpLabel(dp))
@@ -1077,10 +1077,10 @@ function undeliveredTodayGroups(shifts){
 // 上午車次只在06:00–14:00區間顯示，下午車次只在14:00–18:30區間顯示，
 // 區間外（太早或太晚）整個面板不顯示——這是主控明確指定的兩個時間段，
 // 不是「累加、只看有沒有處理完」，是單純的時段切換。主控首頁的「今日
-// 尚未配送完成」跟司機首頁的「同出發點今日出發狀況」共用同一套時段判斷。
+// 尚未配送完成」跟承攬人員首頁的「同出發點今日出發狀況」共用同一套時段判斷。
 // 2026年（民國115年）台灣國定假日，資料來源：行政院人事行政總處公告
 // 行事曆。greeting是null的幾個（和平紀念日、兒童節／清明節、台灣光復節、
-// 行憲紀念日）是紀念性質的節日，不適合用「快樂」這種歡慶字眼，司機端
+// 行憲紀念日）是紀念性質的節日，不適合用「快樂」這種歡慶字眼，承攬人員端
 // 故意不顯示賀詞（用詞用「祝福」不是「放假通知」——車隊不一定真的休息，
 // 這個功能純粹是顯示用，不會自動擋掉那天的排班或出車，中秋節照樣可以
 // 正常排車出貨）；主控的週班表則不分節日性質，統一顯示節日名稱（排班
@@ -1103,11 +1103,11 @@ function holidayForDate(dateStr){
   return TAIWAN_HOLIDAYS_2026.find(h => dateStr>=h.start && dateStr<=h.end) || null;
 }
 // 節日賀詞是「祝福」不是「放假通知」，車隊不一定真的休息——如果主控
-// 那天其實有排這位司機的班（車趟狀態不是cancelled），代表他當天照常
+// 那天其實有排這位承攬人員的班（車趟狀態不是cancelled），代表他當天照常
 // 出車，就不顯示賀詞了（顯示「中秋節快樂，闔家團圓」給一個正在跑車的
-// 司機看很奇怪）。是依「這位司機本人」當天有沒有被排班判斷，不是看
-// 整個車隊有沒有人上班——同一天，沒被排班的司機正常看得到賀詞，有
-// 被排班出車的司機就不會看到。
+// 承攬人員看很奇怪）。是依「這位承攬人員本人」當天有沒有被排班判斷，不是看
+// 整個車隊有沒有人上班——同一天，沒被排班的承攬人員正常看得到賀詞，有
+// 被排班出車的承攬人員就不會看到。
 function todayHolidayGreeting(driverId){
   const today = todayStr();
   const h = holidayForDate(today);
@@ -1123,12 +1123,12 @@ function currentProgressShifts(){
   if(inPmWindow) return ['PM'];
   return null;
 }
-// 司機首頁「同出發點今日出發狀況」：同出發點所有還沒完成的車次都列出來，
+// 承攬人員首頁「同出發點今日出發狀況」：同出發點所有還沒完成的車次都列出來，
 // 只顯示「出發了沒」，不含下貨點/店名等配送細節；完成的車次直接從清單
-// 消失。司機登入時 state.data.assignments 因為RLS只有自己的車趟，算不出
+// 消失。承攬人員登入時 state.data.assignments 因為RLS只有自己的車趟，算不出
 // 「同出發點其他車次」，要透過 fetchDepotOverview()（呼叫schema.sql的
 // security definer函式）另外查；主控本人或「主控檢視中」預覽時本來就有
-// 完整資料，直接從 state.data 算，確保跟司機實際登入看到的內容一致。
+// 完整資料，直接從 state.data 算，確保跟承攬人員實際登入看到的內容一致。
 let depotOverviewCache = { key:null, rows:null };
 function computeDepotOverviewLocal(driverId, date){
   const myAssignment = state.data.assignments.find(a=>a.driverId===driverId && a.date===date && a.status!=='cancelled');
@@ -1156,9 +1156,9 @@ async function loadDepotOverview(driverId, date){
 }
 async function renderHomeAdmin(c){
   const tiles = [
-    {id:'announcements', label:'公告管理', sub:'發布訊息給全體司機'},
-    {id:'schedule', label:'週班表', sub:'指派司機與路線'},
-    {id:'drivers', label:'司機資料', sub:'含車輛與銀行資訊'},
+    {id:'announcements', label:'公告管理', sub:'發布訊息給全體承攬人員'},
+    {id:'schedule', label:'週班表', sub:'指派承攬人員與路線'},
+    {id:'drivers', label:'承攬人員資料', sub:'含車輛與銀行資訊'},
     {id:'channels', label:'通路管理', sub:'請款週期設定'},
     {id:'dropPoints', label:'下貨點資料庫', sub:'依通路分類'},
     {id:'origins', label:'出發點資料庫', sub:'常用出發地'},
@@ -1200,11 +1200,11 @@ async function renderHomeAdmin(c){
     return { name: ch.name, end, daysLeft };
   }).filter(Boolean);
   const pendingFuelCount = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').length;
-  // 上個月還沒月結確認的司機：只在每月 1～15 號提醒（16 號起不論有沒有月結都不提示），已標「無需月結」
+  // 上個月還沒月結確認的承攬人員：只在每月 1～15 號提醒（16 號起不論有沒有月結都不提示），已標「無需月結」
   // 的不列出；同一個月在這個 session 只查一次，查詢失敗不影響首頁其他內容。
   const prevMonthStr = settleReminderMonth();
   const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
-  // 下週（含之後）還有草稿車趟沒發佈：提醒主控（司機看不到）。
+  // 下週（含之後）還有草稿車趟沒發佈：提醒主控（承攬人員看不到）。
   const draftWeekCount = state.data.assignments.filter(a=>a.published===false && a.date>=getWeekDates(0)[0]).length;
   let deferredDue = [];
   try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
@@ -1221,11 +1221,11 @@ async function renderHomeAdmin(c){
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
-      ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單司機尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
-      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的車趟尚未發佈（司機看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週班表</button></div>` : ''}
+      ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單承攬人員尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的車趟尚未發佈（承攬人員看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週班表</button></div>` : ''}
       ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往薪資結算</button></div>` : ''}
-      ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位司機尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
-      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆司機代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
+      ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位承攬人員尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
+      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆承攬人員代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往薪資結算</button></div>` : ''}
       ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
     </div>` : ''}
@@ -1239,7 +1239,7 @@ async function renderHomeAdmin(c){
       </table>
       <table style="margin-top:10px;">
         <tr><td>請款總額</td><td class="amount">$${money(p.revenueTotal.toFixed(0))}</td></tr>
-        <tr><td>司機薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
+        <tr><td>承攬人員薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
         <tr><td><strong>利潤總額</strong></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
       </table>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟薪資結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
@@ -1276,8 +1276,8 @@ function renderHomeDriver(c){
   ];
   // 主控在「主控檢視中」模式下也是叫這支函式，這時 state.data.announcements
   // 是用admin身份撈的（含已下架、含所有對象的公告），這裡一律再篩一次
-  // active跟發送對象，確保跟真的司機登入看到的內容完全一樣：全體公告
-  // 都看得到，指定對象的公告只有被指定到的司機（dId在driverIds裡）才看得到。
+  // active跟發送對象，確保跟真的承攬人員登入看到的內容完全一樣：全體公告
+  // 都看得到，指定對象的公告只有被指定到的承攬人員（dId在driverIds裡）才看得到。
   const activeAnnouncements = (state.data.announcements||[]).filter(a=>
     a.active && (a.audience!=='selected' || a.driverIds.includes(dId)));
   c.innerHTML = `
@@ -1326,12 +1326,12 @@ function renderHomeDriver(c){
   }
 }
 
-// ---------- 司機資料（含車輛、銀行細節） ----------
+// ---------- 承攬人員資料（含車輛、銀行細節） ----------
 let editingDriverId = null;
 let driverListSearch = '';
 let driverGroupExpandedSet = new Set(); // 使用者手動展開過的出發點名稱，預設全部收合
-// 依這位司機「最近一筆還沒取消的排班」找出他固定跑哪個出發點——一個
-// 司機理論上都固定跑同一個出發點的車，用最近一筆代表就好。優先找今天
+// 依這位承攬人員「最近一筆還沒取消的排班」找出他固定跑哪個出發點——一個
+// 承攬人員理論上都固定跑同一個出發點的車，用最近一筆代表就好。優先找今天
 // 或未來的排班（比較貼近「現在」的分組狀態），完全沒有未來排班的話
 // 退回找最近一筆過去的排班；兩種都找不到（從來沒被排過班）就回傳null，
 // 畫面上歸類到「未分類」。
@@ -1348,8 +1348,8 @@ function driverOriginLabel(driverId){
 }
 function renderDrivers(c){
   c.innerHTML = `
-    <div class="toolbar"><h2 class="section-title" style="margin:0;">司機資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部司機資料</button></div>
-    <p class="section-sub">車輛掛靠司機本人，直接併入司機資料建置。</p>
+    <div class="toolbar"><h2 class="section-title" style="margin:0;">承攬人員資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部承攬人員資料</button></div>
+    <p class="section-sub">車輛掛靠承攬人員本人，直接併入承攬人員資料建置。</p>
     <div id="allDriversModal"></div>
     <div class="panel">
       <div class="form-tabs">
@@ -1382,12 +1382,12 @@ function renderDrivers(c){
           <div class="field"><label>戶名</label><input id="dHolder"></div>
         </div>
       </div>
-      <button class="btn amber" id="addDriver">新增司機</button>
+      <button class="btn amber" id="addDriver">新增承攬人員</button>
     </div>
-    <div class="field" style="max-width:280px;"><label>搜尋司機姓名</label><input id="driverSearch" value="${driverListSearch}" placeholder="輸入司機姓名關鍵字篩選"></div>
+    <div class="field" style="max-width:280px;"><label>搜尋承攬人員姓名</label><input id="driverSearch" value="${driverListSearch}" placeholder="輸入承攬人員姓名關鍵字篩選"></div>
     <div class="panel">
       <div id="driverCardList"></div>
-      <p class="note" style="margin-top:10px;">登入代碼請私下告知司機本人（例如用LINE私訊），司機打開系統選「司機帳號」後輸入這組代碼即可看到自己的資料，不會看到其他司機。</p>
+      <p class="note" style="margin-top:10px;">登入代碼請私下告知承攬人員本人（例如用LINE私訊），承攬人員打開系統選「承攬人員帳號」後輸入這組代碼即可看到自己的資料，不會看到其他承攬人員。</p>
     </div>
   `;
   c.querySelectorAll('.form-tab-btn').forEach(btn=>{
@@ -1464,7 +1464,7 @@ function renderDrivers(c){
         </div>
       </div>
       <div class="driver-card-actions">
-        <button class="btn ghost" data-view="${d.id}">查看司機畫面</button>
+        <button class="btn ghost" data-view="${d.id}">查看承攬人員畫面</button>
         <button class="btn ghost" data-editdriver="${d.id}">編輯</button>
         <button class="btn ghost" data-regen="${d.id}">重新產生代碼</button>
         <button class="btn danger" data-del="${d.id}">刪除</button>
@@ -1476,10 +1476,10 @@ function renderDrivers(c){
     const kw = driverListSearch.trim().toLowerCase();
     const filteredDrivers = kw ? state.data.drivers.filter(d=>d.name.toLowerCase().includes(kw)) : state.data.drivers;
     if(!filteredDrivers.length){
-      listEl.innerHTML = `<div class="empty">${kw?'找不到符合的司機':'尚無司機資料'}</div>`;
+      listEl.innerHTML = `<div class="empty">${kw?'找不到符合的承攬人員':'尚無承攬人員資料'}</div>`;
       return;
     }
-    // 依「這位司機目前跑哪個出發點」分組並收合，跟下貨點資料庫／路線管理
+    // 依「這位承攬人員目前跑哪個出發點」分組並收合，跟下貨點資料庫／路線管理
     // 同一套分組收合邏輯：搜尋中的話全部自動展開，不然預設全部收合。
     const byOrigin = {};
     filteredDrivers.forEach(d=>{
@@ -1525,7 +1525,7 @@ function renderDrivers(c){
         const name = document.getElementById('eName').value.trim();
         if(!name){ alert('請輸入姓名'); return; }
         try{
-          // 先處理工會證明圖檔（有選新檔才上傳，舊檔順便刪掉），再一起寫進司機資料。
+          // 先處理工會證明圖檔（有選新檔才上傳，舊檔順便刪掉），再一起寫進承攬人員資料。
           const cur = state.data.drivers.find(x=>x.id===id);
           let unionProofPath = cur ? cur.unionProofPath : '';
           const unionFile = document.getElementById('eUnionFile').files[0];
@@ -1579,7 +1579,7 @@ function renderDrivers(c){
     listEl.querySelectorAll('[data-regen]').forEach(btn=>{
       btn.onclick = async ()=>{
         const driver = state.data.drivers.find(d=>d.id===btn.dataset.regen);
-        if(!confirm(`確定要重設「${driver?.name||''}」的登入代碼嗎？舊代碼會立刻失效，這位司機要用新代碼才能登入——記得把新代碼告訴他。`)) return;
+        if(!confirm(`確定要重設「${driver?.name||''}」的登入代碼嗎？舊代碼會立刻失效，這位承攬人員要用新代碼才能登入——記得把新代碼告訴他。`)) return;
         try{ await regenerateDriverAccessCode(btn.dataset.regen); renderContent(); }
         catch(err){ alert(err.message); }
       };
@@ -1590,10 +1590,10 @@ function renderDrivers(c){
     listEl.querySelectorAll('[data-del]').forEach(btn=>{
       btn.onclick = async ()=>{
         const driver = state.data.drivers.find(d=>d.id===btn.dataset.del);
-        if(!confirm(`確定要刪除司機「${driver?.name||''}」嗎？\n\n如果這位司機已有歷史車趟紀錄，系統會改為「停用」以保留歷史資料（該司機將無法再登入）；如果從未有任何車趟，會直接永久刪除、無法復原。`)) return;
+        if(!confirm(`確定要刪除承攬人員「${driver?.name||''}」嗎？\n\n如果這位承攬人員已有歷史車趟紀錄，系統會改為「停用」以保留歷史資料（該承攬人員將無法再登入）；如果從未有任何車趟，會直接永久刪除、無法復原。`)) return;
         try{
           const result = await deleteOrDeactivateDriver(btn.dataset.del);
-          if(result==='deactivated') alert('這位司機已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
+          if(result==='deactivated') alert('這位承攬人員已有歷史車趟紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
           renderContent();
         }catch(err){ alert(err.message); }
       };
@@ -1637,7 +1637,7 @@ function openAllDriversModal(){
   host.innerHTML = `
     <div class="modal-backdrop" id="allDriversBackdrop">
       <div class="modal-box">
-        <div class="toolbar"><h3 style="margin:0;">全部司機資料（${state.data.drivers.length}）</h3>
+        <div class="toolbar"><h3 style="margin:0;">全部承攬人員資料（${state.data.drivers.length}）</h3>
           <span><button class="btn ghost" id="printAllDrivers">列印</button> <button class="btn ghost" id="closeAllDrivers">關閉</button></span>
         </div>
         <table>
@@ -1648,7 +1648,7 @@ function openAllDriversModal(){
               <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
               <td class="mono">${d.vehicle.plate||'—'}</td><td>${d.vehicle.type||'—'}</td><td>${d.vehicle.load||'—'}</td>
               <td>${d.bank.bankName||'—'}</td><td>${d.bank.branch||'—'}</td><td class="mono">${d.bank.account||'—'}</td><td>${d.bank.holder||'—'}</td>
-            </tr>`).join('') || `<tr><td colspan="12"><div class="empty">尚無司機資料</div></td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="12"><div class="empty">尚無承攬人員資料</div></td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1656,7 +1656,7 @@ function openAllDriversModal(){
   `;
   document.getElementById('closeAllDrivers').onclick = ()=>{ host.innerHTML=''; };
   document.getElementById('allDriversBackdrop').onclick = (e)=>{ if(e.target.id==='allDriversBackdrop') host.innerHTML=''; };
-  document.getElementById('printAllDrivers').onclick = ()=> exportPanelPrint(document.querySelector('#allDriversModal .modal-box'), '全部司機資料');
+  document.getElementById('printAllDrivers').onclick = ()=> exportPanelPrint(document.querySelector('#allDriversModal .modal-box'), '全部承攬人員資料');
 }
 
 // ---------- 通路管理 ----------
@@ -1986,7 +1986,7 @@ function renderOgList(){
   });
 }
 
-// ---------- 路線管理（版本化，不綁司機） ----------
+// ---------- 路線管理（版本化，不綁承攬人員） ----------
 function distinctRegions(){
   return [...new Set(state.data.routes.map(r=>r.region).filter(Boolean))].sort();
 }
@@ -1995,7 +1995,7 @@ function renderRoutes(c){
   const regionOpts = distinctRegions().map(rg=>`<option value="${rg}"></option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">路線管理</h2>
-    <p class="section-sub">路線本身不綁司機。修改下貨點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
+    <p class="section-sub">路線本身不綁承攬人員。修改下貨點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
     <div class="panel">
       <div class="grid4">
         <div class="field"><label>出發點</label><select id="rOrigin">${ogOptsTop}</select></div>
@@ -2061,13 +2061,13 @@ function renderRouteList(){
 // 第七車/第八車這種「星期一報價、週二到五實跑」分成兩條路線的車次，請款
 // 金額一律跟著星期一報價版本走（跟 effectiveByChannelForAssignment() 同一套
 // 規則）——週二到五那條路線自己的版本本來就不會填請款金額，不能直接讀
-// 自己的 billingTotal，不然會變成0，跟司機費用相減還會出現莫名其妙的負數。
+// 自己的 billingTotal，不然會變成0，跟承攬人員費用相減還會出現莫名其妙的負數。
 function billingVersionFor(r){
   const quoteRoute = findMondayQuoteRoute(r) || r;
   return (quoteRoute.versions||[]).find(v=>!v.end);
 }
 function routeRowHtml(r){
-  // 司機費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
+  // 承攬人員費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
   // （見路線管理下方的版本設定），不再是每趟臨時填的。
   const openVersion = (r.versions||[]).find(v=>!v.end);
   const billingVersion = billingVersionFor(r);
@@ -2109,7 +2109,7 @@ function renderRouteTable(){
       </h3>
       <div style="${collapsed?'display:none;':''}">
         <table>
-          <thead><tr><th>路線</th><th>司機費用</th><th>請款費用</th><th>毛利（請款-司機）</th><th></th></tr></thead>
+          <thead><tr><th>路線</th><th>承攬人員費用</th><th>請款費用</th><th>毛利（請款-承攬人員）</th><th></th></tr></thead>
           <tbody>${rows.map(routeRowHtml).join('')}</tbody>
         </table>
       </div>
@@ -2166,7 +2166,7 @@ function renderRouteDetail(rid){
         <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
         <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
-        <div style="font-size:12.5px; margin:8px 0 0;">司機費用 <strong>$${money(v.driverFare||0)}</strong></div>
+        <div style="font-size:12.5px; margin:8px 0 0;">承攬人員費用 <strong>$${money(v.driverFare||0)}</strong></div>
         ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
         <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
         ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
@@ -2221,10 +2221,10 @@ function renderRouteDetail(rid){
       <h4 style="margin:14px 0 4px;">費用資料（人工輸入，跟著這個版本走）</h4>
       <div class="grid3">
         <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
-        <div class="field"><label>司機費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
+        <div class="field"><label>承攬人員費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
         <div class="field"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
-      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與司機結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
+      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與承攬人員結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
       <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
@@ -2376,7 +2376,7 @@ function renderRouteDetail(rid){
       if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個下貨點'); return; }
       try{
         // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
-        // 目前打的數字，避免兩者不小心存成不一致（實際請款/司機結算只認拆賬金額，
+        // 目前打的數字，避免兩者不小心存成不一致（實際請款/承攬人員結算只認拆賬金額，
         // 見 effectiveByChannelForAssignment()，總額欄位只是給人看跟給自動建議拆賬用）。
         const billingByChannel = routeDraft[rid2].billingByChannel || {};
         const billingTotal = Object.values(billingByChannel).reduce((s,v)=> s+(Number(v)||0), 0);
@@ -2391,7 +2391,7 @@ function renderRouteDetail(rid){
         // 複製成快照了），這裡問一次要不要一鍵套用，避免每一趟都要手動重建。
         const futureCount = state.data.assignments.filter(a=>
           a.routeId===rid2 && a.date>=effDate && (a.status==='scheduled'||a.status==='in_progress')).length;
-        if(futureCount>0 && confirm(`週班表中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、司機費用、請款拆賬）套用到這些車次嗎？司機與日期不會改變，已完成的車次不受影響。`)){
+        if(futureCount>0 && confirm(`週班表中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、承攬人員費用、請款拆賬）套用到這些車次嗎？承攬人員與日期不會改變，已完成的車次不受影響。`)){
           try{
             const { updated } = await regenerateFutureAssignments(rid2, effDate);
             alert(`已套用到 ${updated} 趟未來車次。`);
@@ -2403,7 +2403,7 @@ function renderRouteDetail(rid){
   });
 }
 
-// ---------- 週班表（直接指派司機＋出發點，這裡才產生實際車趟） ----------
+// ---------- 週班表（直接指派承攬人員＋出發點，這裡才產生實際車趟） ----------
 const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
 // 車次排序用：從「第X車...」抓出中文數字X換算成阿拉伯數字，抓不到的排到最後面
 // （維持原本相對順序，不會亂跳）。支援到「第十九車」，車隊規模通常用不到更多。
@@ -2434,10 +2434,10 @@ function sortedRoutes(){
 }
 async function renderScheduleAdmin(c){
   const week1 = getWeekDates(state.weekOffset);
-  // 每週第一次打開：下週還是空的就自動延續本週（草稿，司機看不到，按「發佈」才開放）。背景進行，不擋畫面。
+  // 每週第一次打開：下週還是空的就自動延續本週（草稿，承攬人員看不到，按「發佈」才開放）。背景進行，不擋畫面。
   rolloverNextWeekIfNeeded().then(r=>{
     if(!r) return;
-    state._rolloverMsg = r.created ? `已自動把本週班表延續到下週（${r.created} 趟，目前是草稿，司機看不到；有異動請手動改，排好後按「發佈」）。` : '';
+    state._rolloverMsg = r.created ? `已自動把本週班表延續到下週（${r.created} 趟，目前是草稿，承攬人員看不到；有異動請手動改，排好後按「發佈」）。` : '';
     if(state.tab==='schedule') renderContent();
   }).catch(err=>{ state._rolloverChecked = null; console.error('自動延續下週班表失敗', err); });
   // 往前翻週（state.weekOffset 可以一直往負的翻）翻超過近14天的預設窗口時，
@@ -2461,12 +2461,12 @@ async function renderScheduleAdmin(c){
   const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">週班表</h2>
-    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派司機、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。司機費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週班表。</p>
+    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派承攬人員、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。承攬人員費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週班表。</p>
     <div class="panel no-print">
       <p style="font-size:12.5px; font-weight:600; margin:0 0 8px;">批次建立（例如整週一~五都跑同一路線）</p>
       <div class="grid4">
         <div class="field"><label>路線</label><select id="sRoute"><option value="">選擇路線</option>${routeOpts}</select></div>
-        <div class="field"><label>司機（車輛隨司機）</label><select id="sDriver"><option value="">選擇司機</option>${driverOpts}</select></div>
+        <div class="field"><label>承攬人員（車輛隨承攬人員）</label><select id="sDriver"><option value="">選擇承攬人員</option>${driverOpts}</select></div>
         <div class="field"><label>起始日期</label><input id="sStart" type="date" value="${todayStr()}"></div>
         <div class="field"><label>結束日期（單日則同起始日）</label><input id="sEnd" type="date" value="${todayStr()}"></div>
       </div>
@@ -2494,7 +2494,7 @@ async function renderScheduleAdmin(c){
       const msg = state._rolloverMsg ? `<div class="note no-print" style="margin-bottom:8px;">${escapeHtml(state._rolloverMsg)}</div>` : '';
       if(!drafts) return msg;
       return msg + `<div class="panel no-print" style="border-color:var(--amber); border-width:2px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-        <span>📝 這週有 <b>${drafts}</b> 趟尚未發佈（草稿，司機目前看不到）</span>
+        <span>📝 這週有 <b>${drafts}</b> 趟尚未發佈（草稿，承攬人員目前看不到）</span>
         <button class="btn amber" id="publishWeekBtn">發佈這週（${week1[0].slice(5)}～${week1[6].slice(5)}）</button>
       </div>`;
     })()}
@@ -2509,7 +2509,7 @@ async function renderScheduleAdmin(c){
   const publishBtn = document.getElementById('publishWeekBtn');
   if(publishBtn) publishBtn.onclick = async ()=>{
     const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
-    if(!confirm(`確定要發佈 ${week1[0]}～${week1[6]} 的 ${n} 趟車嗎？發佈後司機馬上看得到自己的行程。`)) return;
+    if(!confirm(`確定要發佈 ${week1[0]}～${week1[6]} 的 ${n} 趟車嗎？發佈後承攬人員馬上看得到自己的行程。`)) return;
     publishBtn.disabled = true;
     try{ await publishWeek(week1[0], week1[6]); state._rolloverMsg = ''; renderContent(); }
     catch(err){ alert(err.message); publishBtn.disabled = false; }
@@ -2522,7 +2522,7 @@ async function renderScheduleAdmin(c){
     const start = document.getElementById('sStart').value;
     const end = document.getElementById('sEnd').value || start;
     const weekdays = Array.from(document.querySelectorAll('.wdcheck:checked')).map(cb=>Number(cb.value));
-    if(!routeId || !driverId || !start){ alert('請選擇路線、司機與日期'); return; }
+    if(!routeId || !driverId || !start){ alert('請選擇路線、承攬人員與日期'); return; }
     const route = state.data.routes.find(r=>r.id===routeId);
     let created=0, skippedNoVersion=0, skippedExisting=0;
     let cursor = start;
@@ -2560,9 +2560,9 @@ function renderWeekGrid(containerId, dates){
     const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
     if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
     // 驚嘆號的判斷改成「這趟只要有任何一個下貨點沒有status=completed」就顯示，
-    // 不管是還沒處理、還是司機已經填了未配達原因（通路未下單/央廚未出貨等）——
+    // 不管是還沒處理、還是承攬人員已經填了未配達原因（通路未下單/央廚未出貨等）——
     // 只要沒送達，不論理由，主控在週班表就該一眼看到要留意；原本只看 a.hasIssue
-    // 會漏掉「司機把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
+    // 會漏掉「承攬人員把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
     // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的車趟明細顯示，
     // 這裡週班表格子維持簡單，不重複塞理由文字）。
     return `<td class="grid-cell" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
@@ -2570,7 +2570,7 @@ function renderWeekGrid(containerId, dates){
   function assignmentInner(a){
     const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
     const issue = (a.hasIssue || anyUndelivered) ? ' ⚠️' : '';
-    const tag = (a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '') + (a.published===false ? ' <span title="草稿：尚未發佈，司機看不到" style="font-size:10px; color:var(--amber);">📝草稿</span>' : '');
+    const tag = (a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '') + (a.published===false ? ' <span title="草稿：尚未發佈，承攬人員看不到" style="font-size:10px; color:var(--amber);">📝草稿</span>' : '');
     const extra = Number(a.extraPay)||0;
     const extraTag = extra ? ` <b style="color:${extra>0?'var(--ok,#2E7D32)':'var(--danger)'};">${extra>0?'+':'−'}${money(Math.abs(extra))}</b>` : '';
     const paidTag = (Number(a.paidAmount)||0)>0 ? ` <span title="${escapeHtml((a.paidDate||'')+'支付'+(a.paidPeriodStart?'　區間 '+a.paidPeriodStart+'～'+a.paidPeriodEnd:''))}" style="font-size:10px; color:var(--ok,#2E7D32);">✅${a.paidDate?a.paidDate.slice(5).replace('-','/')+'付':'已付'}</span>` : '';
@@ -2579,8 +2579,8 @@ function renderWeekGrid(containerId, dates){
   }
   // 「星期一」／「週二到五」這種分成兩條路線、但在週班表合併成同一格的車次：不能只看
   // 依星期幾挑中的那一條路線，如果同一天同一班另一條路線底下也有車趟（例如星期一那天
-  // 實際用了「週二到五」版本，或同一位司機兩條路線都排了），也要一起列出來，不然點
-  // 司機名字只看得到其中一趟、另一趟被藏起來。同一格有多趟時，每趟各自可以點擊，
+  // 實際用了「週二到五」版本，或同一位承攬人員兩條路線都排了），也要一起列出來，不然點
+  // 承攬人員名字只看得到其中一趟、另一趟被藏起來。同一格有多趟時，每趟各自可以點擊，
   // 並標出是哪一條路線版本。
   function slotCellHtml(candidates, preferred, date){
     if(!preferred) return cellHtml(preferred, date);
@@ -2612,7 +2612,7 @@ function renderWeekGrid(containerId, dates){
     if(!routesHere.length) return '';
     // 第七車/第八車這種「星期一報價」跟「週二到五」分成兩條路線的車次，週班表
     // 這裡只是顯示合併成一列，依每個日期欄位實際的星期幾去挑對應的那條路線——
-    // 完全不影響請款/司機費用/公里，那些金額仍然是各自路線（各自版本）原本
+    // 完全不影響請款/承攬人員費用/公里，那些金額仍然是各自路線（各自版本）原本
     // 存的資料，只是「同一列、不同欄位讀不同路線」而已。
     const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
     const rows = baseSeqs.map(baseSeq=>{
@@ -2684,8 +2684,8 @@ function renderQuickCreate(routeId, date){
       <h3 style="margin-top:0;">指派：${date} · ${route.name}</h3>
       <p style="font-size:12.5px;">出發點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
       <p style="font-size:12.5px; color:var(--ink-soft);">里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
-      <div class="field"><label>司機</label><select id="qDriver">${driverOpts}</select></div>
-      <div class="field"><label>調整金額（元，選填，留空則使用路線目前生效版本的司機費用 $${money(version.driverFare||0)}）</label><input id="qFareAdjust" type="number" placeholder="$${money(version.driverFare||0)}"></div>
+      <div class="field"><label>承攬人員</label><select id="qDriver">${driverOpts}</select></div>
+      <div class="field"><label>調整金額（元，選填，留空則使用路線目前生效版本的承攬人員費用 $${money(version.driverFare||0)}）</label><input id="qFareAdjust" type="number" placeholder="$${money(version.driverFare||0)}"></div>
       <button class="btn amber" id="qSave">確認指派</button>
       <button class="btn ghost" id="qCancel">取消</button>
     </div>
@@ -2694,7 +2694,7 @@ function renderQuickCreate(routeId, date){
   document.getElementById('qCancel').onclick = ()=>{ box.innerHTML=''; };
   document.getElementById('qSave').onclick = async ()=>{
     const driverId = document.getElementById('qDriver').value;
-    if(!driverId){ alert('請選擇司機'); return; }
+    if(!driverId){ alert('請選擇承攬人員'); return; }
     const fareAdjust = document.getElementById('qFareAdjust').value;
     try{
       await createAssignment({ date, routeId, driverId, fare: fareAdjust });
@@ -2784,7 +2784,7 @@ async function renderTripPaySection(a, el){
         <div style="font-size:12px; margin-bottom:6px;">例如這趟 8 家 $800，拆 4／2／2：這趟保留 400，另外兩趟各加 200。總額不用一樣（距離變短可以少付）。</div>
         <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;"><span style="font-size:12.5px;">這趟（${escapeHtml(driverName(a.driverId))}）調整後保留</span><input id="spKeep" type="number" value="${P}" style="width:100px;"></div>
         ${sameDay.length ? sameDay.map(t=>`<div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;"><label style="display:flex; gap:4px; align-items:center; font-size:12.5px; flex:1;"><input type="checkbox" class="spPick" data-id="${t.id}" style="width:auto;"> ${escapeHtml(routeName(t.routeId))}（${escapeHtml(driverName(t.driverId))}）</label><span style="font-size:12px;">加</span><input type="number" class="spAdd" data-id="${t.id}" value="0" style="width:90px;"></div>`).join('') : '<div class="empty">當天沒有其他車趟可以分</div>'}
-        <input id="spNote" placeholder="原因（選填，例如：第X車司機未到）" maxlength="60" style="margin:6px 0; width:100%;">
+        <input id="spNote" placeholder="原因（選填，例如：第X車承攬人員未到）" maxlength="60" style="margin:6px 0; width:100%;">
         <div id="spSummary" style="font-size:12.5px; margin-bottom:6px;"></div>
         <button class="btn amber" id="spSave" style="padding:5px 10px; font-size:12px;">儲存拆店調撥</button>
       </div>`;
@@ -2870,19 +2870,19 @@ function renderAssignmentDetail(id, box){
       <div class="toolbar">
         <strong>${a.date} · ${routeName(a.routeId)} · ${driverName(a.driverId)}</strong>
         <span>
-          ${a.status==='completed' ? '<span class="badge locked">已完成・已封存不可編輯</span>' : a.status==='in_progress' ? '<span class="badge progress">司機執行中</span>' : '<span class="badge pending">排定中</span>'}
+          ${a.status==='completed' ? '<span class="badge locked">已完成・已封存不可編輯</span>' : a.status==='in_progress' ? '<span class="badge progress">承攬人員執行中</span>' : '<span class="badge pending">排定中</span>'}
           ${a.status==='scheduled'? `<button class="btn danger" data-delassign="${a.id}">刪除</button>` : ''}
         </span>
       </div>
       <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
-      <p style="font-size:12.5px; color:var(--ink-soft);">司機費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
-      ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>司機回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
+      <p style="font-size:12.5px; color:var(--ink-soft);">承攬人員費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
+      ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>承攬人員回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
       ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        <span>臨時異動（例如司機請假換人）：</span>
-        <select id="afReassignDriver" style="width:auto; max-width:160px;"><option value="">選擇司機</option>${otherDrivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select>
-        <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換司機</button>
+        <span>臨時異動（例如承攬人員請假換人）：</span>
+        <select id="afReassignDriver" style="width:auto; max-width:160px;"><option value="">選擇承攬人員</option>${otherDrivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select>
+        <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換承攬人員</button>
       </div>` : ''}
-      <p class="note" style="margin:8px 0;">完成狀態由司機端自行操作，完成後會自動封存，主控端無需再次確認。</p>
+      <p class="note" style="margin:8px 0;">完成狀態由承攬人員端自行操作，完成後會自動封存，主控端無需再次確認。</p>
       ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已送達</span>':dp.issueReason?`<span class="badge pending">未配達：${dp.issueReason}</span>`:'<span class="badge pending">待送達</span>'}</div>`).join('')}
       <div class="note" id="afPaySection" style="margin-top:10px;"><div class="empty">載入額外金額與已付款…</div></div>
       <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
@@ -2891,7 +2891,7 @@ function renderAssignmentDetail(id, box){
   `;
   const db = box.querySelector('[data-delassign]');
   if(db) db.onclick = async ()=>{
-    if(!confirm(`確定要刪除 ${a.date} ${routeName(a.routeId)}（${driverName(a.driverId)}）這趟排定中的車次嗎？刪除後這位司機當天就不會再看到這趟行程，無法復原。`)) return;
+    if(!confirm(`確定要刪除 ${a.date} ${routeName(a.routeId)}（${driverName(a.driverId)}）這趟排定中的車次嗎？刪除後這位承攬人員當天就不會再看到這趟行程，無法復原。`)) return;
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
   };
@@ -2901,7 +2901,7 @@ function renderAssignmentDetail(id, box){
   }
   if(canReassign) box.querySelector('#afReassignBtn').onclick = async ()=>{
     const newDriverId = box.querySelector('#afReassignDriver').value;
-    if(!newDriverId){ alert('請選擇司機'); return; }
+    if(!newDriverId){ alert('請選擇承攬人員'); return; }
     try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
     catch(err){ alert(err.message); }
   };
@@ -2913,7 +2913,7 @@ function renderAssignmentDetail(id, box){
     const byChannel = effByChannel;
     box2.innerHTML = `
       <div class="grid2" style="margin-top:8px;">
-        <div class="field"><label>司機費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
+        <div class="field"><label>承攬人員費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
         <div class="field"><label>里程（km）</label><input id="afDistance" type="number" value="${a.distanceKm||''}"></div>
       </div>
       ${channelIds.length ? `<label style="margin-top:4px; display:block;">各通路請款金額（元）</label><div class="grid3">${channelIds.map(cid=>`
@@ -2937,18 +2937,18 @@ function renderAssignmentDetail(id, box){
 }
 
 // ---------- 薪資結算 ----------
-// 給付單位資訊固定不變，不隨司機/月份變動。
+// 給付單位資訊固定不變，不隨承攬人員/月份變動。
 const PAYROLL_PAYER_NAME = '信興行銷有限公司';
 const PAYROLL_PAYER_TAX_ID = '62091835';
-// 正式的「勞務報酬單」樣式（取代原本單純的摘要表格），單一司機、單一月份、
+// 正式的「勞務報酬單」樣式（取代原本單純的摘要表格），單一承攬人員、單一月份、
 // 直式A4剛好一頁。r 是 driverMonthly() 或月結凍結後的資料（見 renderPayroll()
 // 呼叫端怎麼組出 r），ded 是 computePayrollDeductions() 算出來的稅務欄位
 // （月結確認前是即時預覽用系統自動判斷的結果，確認後就是當時凍結的數字，
 // 兩種情況欄位長得一樣，呼叫端統一組好再傳進來）。
-// 代墊款明細附件（勞報單第2頁）：一位司機一份，條列每一筆代墊款的加油日期、
+// 代墊款明細附件（勞報單第2頁）：一位承攬人員一份，條列每一筆代墊款的加油日期、
 // 發票號碼、金額；由加油申報確認轉進來的有完整日期／發票號碼，主控手動輸入的
 // 代墊款沒有這兩項就顯示「—」並把備註列出來。沒有代墊款回傳空字串（不產生第2頁）。
-// 新版勞報單文字（貨物配送及到店協助理貨勞務）對全體司機生效。已經簽名的勞報單，司機簽名
+// 新版勞報單文字（貨物配送及到店協助理貨勞務）對全體承攬人員生效。已經簽名的勞報單，承攬人員簽名
 // 時看到的是舊文字，事後不能把內容換掉卻仍顯示他的簽名，所以「新版上線之前就簽回的」維持
 // 舊文字；還沒簽回的、新版上線之後才簽的、以及主控退回簽名後重簽的，都用新版。
 const PAYROLL_SLIP_V2_CUTOVER = '2026-10-05T10:36:00Z';
@@ -2991,7 +2991,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
   const dateLabel = opts.period ? `${opts.period.start}～${opts.period.end}` : monthStr;
   const thisPeriod = opts.period ? '本期間' : '本月';
   // 勞務內容列車趟服務報酬＋加項/減項明細——加項/減項會影響下面「報酬
-  // 總額」，也需要逐項列在這張正式勞報單上讓司機清楚知道明細；只有預支
+  // 總額」，也需要逐項列在這張正式勞報單上讓承攬人員清楚知道明細；只有預支
   // 不列出來，因為預支不算扣款、也不影響這裡的金額（是薪資提前請領，
   // 不該在這張正式文件上再處理一次）。
   const contentRows = [];
@@ -3009,8 +3009,8 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
     contentRows.push(`<tr><td>${dateLabel}</td><td>${adjTypeLabel(a.type)}</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">${amt>=0?'':'-'}$${money(Math.abs(amt))}</td><td>—</td></tr>`);
   });
   // 代墊款（例如油資，憑證開公司統編）：這筆錢已經包含在車趟報酬裡一起付給
-  // 司機，但屬於代墊還款、不是所得，所以在這裡逐筆列為「減項」拆出來，所得額
-  // 才是扣稅／補充保費的計算基礎；報酬總額與司機實際拿到的錢都不受影響。
+  // 承攬人員，但屬於代墊還款、不是所得，所以在這裡逐筆列為「減項」拆出來，所得額
+  // 才是扣稅／補充保費的計算基礎；報酬總額與承攬人員實際拿到的錢都不受影響。
   const reimb = Number(r.reimbursement)||0;
   if(reimb>0){
     const items = r.adjustments.filter(a=>a.type==='reimbursement');
@@ -3050,17 +3050,17 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       </table>
     </div>`;
 }
-let payrollTripsExpanded = false; // 該司機配送明細（日期/路線/車資）預設收合，跟其他清單一致
+let payrollTripsExpanded = false; // 該承攬人員配送明細（日期/路線/車資）預設收合，跟其他清單一致
 // 薪資結算頁（算錢：調整項、報酬明細、可領淨額）與勞報單頁（文件：月結確認、區間勞報單、簽名、
-// 下載）共用同一份畫面程式，用 mode 決定要顯示哪些區塊；司機／月份選擇存在 state，兩頁連動。
+// 下載）共用同一份畫面程式，用 mode 決定要顯示哪些區塊；承攬人員／月份選擇存在 state，兩頁連動。
 function renderPayroll(c){ return renderPayrollPage(c, 'pay'); }
 function renderSlips(c){ return renderPayrollPage(c, 'slip'); }
 function renderPayrollPage(c, mode){
   const isSlip = mode==='slip';
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  // 勞報單頁：選了司機，整個畫面（收件匣、尚未回簽、尚未月結、月結與區間勞報單）都只看這一位；
-  // 選「全部司機」才看總覽清單。薪資結算頁沒有「全部」，一定是某一位。
+  // 勞報單頁：選了承攬人員，整個畫面（收件匣、尚未回簽、尚未月結、月結與區間勞報單）都只看這一位；
+  // 選「全部承攬人員」才看總覽清單。薪資結算頁沒有「全部」，一定是某一位。
   let scope = isSlip ? (state._payDriverId || '') : '';
   if(scope && !state.data.drivers.some(d=>d.id===scope)) scope = '';
   if(isSlip) state._payDriverId = scope;
@@ -3068,10 +3068,10 @@ function renderPayrollPage(c, mode){
   const inbox = state.data.statements.filter(s=>inScope(s) && (s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
   c.innerHTML = `
     <h2 class="section-title">${isSlip ? '勞報單' : '薪資結算'}</h2>
-    <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，司機才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位司機的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
+    <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，承攬人員才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位承攬人員的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
     <div class="panel no-print" style="position:sticky; top:0; z-index:20; box-shadow:0 2px 6px rgba(27,33,41,.12);">
       <div class="grid2">
-        <div class="field"><label>司機</label><select id="pDriver">${isSlip?'<option value="">全部司機</option>':''}${driverOpts}</select></div>
+        <div class="field"><label>承攬人員</label><select id="pDriver">${isSlip?'<option value="">全部承攬人員</option>':''}${driverOpts}</select></div>
         <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
     </div>
@@ -3084,16 +3084,16 @@ function renderPayrollPage(c, mode){
     </div>` : ''}
     ${(()=>{
       if(!isSlip) return '';
-      // 月結確認後、司機還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
+      // 月結確認後、承攬人員還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
       const unsigned = state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature')
         .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
-      if(!unsigned.length) return `<div class="panel"><h3 style="margin:0;">司機回簽狀況</h3><div style="font-size:13px; margin-top:6px;">✅ 所有已月結確認的勞報單，司機都已回簽。</div></div>`;
+      if(!unsigned.length) return `<div class="panel"><h3 style="margin:0;">承攬人員回簽狀況</h3><div style="font-size:13px; margin-top:6px;">✅ 所有已月結確認的勞報單，承攬人員都已回簽。</div></div>`;
       const days = x=> x.confirmedAt ? Math.max(0, Math.floor((Date.now()-new Date(x.confirmedAt).getTime())/86400000)) : null;
       return `<div class="panel" style="border-color:var(--amber); border-width:2px;">
         <div class="toolbar"><h3 style="margin:0;">尚未回簽（${unsigned.length} 位）</h3><button class="btn danger" id="revokeAllUnsigned">全部收回（${unsigned.length} 份）</button></div>
-        <p class="note" style="margin-top:8px;">已月結確認、但司機還沒在系統上簽名的勞報單。帳務有問題時可以「收回」，月份會回到尚未月結確認，修正後再重新月結。</p>
+        <p class="note" style="margin-top:8px;">已月結確認、但承攬人員還沒在系統上簽名的勞報單。帳務有問題時可以「收回」，月份會回到尚未月結確認，修正後再重新月結。</p>
         <table>
-          <thead><tr><th>司機</th><th>月份</th><th>實領金額</th><th>已等待</th><th></th></tr></thead>
+          <thead><tr><th>承攬人員</th><th>月份</th><th>實領金額</th><th>已等待</th><th></th></tr></thead>
           <tbody>${unsigned.map(x=>`<tr><td>${driverName(x.driverId)}</td><td>${statementLabel(x)}</td><td class="amount">$${money(x.actualNet)}</td><td>${days(x)===null?'—':days(x)===0?'今天確認':days(x)+' 天'}</td><td><button class="btn ghost" data-unsignedpick="${x.id}">查看</button> <button class="btn danger" data-revoke="${x.id}">收回</button></td></tr>`).join('')}</tbody>
         </table>
       </div>`;
@@ -3102,10 +3102,10 @@ function renderPayrollPage(c, mode){
       const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
       if(isSlip || !pending.length) return '';
       return `<div class="panel">
-        <h3 style="margin-top:0;">司機代墊申報待確認（${pending.length}）</h3>
-        <p class="note" style="margin-top:0;">請核對司機交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
+        <h3 style="margin-top:0;">承攬人員代墊申報待確認（${pending.length}）</h3>
+        <p class="note" style="margin-top:0;">請核對承攬人員交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
         <table>
-          <thead><tr><th>司機</th><th>類別</th><th>日期</th><th>金額</th><th>發票號碼</th><th>備註</th><th></th></tr></thead>
+          <thead><tr><th>承攬人員</th><th>類別</th><th>日期</th><th>金額</th><th>發票號碼</th><th>備註</th><th></th></tr></thead>
           <tbody>${pending.map(f=>`<tr><td>${driverName(f.driverId)}</td><td>${CLAIM_CATEGORY_LABEL[f.category]||'—'}</td><td>${f.date}</td><td class="amount">$${money(f.amount)}</td><td>${f.invoiceNo}</td><td>${escapeHtml(f.note)||'—'}</td>
             <td><button class="btn amber" data-fcconfirm="${f.id}">確認（轉為代墊款）</button> <button class="btn danger" data-fcreject="${f.id}">刪除</button></td></tr>`).join('')}</tbody>
         </table>
@@ -3114,9 +3114,9 @@ function renderPayrollPage(c, mode){
     ${isSlip && !scope ? `<div class="panel">
       <div class="grid2">
         <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
-        <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體司機勞報單（合併PDF）</button></div>
+        <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體承攬人員勞報單（合併PDF）</button></div>
       </div>
-      <p class="note">只會納入「已完成月結確認」的司機（每人各佔一頁，直式）；當月尚未月結確認的司機不會出現在合併檔案裡。</p>
+      <p class="note">只會納入「已完成月結確認」的承攬人員（每人各佔一頁，直式）；當月尚未月結確認的承攬人員不會出現在合併檔案裡。</p>
     </div>` : ''}
     ${isSlip ? '' : `<div class="panel">
       <div class="grid3">
@@ -3129,25 +3129,25 @@ function renderPayrollPage(c, mode){
     </div>`}
     ${isSlip ? '' : `<div class="panel no-print">
       <h3 style="margin-top:0;">延後付款（掛帳）</h3>
-      <p class="note" style="margin-top:0;">司機同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的車趟掛帳。轉帳後在下面「待付款清單」按「已付款」即可。司機的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+      <p class="note" style="margin-top:0;">承攬人員同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的車趟掛帳。轉帳後在下面「待付款清單」按「已付款」即可。承攬人員的「我的報酬」也會看到待領金額。不影響勞報單。</p>
       <div class="grid3">
         <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
         <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
         <div class="field"><label>預計付款日</label><input id="dfDue" type="date"></div>
       </div>
-      <div class="field"><label>備註（選填，例如：司機要求）</label><input id="dfNote" maxlength="60"></div>
+      <div class="field"><label>備註（選填，例如：承攬人員要求）</label><input id="dfNote" maxlength="60"></div>
       <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
       <button class="btn amber" id="dfSave">掛帳</button>
     </div>
     <div id="deferredList"></div>`}
     ${isSlip ? `<div id="payrollPending"></div>` : ''}
     ${isSlip ? (()=>{
-      // 各司機的全部月份勞報單（月結＋區間），每位司機一組、預設收合；組內點「查看」切到那一份。
+      // 各承攬人員的全部月份勞報單（月結＋區間），每位承攬人員一組、預設收合；組內點「查看」切到那一份。
       const stText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">待簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
       const groups = state.data.drivers.filter(d=>inScope({driverId:d.id})).map(d=>({ d, list: state.data.statements.filter(x=>x.driverId===d.id).sort((a,b)=> statementRange(b)[1].localeCompare(statementRange(a)[1])) })).filter(g=>g.list.length);
       if(!groups.length) return '';
       return `<div class="panel no-print">
-        <h3 style="margin:0 0 6px;">各司機勞報單（全部月份）</h3>
+        <h3 style="margin:0 0 6px;">各承攬人員勞報單（全部月份）</h3>
         ${groups.map(g=>{ const wait = g.list.filter(x=>x.status==='awaiting_signature').length; return `<details style="border-top:1px solid var(--border); padding:6px 0;">
           <summary style="cursor:pointer; font-weight:600;">${escapeHtml(g.d.name)}　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${g.list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></summary>
           <table style="margin-top:6px;"><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
@@ -3157,8 +3157,8 @@ function renderPayrollPage(c, mode){
     })() : ''}
     ${isSlip && scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
-      <p class="note">司機每週（或每次）請款時，選一段期間開一張勞報單，司機簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成車趟與調整項日期自動算出，不能手動修改；期間不能跟該司機其他勞報單（月結或區間）重疊。</p>
-      <p class="note" style="margin-top:0;">司機沿用上方「司機」選單。</p>
+      <p class="note">承攬人員每週（或每次）請款時，選一段期間開一張勞報單，承攬人員簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成車趟與調整項日期自動算出，不能手動修改；期間不能跟該承攬人員其他勞報單（月結或區間）重疊。</p>
+      <p class="note" style="margin-top:0;">承攬人員沿用上方「承攬人員」選單。</p>
       <div class="grid3">
         <div class="field"><label>期間開始</label><input id="perStart" type="date"></div>
         <div class="field"><label>期間結束</label><input id="perEnd" type="date"></div>
@@ -3173,8 +3173,8 @@ function renderPayrollPage(c, mode){
   async function doRevoke(list){
     const signedCount = list.filter(x=>x.status!=='awaiting_signature').length;
     const names = list.map(x=>`${driverName(x.driverId)}（${statementLabel(x)}）`).join('、');
-    const msg = `確定要收回 ${list.length} 份月結嗎？\n${names}\n\n收回後這些勞報單會被刪除，司機看不到；對應月份回到「尚未月結確認」，可以重新新增／刪除調整項、修正帳務後再月結確認。`
-      + (signedCount ? `\n\n⚠️ 其中 ${signedCount} 份司機已經簽名，簽名會作廢，需要重新簽名。` : '');
+    const msg = `確定要收回 ${list.length} 份月結嗎？\n${names}\n\n收回後這些勞報單會被刪除，承攬人員看不到；對應月份回到「尚未月結確認」，可以重新新增／刪除調整項、修正帳務後再月結確認。`
+      + (signedCount ? `\n\n⚠️ 其中 ${signedCount} 份承攬人員已經簽名，簽名會作廢，需要重新簽名。` : '');
     if(!confirm(msg)) return;
     try{ await revokeStatements(list.map(x=>x.id)); renderContent(); }
     catch(err){ alert(err.message); }
@@ -3205,7 +3205,7 @@ function renderPayrollPage(c, mode){
   c.querySelectorAll('[data-fcreject]').forEach(btn=>{
     btn.onclick = async ()=>{
       const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcreject);
-      if(!f || !confirm(`確定要刪除 ${driverName(f.driverId)} ${f.date} 的這筆代墊申報嗎？司機會看不到這筆紀錄，需要重新申報。`)) return;
+      if(!f || !confirm(`確定要刪除 ${driverName(f.driverId)} ${f.date} 的這筆代墊申報嗎？承攬人員會看不到這筆紀錄，需要重新申報。`)) return;
       try{ await deleteFuelClaim(f.id); renderContent(); }
       catch(err){ alert(err.message); }
     };
@@ -3218,7 +3218,7 @@ function renderPayrollPage(c, mode){
   });
   c.querySelectorAll('[data-reject]').forEach(btn=>{
     btn.onclick = async ()=>{
-      if(!confirm('確定要退回這份簽名嗎？退回後司機需要重新簽名，這份勞報單會回到「待回簽」狀態。')) return;
+      if(!confirm('確定要退回這份簽名嗎？退回後承攬人員需要重新簽名，這份勞報單會回到「待回簽」狀態。')) return;
       try{ await rejectStatementSignature(btn.dataset.reject); renderContent(); }
       catch(err){ alert(err.message); }
     };
@@ -3233,7 +3233,7 @@ function renderPayrollPage(c, mode){
   if(printAllBtn) printAllBtn.onclick = async ()=>{
     const monthStr = document.getElementById('pAllMonth').value;
     const records = state.data.statements.filter(s=>s.month===monthStr);
-    if(!records.length){ alert(`${monthStr} 沒有任何司機完成月結確認`); return; }
+    if(!records.length){ alert(`${monthStr} 沒有任何承攬人員完成月結確認`); return; }
     const rangeStart = records.reduce((m,x)=>{ const a=statementRange(x)[0]; return a<m?a:m; }, monthStr+'-01');
     const rangeEnd = records.reduce((m,x)=>{ const b=statementRange(x)[1]; return b>m?b:m; }, monthEndStr(monthStr));
     const btn = document.getElementById('printAllStatements');
@@ -3245,13 +3245,13 @@ function renderPayrollPage(c, mode){
     const slips = records.map(record=>{
       const driver = state.data.drivers.find(d=>d.id===record.driverId);
       if(!driver) return null;
-      // 一位司機勞報單第1頁＋（有代墊款才有的）第2頁明細附件，依序放在一起。
+      // 一位承攬人員勞報單第1頁＋（有代墊款才有的）第2頁明細附件，依序放在一起。
       const { slipHtml, attHtml } = buildSlipHtmls(driver, record, monthAssignments);
       return [slipHtml, attHtml].filter(Boolean);
     }).filter(Boolean).flat();
-    exportPayrollPortraitPdf(slips, `全體司機勞報單_${monthStr}`);
+    exportPayrollPortraitPdf(slips, `全體承攬人員勞報單_${monthStr}`);
   };
-  // 尚未月結名單（勞報單頁）：只在每月 1～15 號顯示、只看上個月、可收合；每位司機有「查看並月結」與「無需月結」，
+  // 尚未月結名單（勞報單頁）：只在每月 1～15 號顯示、只看上個月、可收合；每位承攬人員有「查看並月結」與「無需月結」，
   // 已標無需月結的可在底下恢復。16 號起整個消失，不論有沒有月結。
   async function renderPendingSettlePanel(){
     const el = document.getElementById('payrollPending');
@@ -3272,10 +3272,10 @@ function renderPayrollPage(c, mode){
       <summary style="cursor:pointer; font-weight:700;">${mon} 尚未月結確認${rows.length?`（${rows.length} 位）`:'（已全部處理 ✅）'}</summary>
       <div style="margin-top:8px;">
       ${rows.length ? `<table>
-        <thead><tr><th>司機</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
+        <thead><tr><th>承攬人員</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
         <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
         <tr style="font-weight:700; background:#F4F3EF;"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
-      </table>` : '<div style="font-size:13px;">這個月所有有完成車趟的司機都已月結確認或標為無需月結。</div>'}
+      </table>` : '<div style="font-size:13px;">這個月所有有完成車趟的承攬人員都已月結確認或標為無需月結。</div>'}
       ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
         <div style="margin-top:4px;">${skipped.map(d=>`<span style="margin-right:12px; font-size:12.5px;">${escapeHtml(d.name)} <button class="btn ghost" data-settlerestore="${d.id}" style="padding:2px 8px; font-size:11.5px;">恢復</button></span>`).join('')}</div></details>` : ''}
       </div></details>`;
@@ -3317,8 +3317,8 @@ function renderPayrollPage(c, mode){
       <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
       ${mine.length ? `<table><thead><tr><th>區間</th><th>趟報酬合計</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
         <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
-        <div id="dfPayForm"></div>` : '<div style="font-size:13px;">這位司機目前沒有待付款。</div>'}
-      ${others.length ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:8px;">其他司機還有 ${others.length} 筆待付款：${others.map(g=>`${escapeHtml(driverName(g.driverId))}（${g.due}）`).join('、')}</div>` : ''}
+        <div id="dfPayForm"></div>` : '<div style="font-size:13px;">這位承攬人員目前沒有待付款。</div>'}
+      ${others.length ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:8px;">其他承攬人員還有 ${others.length} 筆待付款：${others.map(g=>`${escapeHtml(driverName(g.driverId))}（${g.due}）`).join('、')}</div>` : ''}
     </div>`;
     el.querySelectorAll('[data-dfcancel]').forEach(b=>{
       b.onclick = async ()=>{
@@ -3376,7 +3376,7 @@ function renderPayrollPage(c, mode){
     save.onclick = async ()=>{
       const driverId = document.getElementById('pDriver').value;
       const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
-      if(!driverId){ alert('請先選擇司機'); return; }
+      if(!driverId){ alert('請先選擇承攬人員'); return; }
       if(!args.dueDate){ alert('請選擇預計付款日'); return; }
       if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的車趟掛帳，預計 ${args.dueDate} 付款嗎？`)) return;
       try{ const r = await deferPayment(args); alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，預計 ${args.dueDate} 付款`); document.getElementById('dfNote').value=''; renderDeferredPanel(); update(); }
@@ -3384,7 +3384,7 @@ function renderPayrollPage(c, mode){
     };
   }
   // 已開單（金額凍結）的勞報單，如果跟「現在的即時帳務」對不上（例如開單後才補代墊款日期、
-  // 加減項被改），在主控端提醒收回重開；司機看到的仍是凍結的數字，這裡只是給主控的警示。
+  // 加減項被改），在主控端提醒收回重開；承攬人員看到的仍是凍結的數字，這裡只是給主控的警示。
   function statementDriftNote(record, live){
     if(!record) return '';
     const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
@@ -3413,7 +3413,7 @@ function renderPayrollPage(c, mode){
     const payDate = document.getElementById('perPay').value;
     state._periodSel = { driverId, start, end, payDate };
     const mine = state.data.statements.filter(x=>x.driverId===driverId && x.periodStart).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd));
-    const statusText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">等待司機簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
+    const statusText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">等待承攬人員簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
     const listHtml = `<div class="panel no-print"><h4 style="margin:0 0 6px;">${escapeHtml(driverName(driverId))} 已開的區間勞報單（${mine.length}）</h4>
       ${mine.length ? `<table><thead><tr><th>期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead><tbody>${mine.map(x=>`<tr><td>${statementLabel(x)}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${statusText(x)}</td><td><button class="btn ghost" data-perview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">還沒有區間勞報單</div>'}</div>`;
     const wireList = ()=> box.querySelectorAll('[data-perview]').forEach(b=>{ b.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===b.dataset.perview); if(x) openStatementView(x); }; });
@@ -3449,7 +3449,7 @@ function renderPayrollPage(c, mode){
     box.innerHTML = listHtml + `
       <div class="panel no-print">
         <h3 style="margin-top:0;">${escapeHtml(driverName(driverId))} — ${start}～${end} ${record ? statusText(record) : ''}</h3>
-        ${record ? statementDriftNote(record, live) : '<div class="note">尚未開單，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。確認無誤後按「確認開單」凍結金額並開放司機簽名。</div>'}
+        ${record ? statementDriftNote(record, live) : '<div class="note">尚未開單，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。確認無誤後按「確認開單」凍結金額並開放承攬人員簽名。</div>'}
         ${overlap ? `<div class="note" style="color:var(--danger);">⚠️ 這段期間跟已存在的勞報單（${statementLabel(overlap)}）重疊，不能開單。</div>` : ''}
         <h4 style="margin:14px 0 8px; font-size:13.5px;">配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</h4>
         <table><thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
@@ -3469,7 +3469,7 @@ function renderPayrollPage(c, mode){
       <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="perPrint">產生勞報單（列印/另存PDF）</button>
-        ${!record && !overlap ? `<button class="btn amber" id="perConfirm">確認開單（開放司機簽名）</button>` : ''}
+        ${!record && !overlap ? `<button class="btn amber" id="perConfirm">確認開單（開放承攬人員簽名）</button>` : ''}
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="perReject">退回簽名</button>` : ''}
         ${record ? `<button class="btn danger" id="perRevoke" title="帳務有問題時，整份收回、重新計算">收回這張勞報單</button>` : ''}
       </div>`;
@@ -3486,13 +3486,13 @@ function renderPayrollPage(c, mode){
     const pc = document.getElementById('perConfirm');
     if(pc) pc.onclick = async ()=>{
       if(!payDate){ alert('請先填寫「實際給付日期（轉帳日）」'); return; }
-      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}。\n凍結後金額不會再變動，並開放司機簽名。`)) return;
+      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}。\n凍結後金額不會再變動，並開放承攬人員簽名。`)) return;
       try{ await confirmPeriodStatement(driverId, start, end, payDate, live); renderContent(); }
       catch(err){ alert(err.message); }
     };
     const pr = document.getElementById('perReject');
     if(pr) pr.onclick = async ()=>{
-      if(!confirm(`確定要退回 ${driverName(driverId)} ${start}～${end} 的簽名嗎？退回後司機需要重新簽名。`)) return;
+      if(!confirm(`確定要退回 ${driverName(driverId)} ${start}～${end} 的簽名嗎？退回後承攬人員需要重新簽名。`)) return;
       try{ await rejectStatementSignature(record.id); periodRefresh(); }
       catch(err){ alert(err.message); }
     };
@@ -3503,7 +3503,7 @@ function renderPayrollPage(c, mode){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     state._payrollMonth = monthStr; state._payDriverId = driverId;
-    if(!driverId){ document.getElementById('payrollResult').innerHTML = isSlip ? '<div class="panel"><div class="empty">請先選擇司機，或從上方清單點「查看」，就會顯示這位司機的月結與區間勞報單。</div></div>' : '<div class="empty">請先建立司機資料</div>'; return; }
+    if(!driverId){ document.getElementById('payrollResult').innerHTML = isSlip ? '<div class="panel"><div class="empty">請先選擇承攬人員，或從上方清單點「查看」，就會顯示這位承攬人員的月結與區間勞報單。</div></div>' : '<div class="empty">請先建立承攬人員資料</div>'; return; }
     // 勞報單頁不再提供「整月預覽／月結確認」：沒有月結勞報單的月份直接提示改用區間勞報單；
     // 已經月結過的舊勞報單仍可在這裡查看、退回簽名、收回。
     if(isSlip && !state.data.statements.some(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr)){
@@ -3517,7 +3517,7 @@ function renderPayrollPage(c, mode){
     let monthAssignments;
     try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
     catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
-    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的司機/月份
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的承攬人員/月份
     const live = driverMonthly(driverId, monthStr, monthAssignments);
     const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
     const periodOverlap = record ? null : findOverlappingStatement(driverId, monthStr+'-01', monthEndStr(monthStr));
@@ -3530,14 +3530,14 @@ function renderPayrollPage(c, mode){
       ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
       : computePayrollDeductions(r.net, r.reimbursement);
     const driver = state.data.drivers.find(d=>d.id===driverId);
-    const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">司機已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">司機已回簽（未鎖定）</span>' : '<span class="badge progress">等待司機回簽</span>';
+    const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">承攬人員已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">承攬人員已回簽（未鎖定）</span>' : '<span class="badge progress">等待承攬人員回簽</span>';
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
       v2: slipUsesV2(record), serviceName: record ? record.serviceName : (driver && driver.serviceName),
       signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     const attHtml = payrollAttachmentHtml(driver, monthStr, r);
     const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
-    // 可領淨額＝勞報單實領金額（已扣稅／補充保費）再扣掉預支與已付款（現金／轉帳先付的），即這個月還要實際匯給司機的現金。
+    // 可領淨額＝勞報單實領金額（已扣稅／補充保費）再扣掉預支與已付款（現金／轉帳先付的），即這個月還要實際匯給承攬人員的現金。
     const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
     const paidTotal = r.paid||0;
     const payable = ded.actualNet - advanceTotal - paidTotal;
@@ -3551,7 +3551,7 @@ function renderPayrollPage(c, mode){
           <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看薪資結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
         ${statementDriftNote(record, live)}
-        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放司機回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放司機簽名。'}</div>` : ''}
+        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放承攬人員回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放承攬人員簽名。'}</div>` : ''}
         <h4 data-tripstoggle style="margin:14px 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span style="color:var(--ink-soft); font-size:12px;">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
@@ -3582,7 +3582,7 @@ function renderPayrollPage(c, mode){
       ${isSlip ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
-        ${!record && !periodOverlap ? `<button class="btn amber" id="confirmMonth">月結確認（開放司機回簽）</button>` : ''}
+        ${!record && !periodOverlap ? `<button class="btn amber" id="confirmMonth">月結確認（開放承攬人員回簽）</button>` : ''}
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
         ${record ? `<button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>` : ''}
       </div>` : ''}`;
@@ -3601,7 +3601,7 @@ function renderPayrollPage(c, mode){
     });
     const rejectBtn = document.getElementById('rejectSignBtn');
     if(rejectBtn) rejectBtn.onclick = async ()=>{
-      if(!confirm(`確定要退回 ${driverName(driverId)} ${monthStr} 的簽名嗎？退回後司機需要重新簽名。`)) return;
+      if(!confirm(`確定要退回 ${driverName(driverId)} ${monthStr} 的簽名嗎？退回後承攬人員需要重新簽名。`)) return;
       try{ await rejectStatementSignature(record.id); refresh(); }
       catch(err){ alert(err.message); }
     };
@@ -3609,12 +3609,12 @@ function renderPayrollPage(c, mode){
     if(revokeBtn) revokeBtn.onclick = ()=> doRevoke([record]);
     const confirmBtn = document.getElementById('confirmMonth');
     if(confirmBtn) confirmBtn.onclick = async ()=>{
-      if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放司機回簽？凍結後車趟報酬不會再變動。`)) return;
+      if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放承攬人員回簽？凍結後車趟報酬不會再變動。`)) return;
       try{ await confirmMonthlyStatement(driverId, monthStr, live); renderContent(); }
       catch(err){ alert(err.message); }
     };
   }
-  // 司機／月份選擇存在 state，薪資結算頁與勞報單頁共用，切頁不用重選。
+  // 承攬人員／月份選擇存在 state，薪資結算頁與勞報單頁共用，切頁不用重選。
   const pDriverEl = document.getElementById('pDriver');
   if(state._payDriverId && [...pDriverEl.options].some(o=>o.value===state._payDriverId)) pDriverEl.value = state._payDriverId;
   state._payDriverId = pDriverEl.value;
@@ -3629,12 +3629,12 @@ function renderPayrollPage(c, mode){
   { const ms = document.getElementById('pMonth'); if(![...ms.options].some(o=>o.value===month)) ms.add(new Option(month, month)); ms.value = month; }
   pDriverEl.onchange = ()=>{
     state._payDriverId = pDriverEl.value;
-    if(isSlip){ state._periodSel = null; renderContent(); }   // 選了司機，整頁重畫成只看這一位
+    if(isSlip){ state._periodSel = null; renderContent(); }   // 選了承攬人員，整頁重畫成只看這一位
     else { refresh(); renderDeferredPanel(); const upd = document.getElementById('dfStart'); if(upd) upd.dispatchEvent(new Event('input')); }
   };
   document.getElementById('pMonth').onchange = refresh;
   if(isSlip && scope){
-    // 區間區塊：換司機時，預設開始日＝這位司機上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
+    // 區間區塊：換承攬人員時，預設開始日＝這位承攬人員上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
     const sel = state._periodSel;
     if(sel && sel.driverId===pDriverEl.value){
       document.getElementById('perStart').value = sel.start || '';
@@ -3656,7 +3656,7 @@ function renderPayrollPage(c, mode){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     const amount = document.getElementById('aAmount').value;
-    if(!driverId||!amount){ alert('請選擇司機並輸入金額'); return; }
+    if(!driverId||!amount){ alert('請選擇承攬人員並輸入金額'); return; }
     try{
       const aDate = document.getElementById('aDate').value || null;
       await createAdjustment({ driverId, month: monthStr, date: aDate, type: document.getElementById('aType').value, amount, note: document.getElementById('aNote').value.trim() });
@@ -3670,10 +3670,10 @@ function renderPayrollPage(c, mode){
 // 依「通路」（例如7-11、康達盛通）結算一整份請款單：先依路線版本異動日期自動切成
 // 好幾段小區間算出各通路自己的未稅/含稅總額；配送明細則是「已選通路」共用一份，
 // 只列出已選通路的店數/佔比/金額，未勾選的通路完全不會出現（見 mergedRunRows）。
-// ---------- 司機搜尋選單 ----------
-// 把原本的 <select>（司機太多時很難找）升級成「可輸入文字搜尋」的選單：原本的 select 仍保留在頁面上
+// ---------- 承攬人員搜尋選單 ----------
+// 把原本的 <select>（承攬人員太多時很難找）升級成「可輸入文字搜尋」的選單：原本的 select 仍保留在頁面上
 // （隱藏），選到的值照常讀 select.value、照常觸發 change，所以呼叫端程式完全不用改。
-// 排班／換司機這幾處可以傳 getOrigin，優先列出「最近 60 天實際跑過這個出發點」的司機（自動判斷，免維護）。
+// 排班／換承攬人員這幾處可以傳 getOrigin，優先列出「最近 60 天實際跑過這個出發點」的承攬人員（自動判斷，免維護）。
 async function loadDriverOriginStats(){
   const c = state._driverOriginStats;
   if(c && Date.now() - c.at < 30*60*1000) return c.map;
@@ -3711,7 +3711,7 @@ function enhanceDriverSelect(sel, opts){
   list.style.cssText = 'display:none; position:absolute; left:0; right:0; top:100%; z-index:60; max-height:280px; overflow:auto; background:var(--panel,#fff); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 18px rgba(27,33,41,.18); margin-top:2px;';
   wrap.appendChild(input); wrap.appendChild(list);
   sel.after(wrap);
-  // 「選擇司機」這種空白提示選項不列進清單（只有「全部司機」這種有意義的空值保留）。
+  // 「選擇承攬人員」這種空白提示選項不列進清單（只有「全部承攬人員」這種有意義的空值保留）。
   const options = ()=> [...sel.options].filter(o=>o.value || o.textContent.includes('全部')).map(o=>({ value:o.value, text:o.textContent }));
   const currentText = ()=>{ const o = sel.options[sel.selectedIndex]; return o && o.value ? o.textContent : (o && o.textContent.includes('全部') ? o.textContent : ''); };
   const syncText = ()=>{ input.value = currentText(); input.placeholder = (sel.options[0] && !sel.options[0].value && !sel.options[0].textContent.includes('全部')) ? sel.options[0].textContent+'（可輸入名字搜尋）' : '輸入名字搜尋…'; };
@@ -3733,10 +3733,10 @@ function enhanceDriverSelect(sel, opts){
       const common = items.filter(o=>o.value && freq.has(o.value)).sort((a,b)=>freq.get(b.value)-freq.get(a.value));
       const other = items.filter(o=>!(o.value && freq.has(o.value)));
       const og = opts.getOrigin && opts.getOrigin();
-      html = (common.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--teal); background:#F4F3EF;">${escapeHtml(originLabel(og))} 常跑的司機</div>${common.map(rowHtml).join('')}` : '')
-        + (other.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--ink-soft); background:#F4F3EF;">${common.length?'其他司機':'司機'}</div>${other.map(rowHtml).join('')}` : '');
+      html = (common.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--teal); background:#F4F3EF;">${escapeHtml(originLabel(og))} 常跑的承攬人員</div>${common.map(rowHtml).join('')}` : '')
+        + (other.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--ink-soft); background:#F4F3EF;">${common.length?'其他承攬人員':'承攬人員'}</div>${other.map(rowHtml).join('')}` : '');
     } else html = items.map(rowHtml).join('');
-    list.innerHTML = html || '<div style="padding:8px 12px; font-size:12.5px; color:var(--ink-soft);">找不到符合的司機</div>';
+    list.innerHTML = html || '<div style="padding:8px 12px; font-size:12.5px; color:var(--ink-soft);">找不到符合的承攬人員</div>';
     list.querySelectorAll('.dpick-item').forEach(el=>{
       el.onmousedown = e=>{ e.preventDefault(); choose(el.dataset.v); };
     });
@@ -4122,7 +4122,7 @@ function formatBytes(bytes){
 function renderSettings(c){
   c.innerHTML = `
     <h2 class="section-title">系統設定</h2>
-    <p class="section-sub">主控PIN碼用於登入時驗證身份，請妥善保管，不要告訴司機。</p>
+    <p class="section-sub">主控PIN碼用於登入時驗證身份，請妥善保管，不要告訴承攬人員。</p>
     <div class="panel">
       <div class="field" style="max-width:200px;"><label>主控PIN碼</label><input id="setPin" value="${state.data.settings.adminPin}"></div>
       <button class="btn amber" id="savePin">儲存</button>
@@ -4133,7 +4133,7 @@ function renderSettings(c){
       <div id="usageStatsBody"><div class="empty">載入中...</div></div>
       <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
         <h4 style="margin:0 0 4px;">流量（Egress）監測</h4>
-        <p class="section-sub" style="margin-bottom:8px;">流量（司機/客戶讀取照片、資料庫查詢等所有對外傳輸的資料量）無法從系統內查詢即時數字，Supabase 官方沒有開放這項資料的查詢介面，只能到後台實際查看目前用量、是否超過每月5GB免費額度。</p>
+        <p class="section-sub" style="margin-bottom:8px;">流量（承攬人員/客戶讀取照片、資料庫查詢等所有對外傳輸的資料量）無法從系統內查詢即時數字，Supabase 官方沒有開放這項資料的查詢介面，只能到後台實際查看目前用量、是否超過每月5GB免費額度。</p>
         <a class="btn ghost" href="https://supabase.com/dashboard/project/rcdvclfvqnrvffxkseqh/settings/billing/usage" target="_blank" rel="noopener" style="text-decoration:none; display:inline-block;">前往 Supabase 後台查看流量用量</a>
       </div>
     </div>
@@ -4259,16 +4259,16 @@ function renderExport(c){
         <h3 style="margin-top:0;">預覽：${start} ~ ${end}（共 ${rows.length} 筆）</h3>
         <table>
           ${type==='assignments' ? `
-            <thead><tr><th>日期</th><th>路線</th><th>司機</th><th>車資</th><th>狀態</th></tr></thead>
+            <thead><tr><th>日期</th><th>路線</th><th>承攬人員</th><th>車資</th><th>狀態</th></tr></thead>
             <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(a.fare)}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
           ` : type==='routeVersions' ? `
-            <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>司機費用</th><th>請款總額</th><th>下貨點（當時）</th></tr></thead>
+            <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>承攬人員費用</th><th>請款總額</th><th>下貨點（當時）</th></tr></thead>
             <tbody>${rows.map(v=>{
               const pts = (v.dropPointIds||[]).map(id=>{ const dp = state.data.dropPoints.find(x=>x.id===id); return dp ? dpLabel(dp) : '（已刪除的下貨點）'; }).join('、') || '—';
               return `<tr><td>${escapeHtml(v.routeName)}</td><td>${v.start} ~ ${v.end}</td><td>${v.distanceKm??'—'}km</td><td class="amount">$${money(v.driverFare||0)}</td><td class="amount">$${money(v.billingTotal||0)}</td><td style="font-size:12px;">${pts}</td></tr>`;
             }).join('') || '<tr><td colspan="6"><div class="empty">此區間無資料</div></td></tr>'}
           ` : `
-            <thead><tr><th>月份</th><th>司機</th><th>類型</th><th>金額</th><th>備註</th></tr></thead>
+            <thead><tr><th>月份</th><th>承攬人員</th><th>類型</th><th>金額</th><th>備註</th></tr></thead>
             <tbody>${rows.map(a=>`<tr><td>${a.month}</td><td>${driverName(a.driverId)}</td><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
           `}
         </table>
@@ -4292,7 +4292,7 @@ function renderExport(c){
   };
 }
 
-// ---------- 司機端：今日行程（預設畫面） ----------
+// ---------- 承攬人員端：今日行程（預設畫面） ----------
 // 上午永遠排在下午前面——不管實際建立車趟的順序（週班表怎麼異動、
 // 哪個先建立），同一天同時有上午跟下午的車次時，畫面上一律上午在上。
 function assignmentShiftKey(a){
@@ -4310,7 +4310,7 @@ function renderToday(c){
     <p class="section-sub">Hi~${driverName(dId)}，這是您今天的出車行程。${todayHolidayGreeting(dId)?` ${todayHolidayGreeting(dId)}`:''}</p>
     <div id="todayDetail"></div>
     <h3 style="margin-top:20px;">本週行程總覽</h3>
-    <p class="section-sub" style="margin-top:-6px;">點擊「待出發」的車次可預覽當天行程與司機費用。</p>
+    <p class="section-sub" style="margin-top:-6px;">點擊「待出發」的車次可預覽當天行程與承攬人員費用。</p>
     <div class="schedule-grid">
       ${weekDates.map(d=>{
         const items = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===d)
@@ -4327,7 +4327,7 @@ function renderToday(c){
   });
   renderTodayDetail(todays);
 }
-// 本週行程總覽裡「待出發」的車次點擊後預覽當天行程與司機費用——單純預覽，
+// 本週行程總覽裡「待出發」的車次點擊後預覽當天行程與承攬人員費用——單純預覽，
 // 車趟還沒開始，不提供拍照/完成等操作（那些要等到當天在「今日行程」才會出現）。
 function openWeekTripPreview(assignmentId){
   const host = document.getElementById('weekTripModal');
@@ -4339,7 +4339,7 @@ function openWeekTripPreview(assignmentId){
         <div class="toolbar"><h3 style="margin:0;">${routeName(a.routeId)}</h3><button class="btn ghost" id="closeWeekTrip">關閉</button></div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 8px;">${a.date}（星期${['日','一','二','三','四','五','六'][new Date(a.date+'T00:00:00').getDay()]}）</p>
         <p style="font-size:12.5px;">出發點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
-        <p style="font-size:12.5px;">里程：${a.distanceKm??'—'} km ・ <strong>司機費用：$${money(tripPay(a))}</strong></p>
+        <p style="font-size:12.5px;">里程：${a.distanceKm??'—'} km ・ <strong>承攬人員費用：$${money(tripPay(a))}</strong></p>
         <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">下貨點（${a.dropPoints.length}）</label>
         ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排下貨點</div>'}
       </div>
@@ -4446,7 +4446,7 @@ function renderTodayDetail(todays){
   // Android上很不可靠，很多系統/瀏覽器版本即使寫了 capture="environment"
   // 還是會跳系統相簿選擇器，不是我們程式碼的問題，是瀏覽器不理它。真的
   // 拿不到相機權限或裝置不支援時，才退回旁邊那顆隱藏的 input[capture]
-  // 讓司機至少還能選一張既有照片，不會整個卡住。
+  // 讓承攬人員至少還能選一張既有照片，不會整個卡住。
   box.querySelectorAll('[data-photo]').forEach(btn=>{
     const [aid, dpid] = btn.dataset.photo.split('|');
     const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
@@ -4482,7 +4482,7 @@ function renderTodayDetail(todays){
     };
   });
   // 「上傳照片」：不開相機，直接跳手機相簿/檔案選擇——鏡頭串流在部分
-  // 手機上不穩定時，讓司機可以直接用手機原生相機APP先拍好，再從相簿
+  // 手機上不穩定時，讓承攬人員可以直接用手機原生相機APP先拍好，再從相簿
   // 選照片上傳，不用依賴我們這個自建相機。可以一次多選，依序填入還空著
   // 的格子（最多3格），選超過的部分不會上傳，會提示哪些沒傳成功。
   box.querySelectorAll('[data-photolib]').forEach(btn=>{
@@ -4516,7 +4516,7 @@ function renderTodayDetail(todays){
     };
   });
   // 未配達原因：選了代表這個下貨點暫時不會有送達照片，直接存檔，不用等到
-  // 整趟結束才統一填一個籠統的備註；選完之後如果司機還是補拍了照片，
+  // 整趟結束才統一填一個籠統的備註；選完之後如果承攬人員還是補拍了照片，
   // uploadDropPointPhoto() 會自動把這裡的原因清掉（見 data-layer.js）。
   box.querySelectorAll('[data-issue]').forEach(sel=>{
     sel.onchange = async ()=>{
@@ -4527,7 +4527,7 @@ function renderTodayDetail(todays){
   });
 }
 
-// ---------- 司機端：歷史班表 ----------
+// ---------- 承攬人員端：歷史班表 ----------
 // 送達照片（主照片＋附加照片）共用的點擊看圖彈窗，跟客戶查詢頁面同一個
 // 精神：預設完全不載入照片，點了才跳出視窗、才真的去下載那幾張，避免
 // 像之前那樣「同一頁裡有的門店有照片縮圖、有的沒有」看起來時有時無
@@ -4554,8 +4554,8 @@ function dpPhotoUrls(dp){
 }
 async function renderHistory(c){
   const dId = state.activeDriverId;
-  // 司機自己的歷史班表想看多久以前都合理，而且司機端因為RLS本來就只看得到
-  // 自己的車趟（driver_select_own policy），不會因為系統整體規模（多少司機/
+  // 承攬人員自己的歷史班表想看多久以前都合理，而且承攬人員端因為RLS本來就只看得到
+  // 自己的車趟（driver_select_own policy），不會因為系統整體規模（多少承攬人員/
   // 多少店家）變大而跟著變重，所以這裡直接補到半年前，比預設的14天窗口寬
   // 很多，不受主控端那邊刻意縮小窗口的影響。
   const HISTORY_LOOKBACK_DAYS = 180;
@@ -4627,13 +4627,13 @@ function monthOptionsHtml(selected, n=6){
   const thisMonth = todayStr().slice(0,7);
   return recentMonthOptions(n).map(m=>`<option value="${m}" ${m===selected?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join('');
 }
-// 司機端「加油代墊申報」：只能填日期／金額／發票號碼，送出後是「待確認」，
-// 主控核對憑證確認後才會轉成代墊款；確認前司機可以修改或刪除，確認後鎖定。
+// 承攬人員端「加油代墊申報」：只能填日期／金額／發票號碼，送出後是「待確認」，
+// 主控核對憑證確認後才會轉成代墊款；確認前承攬人員可以修改或刪除，確認後鎖定。
 let editingFuelClaimId = null;
 function renderFuelPanel(){
   const box = document.getElementById('meFuel');
   if(!box) return;
-  // 主控「檢視司機」模式只讀：看得到司機填的申報紀錄，但不能代填，也不能在這裡改／刪
+  // 主控「檢視承攬人員」模式只讀：看得到承攬人員填的申報紀錄，但不能代填，也不能在這裡改／刪
   // （待確認的請到薪資結算處理）。
   const readOnly = state.role!=='driver' || !!state.adminViewDriver;
   const dId = state.activeDriverId;
@@ -4645,7 +4645,7 @@ function renderFuelPanel(){
   box.innerHTML = `
     <div class="panel">
       <h3 style="margin-top:0;">代墊費用申報（加油／車輛保養）</h3>
-      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：司機本人登入後才能填寫申報；待確認的申報請到「薪資結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油或車輛保養時，請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
+      ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：承攬人員本人登入後才能填寫申報；待確認的申報請到「薪資結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油或車輛保養時，請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
       <div class="grid3">
         <div class="field"><label>類別</label><select id="fcCategory">${Object.entries(CLAIM_CATEGORY_LABEL).map(([k,v])=>`<option value="${k}" ${(editing?editing.category:'fuel')===k?'selected':''}>${v}</option>`).join('')}</select></div>
         <div class="field"><label>日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
@@ -4701,7 +4701,7 @@ async function renderMyEarnings(c){
     <div id="meFuel"></div>
   `;
   renderFuelPanel();
-  // 掛帳中的報酬（約好之後才付）：不分月份，司機隨時看得到「待領多少、預計哪天付」。
+  // 掛帳中的報酬（約好之後才付）：不分月份，承攬人員隨時看得到「待領多少、預計哪天付」。
   fetchDeferredTrips(dId).then(trips=>{
     const box = document.getElementById('meDeferred');
     if(!box || !trips.length) return;
@@ -4713,7 +4713,7 @@ async function renderMyEarnings(c){
   document.getElementById('meMonth').onchange = (e)=>{ state._myEarningsMonth = e.target.value; renderFuelPanel(); refresh(); };
   // 跟薪資結算的作法一致：這個畫面只讀不寫，直接跟資料庫要選定月份的車趟，
   // 不碰共用的 state.data.assignments，查哪個月份都一樣快，也不會讓共用陣列
-  // 越查越大（司機身份本來就受RLS限制只看得到自己的車趟，查6個月內任一個月
+  // 越查越大（承攬人員身份本來就受RLS限制只看得到自己的車趟，查6個月內任一個月
   // 都很輕量）。
   async function refresh(){
     const m = state._myEarningsMonth || monthStr;
@@ -4778,7 +4778,7 @@ async function renderMyEarnings(c){
   }
   await refresh();
 }
-// ---------- 司機端：我的資料 ----------
+// ---------- 承攬人員端：我的資料 ----------
 function renderMyProfile(c){
   const dId = state.activeDriverId;
   const d = state.data.drivers.find(x=>x.id===dId);
@@ -5010,7 +5010,7 @@ function renderMyStatement(c){
       wireBack();
       document.getElementById('ackPayBtn').onclick = ()=> openSignatureModal(record);
     } else if(record.status==='signed'){
-      // 簽了名但還沒按「確認簽名」鎖定前，司機可以隨時重新簽名改掉。
+      // 簽了名但還沒按「確認簽名」鎖定前，承攬人員可以隨時重新簽名改掉。
       box.innerHTML = `
         ${backBtn}
         <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
@@ -5053,8 +5053,8 @@ function renderMyStatement(c){
 // 沒有真正的驗證）與 renderLoginGate（直接比對 state.data 裡的明文PIN/代碼）
 // 已經整個由 js/auth.js 取代：改成呼叫 Vercel Serverless Function 驗證、拿到簽過名的
 // JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
-// 司機視角原本只顯示「碳金車隊」，把「信興」拿掉——沒有留下原因，
-// 使用者反映司機登入後「信興」不見了要修正，改成不管主控／司機視角都
+// 承攬人員視角原本只顯示「碳金車隊」，把「信興」拿掉——沒有留下原因，
+// 使用者反映承攬人員登入後「信興」不見了要修正，改成不管主控／承攬人員視角都
 // 顯示完整的「信興｜碳金車隊」。
 function updateTitle(){
   document.getElementById('appTitle').innerHTML = '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span>';
@@ -5070,7 +5070,7 @@ function updateHeaderBar(){
     who.textContent = '主控帳號';
     btn.textContent = '登出／切換身份';
   } else {
-    who.textContent = `司機：${driverName(state.activeDriverId)}`;
+    who.textContent = `承攬人員：${driverName(state.activeDriverId)}`;
     btn.textContent = '登出';
   }
 }
@@ -5159,14 +5159,14 @@ async function refreshHomeDataIfIdle(){
   if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
     // 只重抓首頁真的需要跟上即時狀態的車趟資料，不呼叫整支 loadAllData()——
-    // 司機/通路/路線這些目錄資料幾乎不會變動，100人同時在線時每25秒讓每個人
+    // 承攬人員/通路/路線這些目錄資料幾乎不會變動，100人同時在線時每25秒讓每個人
     // 都重抓一次是不必要的資料庫負擔（見 refreshAssignmentsRange 說明）。
-    // 主控要看到「本月至今」的即時利潤，司機首頁只需要「今天」的行程數字。
+    // 主控要看到「本月至今」的即時利潤，承攬人員首頁只需要「今天」的行程數字。
     const today = todayStr();
     if(state.role==='admin'){ await refreshAssignmentsRange(today.slice(0,7)+'-01', today); await refreshFuelClaims(); }
     else await refreshAssignmentsRange(today, today);
-    // 司機首頁的「同出發點今日出發狀況」是另外呼叫loadDepotOverview()
-    // 查的（司機身份是走RPC，不在loadAllData()裡），有自己的一層快取
+    // 承攬人員首頁的「同出發點今日出發狀況」是另外呼叫loadDepotOverview()
+    // 查的（承攬人員身份是走RPC，不在loadAllData()裡），有自己的一層快取
     // （depotOverviewCache），這裡一起清掉，讓renderContent()重新渲染時
     // 順便重新抓一次，不然這個面板不會跟著這裡的25秒一起變新。
     depotOverviewCache = { key:null, rows:null };
@@ -5190,7 +5190,7 @@ async function bootApp(){
   try{
     state.data = await loadAllData();
   }catch(e){
-    // 登入憑證過期（主控12小時、司機30天）是正常的工作流程，不是系統壞掉，
+    // 登入憑證過期（主控12小時、承攬人員30天）是正常的工作流程，不是系統壞掉，
     // 跳出一堆技術性錯誤訊息（JWT expired之類）只會讓人誤以為系統出問題。
     // 只有這個情況顯示單純的「請重新登入」；其他真的意料之外的錯誤（網路、
     // 伺服器異常等）還是把完整錯誤訊息顯示出來，方便回報問題時能看出到底

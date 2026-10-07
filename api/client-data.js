@@ -95,7 +95,7 @@ module.exports = async (req, res) => {
   }
 
   // 安全上只選 address/code/completed_at/photo_url/trip_date/shift，绝不會帶到
-  // fare/distance/billing 等金額欄位，所以無論哪個通路的連結，客戶都看不到司機費用，
+  // fare/distance/billing 等金額欄位，所以無論哪個通路的連結，客戶都看不到承攬人員費用，
   // 也看不到共配車趟上其他通路的站點（一律只用 channel_id 篩出這個通路自己的點）。
   const items = (rows || []).map(p => ({
     id: p.id,
