@@ -4648,6 +4648,11 @@ function renderTodayDetail(todays){
             </div>` : ''}`}
           </div>`;
   };
+  // 自己當天有任務時，支援的店點直接併進自己的那一台車（用藍框區塊標示「支援」）；當天沒有自己的任務才用獨立卡片。
+  const supBlock = s=>`<div style="margin:10px 0; padding:8px; border:2px solid #2F6EA5; border-radius:8px;">
+      <div style="font-size:12.5px; font-weight:700; color:#2F6EA5; margin-bottom:4px;">支援：${routeName(s.routeId)}（原夥伴：${escapeHtml(s.originalDriverName||'—')}）${s.dropPoints.length}個店點，直接拍照上傳即可</div>
+      ${s.dropPoints.map(dp=>dpRow(s, dp, false)).join('')}
+    </div>`;
   const supportHtml = supportToday.map(a=>`<div class="panel" style="border-color:#2F6EA5; border-width:2px;">
       <div class="toolbar"><strong>支援：${routeName(a.routeId)}</strong><span class="badge" style="background:#E3EEF7; color:#2F6EA5;">原夥伴：${escapeHtml(a.originalDriverName||'—')}</span></div>
       <p style="font-size:12.5px; color:var(--ink-soft);">這是臨時交給您支援的店點（${a.dropPoints.length} 個），到店後直接拍照上傳即可，不需要再傳給原夥伴。完成後原夥伴會自動看到。</p>
@@ -4665,13 +4670,14 @@ function renderTodayDetail(todays){
         </span>
       </div>
       <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, mine); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+      ${a===todays[0] ? supportToday.map(supBlock).join('') : ''}
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
         ${mine.map(dp=>dpRow(a, dp, false)).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成任務（自動封存進歷史任務）</button>
         ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;
-  }).join('') + supportHtml;
+  }).join('') + (todays.length ? '' : supportHtml);
   // 照片改成跟歷史任務一樣，點擊「已完成」才載入——手機背景切換常把頁面砍掉
   // 重開，之前「一開頁面就自動載入當天所有已完成照片」會讓同一批照片被
   // 重複下載很多次，是 Storage 流量爆量的主因之一。
