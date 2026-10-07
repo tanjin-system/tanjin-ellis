@@ -1309,7 +1309,7 @@ async function renderHomeAdmin(c){
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟報酬結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">今日尚未配送完成</h3>
+      <div class="toolbar"><h3 style="margin:0;">今日尚未完成</h3>
         <span style="font-size:11px; color:var(--ink-soft);">即時更新中・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
@@ -5430,7 +5430,7 @@ document.getElementById('logoutBtn').onclick = ()=>{
 
 // 「加入主畫面」的網頁App在不少手機上會被系統背景凍結、放很久都沒有
 // 真正重新載入過（不是瀏覽器分頁那種無痕快取問題，是整個JS執行環境
-// 一直沒有重啟），導致上線的新功能、跟即時性的資料（今日尚未配送完成
+// 一直沒有重啟），導致上線的新功能、跟即時性的資料（今日尚未完成
 // 等）長時間卡住不動、看起來「無法同步」。這裡用兩個機制補救：
 // 1. 切回前景/每隔幾分鐘，比對目前執行中的頁面內容跟伺服器上最新的
 //    是否不同，不同就跳出一條提示，讓使用者自己決定要不要點擊重新
