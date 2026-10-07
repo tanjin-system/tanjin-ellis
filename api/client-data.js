@@ -46,10 +46,10 @@ module.exports = async (req, res) => {
   since.setDate(since.getDate() - 60);
   const sinceStr = `${since.getFullYear()}-${pad(since.getMonth() + 1)}-${pad(since.getDate())}`;
 
-  // 這裡故意用「這個通路在路線管理裡的每一個下貨點」單一查詢，不再依 completed/
+  // 這裡故意用「這個通路在路線管理裡的每一個店點」單一查詢，不再依 completed/
   // pending 狀態分開查、也不對 completed_at/photo_url 加條件——之前拆成「已送達」
-  // 「即將送達」兩支查詢，各自還有 500/300 筆的 limit，通路下貨點一多（例如7-11
-  // 88個點，同時有445筆車趟下貨點紀錄）很容易被 limit 截斷，導致「明明路線管理裡
+  // 「即將送達」兩支查詢，各自還有 500/300 筆的 limit，通路店點一多（例如7-11
+  // 88個點，同時有445筆車趟店點紀錄）很容易被 limit 截斷，導致「明明路線管理裡
   // 有安排，客戶查詢卻看不到」。現在一次抓齊，用 delivered 欄位分辨已完成/尚未完成，
   // 完全不會因為狀態或筆數而整批消失。
   //

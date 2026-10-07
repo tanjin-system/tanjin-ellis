@@ -108,8 +108,8 @@ function mapAssignment(row) {
   };
 }
 
-// 下貨點顯示用文字：全系統只顯示代號（例如"萬家福桂林店"），不顯示地址，
-// 只有「下貨點資料庫」那個管理頁面本身例外會顯示完整地址。沒設代號的下貨點
+// 店點顯示用文字：全系統只顯示代號（例如"萬家福桂林店"），不顯示地址，
+// 只有「店點資料庫」那個管理頁面本身例外會顯示完整地址。沒設代號的店點
 // 才退回顯示地址（沒有別的資訊可顯示）。
 function dpLabel(dp) {
   if (!dp) return '';
@@ -224,14 +224,14 @@ function dataUrlToBytesAndType(dataUrl) {
 // ---------------- 讀取全部資料（取代 loadData()） ----------------
 
 // 任務紀錄只會越堆越多、從來不會清（「資料匯出與封存」要admin手動確認才會刪），
-// 每次登入/重新整理都把全部任務連同下貨點、附加照片一次抓光，資料量只會越來越大、
+// 每次登入/重新整理都把全部任務連同店點、附加照片一次抓光，資料量只會越來越大、
 // 越來越慢——尤其「加入主畫面」模式常被手機系統整個殺掉釋放記憶體，比一般瀏覽器
 // 分頁更常從頭冷啟動、更常整批重抓，延遲感特別明顯。
 //
 // 這個天數要照「系統設計要撐住的規模」訂，不是照「現在資料量看起來夠不夠」訂：
 // 目標是100位夥伴、1000+店家同時配送。主控端身份（RLS admin_all policy 是
 // using(true)，看得到全部夥伴的資料）在那個規模下，即使窗口只抓14天，換算
-// 下來大約還是要抓大幾千筆下貨點紀錄；抓90天在那個規模下單次登入的JSON會到
+// 下來大約還是要抓大幾千筆店點紀錄；抓90天在那個規模下單次登入的JSON會到
 // 10幾MB，一定會感覺到卡頓，所以刻意縮到14天，只涵蓋「今日行程/本週期任務清單」
 // 這種天天在看的畫面（這兩個畫面另外各自呼叫 ensureAssignmentsRange 確保涵蓋
 // 實際顯示的區間，不完全依賴這裡的預設值）。夥伴自己登入時因為 RLS
@@ -241,7 +241,7 @@ function dataUrlToBytesAndType(dataUrl) {
 // 按需補抓缺口，不受這個預設窗口大小影響。
 const ASSIGNMENTS_WINDOW_DAYS = 14;
 
-// 目錄資料（夥伴/通路/出發點/下貨點/路線，含路線巢狀的全部版本跟版本下貨點）
+// 目錄資料（夥伴/通路/任務起點/店點/路線，含路線巢狀的全部版本跟版本店點）
 // 幾乎不會變動，但份量是 loadAllData() 裡最大的一塊（尤其是路線，每條都
 // 巢狀帶著全部歷史版本）。這裡先查 catalog_meta 這個單一時間戳記（見
 // schema.sql PART 9，目錄表格任一張有異動，觸發器就會更新它），跟瀏覽器
@@ -389,8 +389,8 @@ async function ensureAssignmentsRange(startDate) {
 }
 
 // 首頁待著不動時的背景自動刷新（見 index.html refreshHomeDataIfIdle）原本是
-// 每25秒重新呼叫整支 loadAllData()——連夥伴/通路/出發點/路線（含每條路線的
-// 全部版本與版本下貨點）這些幾乎不會變動的目錄資料也一起重抓一次。在100位
+// 每25秒重新呼叫整支 loadAllData()——連夥伴/通路/任務起點/路線（含每條路線的
+// 全部版本與版本店點）這些幾乎不會變動的目錄資料也一起重抓一次。在100位
 // 夥伴同時上線的規模下，這代表每25秒就有100個並發連線各自重抓一次幾乎相同
 // 的目錄資料，是完全不必要的資料庫負擔。首頁背景刷新真正需要跟上即時狀態
 // 的只有任務資料（請款-薪資即時利潤、今日尚未配送完成），改成只重新抓「這個
@@ -603,28 +603,28 @@ async function regenerateChannelAccessToken(channelId) {
   return token;
 }
 
-// ---------------- 出發點 ----------------
+// ---------------- 任務起點 ----------------
 
 async function createOrigin(input) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('origins').insert({ address: input.address, label: input.label || null, status: 'active' }).select().single();
-  if (error) throw new Error('新增出發點失敗：' + error.message);
+  if (error) throw new Error('新增任務起點失敗：' + error.message);
   const origin = mapOrigin(data);
   state.data.origins.push(origin);
   return origin;
 }
 
-// 路線名稱（例如「三洋工業零件中心 第一車 上午」）是新增路線當下把出發點
-// 名稱直接寫死存成文字，不會跟著出發點改名自動更新——如果只改 origins
+// 路線名稱（例如「三洋工業零件中心 第一車 上午」）是新增路線當下把任務起點
+// 名稱直接寫死存成文字，不會跟著任務起點改名自動更新——如果只改 origins
 // 這張表，底下已存在的路線名稱會卡在改名前的舊字，變成到處都看得到卻
 // 改不掉的舊名字（夥伴端、週期任務清單、請款結算、薪資結算配送明細都顯示路線
-// 名稱）。所以出發點改名時，這裡一併把底下每一條路線的名稱依「現在的
+// 名稱）。所以任務起點改名時，這裡一併把底下每一條路線的名稱依「現在的
 // label＋自己的 seq/shift」重新組一次、寫回去，不是只把舊字串換成新字串
-// ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟出發點同步。
+// ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟任務起點同步。
 async function updateOrigin(originId, input) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('origins').update({ address: input.address, label: input.label || null }).eq('id', originId).select().single();
-  if (error) throw new Error('更新出發點失敗：' + error.message);
+  if (error) throw new Error('更新任務起點失敗：' + error.message);
   const origin = mapOrigin(data);
   const idx = state.data.origins.findIndex(o => o.id === originId);
   if (idx >= 0) state.data.origins[idx] = origin;
@@ -647,29 +647,29 @@ async function deleteOrDeactivateOrigin(originId) {
   const supabase = getSupabase();
   if (referenced) {
     const { error } = await supabase.from('origins').update({ status: 'inactive' }).eq('id', originId);
-    if (error) throw new Error('停用出發點失敗：' + error.message);
+    if (error) throw new Error('停用任務起點失敗：' + error.message);
     origin.status = 'inactive';
     return 'deactivated';
   }
   const { error } = await supabase.from('origins').delete().eq('id', originId);
-  if (error) throw new Error('刪除出發點失敗：' + error.message);
+  if (error) throw new Error('刪除任務起點失敗：' + error.message);
   state.data.origins = state.data.origins.filter(o => o.id !== originId);
   return 'deleted';
 }
 
-// ---------------- 下貨點 ----------------
+// ---------------- 店點 ----------------
 
 async function createDropPoint(input) {
   const code = (input.code || '').trim();
   if (code) {
     const dupCode = state.data.dropPoints.find(dp => dp.status !== 'inactive' && dp.channelId === input.channelId && (dp.code || '').trim().toLowerCase() === code.toLowerCase());
-    if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的下貨點：「${dupCode.address}」，已取消新增。`);
+    if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的店點：「${dupCode.address}」，已取消新增。`);
   }
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drop_points').insert({
     address: input.address, channel_id: input.channelId, code: input.code || null, status: 'active'
   }).select().single();
-  if (error) throw new Error('新增下貨點失敗：' + error.message);
+  if (error) throw new Error('新增店點失敗：' + error.message);
   const dp = mapDropPoint(data);
   state.data.dropPoints.push(dp);
   return dp;
@@ -679,7 +679,7 @@ async function updateDropPoint(dpId, input) {
   const code = (input.code || '').trim();
   if (code) {
     const dupCode = state.data.dropPoints.find(x => x.id !== dpId && x.status !== 'inactive' && x.channelId === input.channelId && (x.code || '').trim().toLowerCase() === code.toLowerCase());
-    if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的下貨點：「${dupCode.address}」，已取消儲存。`);
+    if (dupCode) throw new Error(`代號重複，同一通路（${channelName(input.channelId)}）已經有代號「${dupCode.code}」的店點：「${dupCode.address}」，已取消儲存。`);
   }
   const supabase = getSupabase();
   const prev = state.data.dropPoints.find(x => x.id === dpId);
@@ -687,18 +687,18 @@ async function updateDropPoint(dpId, input) {
   const { data, error } = await supabase.from('drop_points').update({
     address: input.address, channel_id: input.channelId, code: input.code || null
   }).eq('id', dpId).select().single();
-  if (error) throw new Error('更新下貨點失敗：' + error.message);
+  if (error) throw new Error('更新店點失敗：' + error.message);
   const idx = state.data.dropPoints.findIndex(x => x.id === dpId);
   if (idx >= 0) state.data.dropPoints[idx] = mapDropPoint(data);
 
-  // 通路（所屬分類）改變時，同步套用到「所有」引用這個下貨點的任務快照
-  // （不分完成與否——請款明細/配送紀錄一律依下貨點資料庫目前的分類顯示）。
+  // 通路（所屬分類）改變時，同步套用到「所有」引用這個店點的任務快照
+  // （不分完成與否——請款明細/配送紀錄一律依店點資料庫目前的分類顯示）。
   // 已完成的任務，資料庫那邊（見 sync_drop_point_channel()）也會一併補算
   // 一次請款拆賬金額，這裡重新抓一次那些任務同步最新的金額快照；夥伴費用
   // 不受影響。
   if (channelChanged) {
     const { error: syncErr } = await supabase.rpc('sync_drop_point_channel', { p_drop_point_id: dpId, p_channel_id: input.channelId });
-    if (syncErr) console.error('同步下貨點通路失敗', syncErr.message);
+    if (syncErr) console.error('同步店點通路失敗', syncErr.message);
     else {
       const completedIds = [];
       state.data.assignments.forEach(a => {
@@ -721,13 +721,13 @@ async function deleteOrDeactivateDropPoint(dpId) {
   const supabase = getSupabase();
   if (referenced) {
     const { error } = await supabase.from('drop_points').update({ status: 'inactive' }).eq('id', dpId);
-    if (error) throw new Error('停用下貨點失敗：' + error.message);
+    if (error) throw new Error('停用店點失敗：' + error.message);
     const dp = state.data.dropPoints.find(x => x.id === dpId);
     if (dp) dp.status = 'inactive';
     return 'deactivated';
   }
   const { error } = await supabase.from('drop_points').delete().eq('id', dpId);
-  if (error) throw new Error('刪除下貨點失敗：' + error.message);
+  if (error) throw new Error('刪除店點失敗：' + error.message);
   state.data.dropPoints = state.data.dropPoints.filter(x => x.id !== dpId);
   return 'deleted';
 }
@@ -736,7 +736,7 @@ async function deleteOrDeactivateDropPoint(dpId) {
 
 async function createRoute(input) {
   const origin = state.data.origins.find(o => o.address === input.originAddr);
-  if (!origin) throw new Error('找不到對應的出發點');
+  if (!origin) throw new Error('找不到對應的任務起點');
   const supabase = getSupabase();
   const { data, error } = await supabase.from('routes')
     .insert({ name: input.name, origin_id: origin.id, seq: input.seq, shift: input.shift, region: input.region || null })
@@ -763,7 +763,7 @@ async function deleteRoute(routeId) {
   state.data.routes = state.data.routes.filter(r => r.id !== routeId);
 }
 
-// 請款拆賬公式：扣除「整趟固定金額」通路後，剩餘金額依各通路的下貨點數
+// 請款拆賬公式：扣除「整趟固定金額」通路後，剩餘金額依各通路的店點數
 // 比例分攤（不是依實際跑一趟的公里數重新套公式，因為請款總額本身已經是
 // 人工填寫好的數字）。用最大餘數法分配捨入誤差，確保拆出來的金額加總
 // 一定等於請款總額，不會有零頭對不起來的問題。
@@ -806,7 +806,7 @@ function computeChannelSplitByStoreCount(dropPointIds, billingTotal) {
 }
 
 // 對應 demo 的 saveRouteVersion() + recomputeRouteVersionEnds()：
-// 新增/覆寫一個版本的下貨點順序後，重新計算這條路線所有版本的生效區間
+// 新增/覆寫一個版本的店點順序後，重新計算這條路線所有版本的生效區間
 // （每個版本的 end = 下一個版本 start 前一天，最後一個版本 end = null）。
 // finance = { distanceKm, driverFare, billingTotal } 是這個版本人工填寫的
 // 里程／夥伴費用／請款總額；請款總額依通路自動拆賬，算好的結果一併存起來，
@@ -845,7 +845,7 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   if (dropPointIds.length) {
     const rows = dropPointIds.map((dpId, i) => ({ route_version_id: version.id, drop_point_id: dpId, sequence_no: i + 1 }));
     const { error: pointsErr } = await supabase.from('route_version_points').insert(rows);
-    if (pointsErr) throw new Error('儲存下貨點順序失敗：' + pointsErr.message);
+    if (pointsErr) throw new Error('儲存店點順序失敗：' + pointsErr.message);
   }
   version.dropPointIds = dropPointIds;
   version.distanceKm = financePayload.distance_km;
@@ -866,11 +866,11 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   }
 }
 
-// 路線版本臨時更新（例如訂正下貨點順序、修正拆賬）時，週期任務清單裡已經排好、
+// 路線版本臨時更新（例如訂正店點順序、修正拆賬）時，週期任務清單裡已經排好、
 // 但還沒開始/還沒完成的未來任務，不會自動跟著變——建立任務當下就把內容複製
 // 成快照了（見 createAssignment）。這裡是選配的「一鍵套用」：找出這條路線
 // 所有還沒完成（scheduled/in_progress）、日期落在新版本生效範圍內的任務，
-// 把下貨點清單、里程、夥伴費用、請款拆賬全部重新套用成當時該生效版本的
+// 把店點清單、里程、夥伴費用、請款拆賬全部重新套用成當時該生效版本的
 // 內容，夥伴／日期／車次都不動。已完成的任務本來就凍結（付過的夥伴費用、
 // 請款金額都不該回頭被重算），不在套用範圍內。
 async function regenerateFutureAssignments(routeId, fromDate) {
@@ -885,14 +885,14 @@ async function regenerateFutureAssignments(routeId, fromDate) {
     if (!version) continue;
     const dropPointIds = version.dropPointIds || [];
     const { error: delErr } = await supabase.from('assignment_drop_points').delete().eq('assignment_id', a.id);
-    if (delErr) throw new Error('清除舊下貨點失敗：' + delErr.message);
+    if (delErr) throw new Error('清除舊店點失敗：' + delErr.message);
     if (dropPointIds.length) {
       const rows = dropPointIds.map((dpId, i) => {
         const dp = state.data.dropPoints.find(x => x.id === dpId);
         return { assignment_id: a.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
       });
       const { error: insErr } = await supabase.from('assignment_drop_points').insert(rows);
-      if (insErr) throw new Error('寫入新下貨點失敗：' + insErr.message);
+      if (insErr) throw new Error('寫入新店點失敗：' + insErr.message);
     }
     const { error: updErr } = await supabase.from('assignments').update({
       distance_km: version.distanceKm ?? null,
@@ -945,7 +945,7 @@ async function createAssignment(input) {
       return { assignment_id: assignRow.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
     });
     const { error: pointsErr } = await supabase.from('assignment_drop_points').insert(rows);
-    if (pointsErr) throw new Error('建立任務下貨點失敗：' + pointsErr.message);
+    if (pointsErr) throw new Error('建立任務店點失敗：' + pointsErr.message);
   }
 
   const full = await fetchAssignment(assignRow.id);
@@ -1009,7 +1009,7 @@ async function rolloverNextWeekIfNeeded() {
       dropPointIds: version ? version.dropPointIds : []
     });
   });
-  // 分批新增任務，再分批新增每趟的下貨點。
+  // 分批新增任務，再分批新增每趟的店點。
   for (let i = 0; i < rows.length; i += 200) {
     const chunk = rows.slice(i, i + 200);
     const { data, error } = await supabase.from('assignments').insert(chunk.map(c => c.row)).select('id, route_id, trip_date');
@@ -1026,18 +1026,18 @@ async function rolloverNextWeekIfNeeded() {
   }));
   for (let i = 0; i < pointRows.length; i += 500) {
     const { error } = await supabase.from('assignment_drop_points').insert(pointRows.slice(i, i + 500));
-    if (error) throw new Error('延續下週期任務清單的下貨點失敗：' + error.message);
+    if (error) throw new Error('延續下週期任務清單的店點失敗：' + error.message);
   }
   await supabase.from('schedule_rollovers').update({ created_count: created.length }).eq('week_start', nextStart);
   } catch (err) {
-    // 中途失敗：把已建立的半成品任務清掉（下貨點隨任務一併刪除）並放掉「已補過」記錄，下次打開會重新嘗試。
+    // 中途失敗：把已建立的半成品任務清掉（店點隨任務一併刪除）並放掉「已補過」記錄，下次打開會重新嘗試。
     try {
       for (let i = 0; i < created.length; i += 200) await supabase.from('assignments').delete().in('id', created.slice(i, i + 200).map(c => c.id));
       await supabase.from('schedule_rollovers').delete().eq('week_start', nextStart);
     } catch (e2) { console.error('清理失敗的延續紀錄時出錯', e2); }
     throw err;
   }
-  // 把新建的下週任務讀進記憶體（含下貨點）
+  // 把新建的下週任務讀進記憶體（含店點）
   const { data: full, error: fullErr } = await fetchAllAssignmentPages(() => supabase.from('assignments')
     .select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', nextStart).lte('trip_date', nextEnd));
   if (fullErr) throw new Error('讀取下週期任務清單失敗：' + fullErr.message);
@@ -1055,7 +1055,7 @@ async function deleteAssignment(assignmentId) {
 }
 
 // 臨時異動：已排定或已出發的任務需要臨時換夥伴（例如原本排定的夥伴臨時請假），
-// 不用刪除重建整趟任務（那樣會遺失已經拍的照片、下貨點順序等資料）。
+// 不用刪除重建整趟任務（那樣會遺失已經拍的照片、店點順序等資料）。
 // 已完成的任務不開放異動，維持「完成即封存」的設計。
 async function reassignAssignmentDriver(assignmentId, newDriverId) {
   const a = state.data.assignments.find(x => x.id === assignmentId);
@@ -1074,7 +1074,7 @@ async function markAssignmentDeparted(assignmentId) {
   if (a) a.status = 'in_progress';
 }
 
-// issueNote 有值代表「尚有下貨點未拍照回報」時夥伴填寫的原因說明，跟 demo 的
+// issueNote 有值代表「尚有店點未拍照回報」時夥伴填寫的原因說明，跟 demo 的
 // 「完成本趟」流程一致：同一次操作把 status/has_issue/issue_note 一起送出。
 // 完成時間（completed_at）與夥伴報酬凍結快照（payroll_fare_snapshot）由資料庫
 // 觸發器自動處理；請款金額不再自動計算，改由主控在任務管理裡人工輸入
@@ -1093,7 +1093,7 @@ async function markAssignmentComplete(assignmentId, issueNote) {
 }
 
 // 任務管理的人工輸入：夥伴費用、里程、各通路請款金額都由主控直接 key in，
-// 不再依公里數/下貨點數套公式換算。billingByChannel 是 {channelId: amount} 的物件，
+// 不再依公里數/店點數套公式換算。billingByChannel 是 {channelId: amount} 的物件，
 // 只需要包含這趟車實際牽涉到的通路；總額在這裡直接加總，不留給資料庫算。
 async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billingByChannel }) {
   const total = Object.values(billingByChannel || {}).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -1117,7 +1117,7 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const { bytes, contentType } = dataUrlToBytesAndType(dataUrl);
   const path = `${assignmentId}/${dropPointId}.jpg`;
   const supabase = getSupabase();
-  // upsert:true 讓同一個下貨點重複呼叫這個函式時（夥伴「重新拍照」）直接覆蓋掉
+  // upsert:true 讓同一個店點重複呼叫這個函式時（夥伴「重新拍照」）直接覆蓋掉
   // 同一個路徑的舊照片，不需要另外處理刪除舊檔——這也是「重新拍照」能重用這支
   // 既有函式、不用另外寫一支的原因。
   const { error: upErr } = await supabase.storage.from('assignment-photos').upload(path, bytes, { contentType, upsert: true });
@@ -1127,18 +1127,18 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
 
   const completedAt = new Date().toISOString();
-  // 補拍照片代表這個下貨點其實送達了，之前選的未配達原因（如果有）就不成立，
+  // 補拍照片代表這個店點其實送達了，之前選的未配達原因（如果有）就不成立，
   // 一起清掉，避免畫面同時顯示「已送達」又掛著一個舊的未配達原因標籤。
   const { error: updErr } = await supabase.from('assignment_drop_points')
     .update({ status: 'completed', photo_url: path, completed_at: completedAt, issue_reason: null })
     .eq('id', dropPointId);
-  if (updErr) throw new Error('更新下貨點狀態失敗：' + updErr.message);
+  if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
 
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; }
 }
 
-// 未配達原因：夥伴在單一下貨點旁邊直接選填，不用等到整趟結束才填一個籠統的
-// 備註。設定原因不代表這個下貨點「完成」（status 還是 pending，沒有送達
+// 未配達原因：夥伴在單一店點旁邊直接選填，不用等到整趟結束才填一個籠統的
+// 備註。設定原因不代表這個店點「完成」（status 還是 pending，沒有送達
 // 證明照），只是有了解釋；主控端在「完成本趟」的判斷跟畫面顯示都會把它
 // 當作「已處理」看待。
 async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
@@ -1150,7 +1150,7 @@ async function setDropPointIssueReason(assignmentId, dropPointId, reason) {
   if (dp) dp.issueReason = reason;
 }
 
-// 附加媒體（多張照片／影片）：跟主要送達證明照是分開的一張表，一個下貨點可以有
+// 附加媒體（多張照片／影片）：跟主要送達證明照是分開的一張表，一個店點可以有
 // 很多筆，不會互相覆蓋。items 是呼叫端（index.html）已經處理好的
 // [{bytes, contentType, mediaType}, ...]，圖片已經過 compressImageFile 壓縮、
 // 影片則是原始檔案位元組（不做壓縮）。
@@ -1367,7 +1367,7 @@ async function deleteTripPayLog(logId) {
 // 已付款（現金／轉帳）：主控填「區間日期＋付款日期」，區間內這位夥伴已完成、還沒標已付的任務
 // 一次標為已付（付款金額依各趟報酬比例攤到每一趟，所以跨月時各月各自算得出已付多少）。
 // 只影響「可領淨額」，不影響勞報單金額，跟預支是兩個獨立功能；同一次付款共用 paid_group。
-// 只抓必要欄位，不連帶抓下貨點，區間再長也很輕。
+// 只抓必要欄位，不連帶抓店點，區間再長也很輕。
 async function fetchDriverTripsInRange(driverId, start, end) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('assignments')
@@ -1806,14 +1806,14 @@ async function revokeStatements(ids) {
   state.data.statements = state.data.statements.filter(x => !idSet.has(x.id));
 }
 
-// 夥伴首頁「同出發點今日出發狀況」：呼叫 schema.sql 裡的
+// 夥伴首頁「同任務起點今日出發狀況」：呼叫 schema.sql 裡的
 // security definer 函式 driver_depot_overview()，只回傳沒有金額的窄
 // 欄位（車次名稱/夥伴姓名/狀態），繞過夥伴只能查自己任務的RLS限制，
 // 但不會洩漏其他夥伴的薪資/請款資料。
 async function fetchDepotOverview(date) {
   const supabase = getSupabase();
   const { data, error } = await supabase.rpc('driver_depot_overview', { p_date: date });
-  if (error) { console.error('取得同出發點車隊狀況失敗:', error.message); return []; }
+  if (error) { console.error('取得同任務起點車隊狀況失敗:', error.message); return []; }
   return (data || []).map(r => ({
     assignmentId: r.assignment_id,
     routeName: r.route_name,
@@ -1973,7 +1973,7 @@ async function refreshFuelClaims() {
   state.data.fuelClaims = (data || []).map(mapFuelClaim);
 }
 
-// 「尚未月結確認」名單用：只抓指定月份已完成任務的精簡欄位（沒有下貨點），一樣分頁避開1000筆上限。
+// 「尚未月結確認」名單用：只抓指定月份已完成任務的精簡欄位（沒有店點），一樣分頁避開1000筆上限。
 // 同一個月份在這個 session 只查一次（state._settleCache），首頁提醒與勞報單頁共用。
 async function fetchCompletedTripsLite(monthStr) {
   const supabase = getSupabase();

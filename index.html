@@ -187,7 +187,7 @@ function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d
 function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
 function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?r.name:'—'; }
 function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(addr); }
-// 路線規劃用的多點導航連結：出發點固定當起點，停靠站依「我們給的順序」
+// 路線規劃用的多點導航連結：任務起點固定當起點，停靠站依「我們給的順序」
 // 依序放進waypoints。原本有加optimize:true想交給Google自動排出最順的
 // 行車順序，但實測手機上的Google地圖App根本不認得這個網址參數（那是
 // 舊版Directions URL API網頁版才吃的語法），結果整串"optimize:true"被
@@ -361,7 +361,7 @@ async function capturePhoto(fallbackInput, maxShots, onDataUrls){
 }
 // 附加照片（「新增照片」按鈕，跟主要送達照片是分開的兩件事，見
 // uploadDropPointPhoto）：全部進 assignment_drop_point_media，不影響
-// 下貨點的完成狀態。dataUrls 是呼叫端已經處理好（相機直接擷取或
+// 店點的完成狀態。dataUrls 是呼叫端已經處理好（相機直接擷取或
 // compressImageFile壓縮過）的圖片dataURL陣列——影片拍攝功能已關閉。
 async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
   const items = dataUrls.map(dataUrl => ({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' }));
@@ -608,8 +608,8 @@ function tripBilling(dropPoints, distanceKm, channelsList){
   const byChannel = {};
   let totalAmount = 0;
 
-  // 共配拆分：所有「依里程+下貨點數」公式的通路，共用同一套里程/點數費率，
-  // 先算出整趟共同總額，再依各通路下貨點數比例分攤（同一任務共配多個通路時使用）。
+  // 共配拆分：所有「依里程+店點數」公式的通路，共用同一套里程/點數費率，
+  // 先算出整趟共同總額，再依各通路店點數比例分攤（同一任務共配多個通路時使用）。
   const pooledIds = Object.keys(countByChannel).filter(chId=>{
     const ch = channels.find(c=>c.id===chId);
     return ch && ch.formulaType !== 'flat_per_trip';
@@ -668,7 +668,7 @@ function currentChannelPeriodEnd(channel, todayStr){
   }
   return null;
 }
-// 同一個出發點／車次／班次如果因為停靠站不同拆成好幾條路線（例如「第八車
+// 同一個任務起點／車次／班次如果因為停靠站不同拆成好幾條路線（例如「第八車
 // （週二到週五）」是給夥伴跑的實際版本，「第八車(星期一)」是對客戶報價的
 // 版本），這裡把它們視為同一家族：找出家族裡標「星期一／週一」的那條路線。
 function findRouteFamily(route){
@@ -705,7 +705,7 @@ function channelBillingTotal(channelId, start, end, assignmentsList = state.data
   return {total, contributing};
 }
 // 哪些路線曾經送過這個通路（不限日期區間，用來找版本異動日期切區間，
-// 以及列出這個通路底下有哪些供應商／出發點）。
+// 以及列出這個通路底下有哪些供應商／任務起點）。
 function routesForChannel(channelId){
   return state.data.routes.filter(r=> (r.versions||[]).some(v=>
     (v.dropPointIds||[]).some(id=>{
@@ -732,7 +732,7 @@ function splitPeriodByVersionChanges(channelId, start, end){
     return { start: segStart, end: segEnd };
   });
 }
-// 通路請款總額依「供應商（出發點）」拆開顯示（對應舊Excel「各區費用總覽」）。
+// 通路請款總額依「供應商（任務起點）」拆開顯示（對應舊Excel「各區費用總覽」）。
 function channelOriginBreakdown(channelId, start, end, assignmentsList = state.data.assignments){
   const { contributing } = channelBillingTotal(channelId, start, end, assignmentsList);
   const byOrigin = {};
@@ -847,8 +847,8 @@ const ADMIN_TABS = [
   {id:'schedule', label:'週期任務清單'},
   {id:'drivers', label:'夥伴資料'},
   {id:'channels', label:'通路管理'},
-  {id:'dropPoints', label:'下貨點資料庫'},
-  {id:'origins', label:'出發點資料庫'},
+  {id:'dropPoints', label:'店點資料庫'},
+  {id:'origins', label:'任務起點資料庫'},
   {id:'routes', label:'路線管理'},
   {id:'payroll', label:'薪資結算'},
   {id:'slips', label:'勞報單'},
@@ -1038,24 +1038,24 @@ function renderAnnouncementListBody(){
   });
 }
 
-// 今天還沒配送完成的車次/下貨點，給主控掌握即時進度用。上午車次只在
+// 今天還沒配送完成的車次/店點，給主控掌握即時進度用。上午車次只在
 // 06:00–14:00這個區間顯示，下午車次只在14:00–18:30這個區間顯示（主控
 // 明確指定的兩個時段，不是「還沒處理完就一直留著」）；呼叫端（見
 // renderHomeAdmin）依現在時間決定要傳哪個班次進來。每次開系統/重新
-// 整理都是重新算一次「現在」的狀態，下貨點一旦被夥伴標記完成，下次
+// 整理都是重新算一次「現在」的狀態，店點一旦被夥伴標記完成，下次
 // 渲染這個清單就會自動不見，不需要另外做「清除」動作。
 function undeliveredTodayGroups(shifts){
   const today = todayStr();
   return state.data.assignments
-    // 車次本身一旦完成（夥伴按了「完成本趟」），剩下沒送達的下貨點一定
+    // 車次本身一旦完成（夥伴按了「完成本趟」），剩下沒送達的店點一定
     // 已經有原因了（不論是逐店選的原因，還是結束時補填的整趟備註），
     // 不該再留在即時監控清單裡。
     .filter(a=> a.date===today && a.status!=='cancelled' && a.status!=='completed')
     .map(a=> ({ a, route: state.data.routes.find(r=>r.id===a.routeId) }))
     .filter(({route})=> !shifts || shifts.includes((route||{}).shift))
     // 依出發地排序，同出發地內再依車次/班次排序——不然這個清單原本是照
-    // assignments陣列本身的順序（近似隨機），同一個出發點的車次會分散
-    // 在畫面各處，主控要一台一台找很亂。有出發點資料才排得動的話用
+    // assignments陣列本身的順序（近似隨機），同一個任務起點的車次會分散
+    // 在畫面各處，主控要一台一台找很亂。有任務起點資料才排得動的話用
     // routeSortCompare（跟路線管理/週期任務清單同一套排序邏輯），route資料
     // 缺失（理論上不會發生）就排到最後面，不讓程式整個掛掉。
     .sort((x,y)=>{
@@ -1070,7 +1070,7 @@ function undeliveredTodayGroups(shifts){
       // scheduled）——畫面前面打一個勾，讓主控一眼看出「這台已經出發在跑了」
       // 跟「還沒出發」的差別，不用一個一個點進週期任務清單確認。
       started: a.status==='in_progress',
-      // 已經選了未配達原因的下貨點視為「已處理」（有解釋了），不算在即時
+      // 已經選了未配達原因的店點視為「已處理」（有解釋了），不算在即時
       // 監控清單裡，避免主控一直看到其實夥伴已經回報過原因的店。
       // 店名不再加通路名稱前綴（畫面上已經夠擠了，通路名稱對主控來說不是
       // 必要資訊）。
@@ -1081,7 +1081,7 @@ function undeliveredTodayGroups(shifts){
 // 上午車次只在06:00–14:00區間顯示，下午車次只在14:00–18:30區間顯示，
 // 區間外（太早或太晚）整個面板不顯示——這是主控明確指定的兩個時間段，
 // 不是「累加、只看有沒有處理完」，是單純的時段切換。主控首頁的「今日
-// 尚未配送完成」跟夥伴首頁的「同出發點今日出發狀況」共用同一套時段判斷。
+// 尚未配送完成」跟夥伴首頁的「同任務起點今日出發狀況」共用同一套時段判斷。
 // 2026年（民國115年）台灣國定假日，資料來源：行政院人事行政總處公告
 // 行事曆。greeting是null的幾個（和平紀念日、兒童節／清明節、台灣光復節、
 // 行憲紀念日）是紀念性質的節日，不適合用「快樂」這種歡慶字眼，夥伴端
@@ -1127,10 +1127,10 @@ function currentProgressShifts(){
   if(inPmWindow) return ['PM'];
   return null;
 }
-// 夥伴首頁「同出發點今日出發狀況」：同出發點所有還沒完成的車次都列出來，
-// 只顯示「出發了沒」，不含下貨點/店名等配送細節；完成的車次直接從清單
+// 夥伴首頁「同任務起點今日出發狀況」：同任務起點所有還沒完成的車次都列出來，
+// 只顯示「出發了沒」，不含店點/店名等配送細節；完成的車次直接從清單
 // 消失。夥伴登入時 state.data.assignments 因為RLS只有自己的任務，算不出
-// 「同出發點其他車次」，要透過 fetchDepotOverview()（呼叫schema.sql的
+// 「同任務起點其他車次」，要透過 fetchDepotOverview()（呼叫schema.sql的
 // security definer函式）另外查；主控本人或「主控檢視中」預覽時本來就有
 // 完整資料，直接從 state.data 算，確保跟夥伴實際登入看到的內容一致。
 let depotOverviewCache = { key:null, rows:null };
@@ -1164,9 +1164,9 @@ async function renderHomeAdmin(c){
     {id:'schedule', label:'週期任務清單', sub:'指派夥伴與路線'},
     {id:'drivers', label:'夥伴資料', sub:'含車輛與銀行資訊'},
     {id:'channels', label:'通路管理', sub:'請款週期設定'},
-    {id:'dropPoints', label:'下貨點資料庫', sub:'依通路分類'},
-    {id:'origins', label:'出發點資料庫', sub:'常用出發地'},
-    {id:'routes', label:'路線管理', sub:'版本化下貨點順序'},
+    {id:'dropPoints', label:'店點資料庫', sub:'依通路分類'},
+    {id:'origins', label:'任務起點資料庫', sub:'常用出發地'},
+    {id:'routes', label:'路線管理', sub:'版本化店點順序'},
     {id:'payroll', label:'薪資結算', sub:'調整項與可領淨額'},
     {id:'slips', label:'勞報單', sub:'月結、區間開單與簽名'},
     {id:'billing', label:'請款結算', sub:'通路請款拆分'},
@@ -1299,7 +1299,7 @@ function renderHomeDriver(c){
       </div>`).join('')}
     </div>` : ''}
     ${currentProgressShifts() ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">🚚 同出發點今日出發狀況</h3>
+      <div class="toolbar"><h3 style="margin:0;">🚚 同任務起點今日出發狀況</h3>
         <span style="font-size:11px; color:var(--ink-soft);">即時更新中・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
           <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
         </span>
@@ -1325,7 +1325,7 @@ function renderHomeDriver(c){
         <div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);">
           <strong>${escapeHtml(g.routeName)} ${escapeHtml(g.driverName)}</strong>
           ${g.status==='in_progress' ? ' <span class="badge progress">已出發</span>' : ' <span class="badge pending">尚未出發</span>'}
-        </div>`).join('') : '<div class="empty">同出發點的車次今天都已配送完成 🎉</div>';
+        </div>`).join('') : '<div class="empty">同任務起點的車次今天都已配送完成 🎉</div>';
     });
   }
 }
@@ -1333,9 +1333,9 @@ function renderHomeDriver(c){
 // ---------- 夥伴資料（含車輛、銀行細節） ----------
 let editingDriverId = null;
 let driverListSearch = '';
-let driverGroupExpandedSet = new Set(); // 使用者手動展開過的出發點名稱，預設全部收合
-// 依這位夥伴「最近一筆還沒取消的排班」找出他固定跑哪個出發點——一個
-// 夥伴理論上都固定跑同一個出發點的車，用最近一筆代表就好。優先找今天
+let driverGroupExpandedSet = new Set(); // 使用者手動展開過的任務起點名稱，預設全部收合
+// 依這位夥伴「最近一筆還沒取消的排班」找出他固定跑哪個任務起點——一個
+// 夥伴理論上都固定跑同一個任務起點的車，用最近一筆代表就好。優先找今天
 // 或未來的排班（比較貼近「現在」的分組狀態），完全沒有未來排班的話
 // 退回找最近一筆過去的排班；兩種都找不到（從來沒被排過班）就回傳null，
 // 畫面上歸類到「未分類」。
@@ -1483,7 +1483,7 @@ function renderDrivers(c){
       listEl.innerHTML = `<div class="empty">${kw?'找不到符合的夥伴':'尚無夥伴資料'}</div>`;
       return;
     }
-    // 依「這位夥伴目前跑哪個出發點」分組並收合，跟下貨點資料庫／路線管理
+    // 依「這位夥伴目前跑哪個任務起點」分組並收合，跟店點資料庫／路線管理
     // 同一套分組收合邏輯：搜尋中的話全部自動展開，不然預設全部收合。
     const byOrigin = {};
     filteredDrivers.forEach(d=>{
@@ -1668,7 +1668,7 @@ let editingChannelId = null;
 function renderChannels(c){
   c.innerHTML = `
     <h2 class="section-title">通路管理</h2>
-    <p class="section-sub">每個通路可以設定自己的請款依據：「依里程+下貨點數」的通路若同任務共配，會先算出共同總額再依點數比例分攤；「整趟固定金額」（例如牧穀）則不參與共配、獨立計算。也可設定請款週期規則。</p>
+    <p class="section-sub">每個通路可以設定自己的請款依據：「依里程+店點數」的通路若同任務共配，會先算出共同總額再依點數比例分攤；「整趟固定金額」（例如牧穀）則不參與共配、獨立計算。也可設定請款週期規則。</p>
     <div class="panel">
       <div class="grid4">
         <div class="field"><label>通路名稱</label><input id="chName"></div>
@@ -1680,10 +1680,10 @@ function renderChannels(c){
       </div>
       <div class="grid4">
         <div class="field"><label>請款依據</label>
-          <select id="chFormula"><option value="per_km_and_point">依里程+下貨點數</option><option value="flat_per_trip">整趟固定金額</option></select>
+          <select id="chFormula"><option value="per_km_and_point">依里程+店點數</option><option value="flat_per_trip">整趟固定金額</option></select>
         </div>
         <div class="field"><label>每公里（元）</label><input id="chRateKm" type="number" value="35"></div>
-        <div class="field"><label>每下貨點（元）</label><input id="chRatePoint" type="number" value="50"></div>
+        <div class="field"><label>每店點（元）</label><input id="chRatePoint" type="number" value="50"></div>
         <div class="field"><label>整趟固定金額（元）</label><input id="chFlat" type="number" placeholder="選「整趟固定金額」時填寫"></div>
       </div>
       <div class="field" style="max-width:160px;"><label>請款金額</label>
@@ -1733,10 +1733,10 @@ function renderChannelList(){
                 </div>
                 <div class="grid4">
                   <div class="field"><label>請款依據</label>
-                    <select id="ecFormula"><option value="per_km_and_point" ${ch.formulaType==='per_km_and_point'?'selected':''}>依里程+下貨點數</option><option value="flat_per_trip" ${ch.formulaType==='flat_per_trip'?'selected':''}>整趟固定金額</option></select>
+                    <select id="ecFormula"><option value="per_km_and_point" ${ch.formulaType==='per_km_and_point'?'selected':''}>依里程+店點數</option><option value="flat_per_trip" ${ch.formulaType==='flat_per_trip'?'selected':''}>整趟固定金額</option></select>
                   </div>
                   <div class="field"><label>每公里（元）</label><input id="ecRateKm" type="number" value="${ch.rateKm}"></div>
-                  <div class="field"><label>每下貨點（元）</label><input id="ecRatePoint" type="number" value="${ch.ratePoint}"></div>
+                  <div class="field"><label>每店點（元）</label><input id="ecRatePoint" type="number" value="${ch.ratePoint}"></div>
                   <div class="field"><label>整趟固定金額（元）</label><input id="ecFlat" type="number" value="${ch.flatAmount}"></div>
                 </div>
                 <div class="field" style="max-width:160px;"><label>請款金額</label>
@@ -1805,31 +1805,31 @@ function renderChannelList(){
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const ch = state.data.channels.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除通路「${ch?.name||''}」嗎？\n\n如果這個通路已有下貨點或歷史任務關聯，系統會改為「已停用」保留歷史分類；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要刪除通路「${ch?.name||''}」嗎？\n\n如果這個通路已有店點或歷史任務關聯，系統會改為「已停用」保留歷史分類；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateChannel(btn.dataset.del);
-        if(result==='deactivated') alert('這個通路已有下貨點或歷史任務關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
+        if(result==='deactivated') alert('這個通路已有店點或歷史任務關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
         renderContent();
       }catch(err){ alert(err.message); }
     };
   });
 }
 
-// ---------- 下貨點資料庫 ----------
+// ---------- 店點資料庫 ----------
 let editingDpId = null;
 const dpExpandedChannels = new Set(); // 使用者手動展開過的通路id，預設全部收合
 function renderDropPoints(c){
   const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
   c.innerHTML = `
-    <h2 class="section-title">下貨點資料庫</h2>
-    <p class="section-sub">先建立好常用下貨點，之後在「路線管理」用選單直接組成路線，不用每次手key地址。</p>
+    <h2 class="section-title">店點資料庫</h2>
+    <p class="section-sub">先建立好常用店點，之後在「路線管理」用選單直接組成路線，不用每次手key地址。</p>
     <div class="panel">
       <div class="grid3">
         <div class="field"><label>地址</label><input id="dpAddr"></div>
         <div class="field"><label>所屬通路</label><select id="dpChannel">${chOpts}</select></div>
         <div class="field"><label>備註代號（選填）</label><input id="dpCode" placeholder="例：A"></div>
       </div>
-      <button class="btn amber" id="addDp">新增下貨點</button>
+      <button class="btn amber" id="addDp">新增店點</button>
     </div>
     <div class="field"><label>搜尋地址或代號</label><input id="dpSearch" placeholder="輸入關鍵字篩選（數量多時建議先搜尋）"></div>
     <div id="dpListBody"></div>
@@ -1876,7 +1876,7 @@ function renderDpListBody(){
             }
             return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}</td><td><span class="badge ${dp.status==='inactive'?'pending':'completed'}">${dp.status==='inactive'?'已停用':'使用中'}</span></td>
             <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn danger" data-del="${dp.id}">刪除</button></td></tr>`;
-          }).join('') || `<tr><td colspan="4"><div class="empty">此通路尚無下貨點</div></td></tr>`}
+          }).join('') || `<tr><td colspan="4"><div class="empty">此通路尚無店點</div></td></tr>`}
         </tbody>
       </table>
       </div>
@@ -1905,28 +1905,28 @@ function renderDpListBody(){
   wrap.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除下貨點「${dp?dpLabel(dp):''}」嗎？\n\n如果這個下貨點已被路線版本或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要刪除店點「${dp?dpLabel(dp):''}」嗎？\n\n如果這個店點已被路線版本或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateDropPoint(btn.dataset.del);
-        if(result==='deactivated') alert('這個下貨點已被路線版本或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        if(result==='deactivated') alert('這個店點已被路線版本或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
         renderContent();
       }catch(err){ alert(err.message); }
     };
   });
 }
 
-// ---------- 出發點資料庫 ----------
+// ---------- 任務起點資料庫 ----------
 let editingOgId = null;
 function renderOrigins(c){
   c.innerHTML = `
-    <h2 class="section-title">出發點資料庫</h2>
-    <p class="section-sub">先建立好常用出發點，路線與週期任務清單中即可用選單挑選，不用每次手key。</p>
+    <h2 class="section-title">任務起點資料庫</h2>
+    <p class="section-sub">先建立好常用任務起點，路線與週期任務清單中即可用選單挑選，不用每次手key。</p>
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>地址</label><input id="ogAddr"></div>
         <div class="field"><label>備註名稱（選填）</label><input id="ogLabel" placeholder="例：總倉"></div>
       </div>
-      <button class="btn amber" id="addOg">新增出發點</button>
+      <button class="btn amber" id="addOg">新增任務起點</button>
     </div>
     <div id="ogList"></div>
   `;
@@ -1960,7 +1960,7 @@ function renderOgList(){
             }
             return `<tr><td>${og.label||'—'}</td><td>${og.address}</td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
             <td><button class="btn ghost" data-editog="${og.id}">編輯</button> ${og.status!=='inactive'?`<button class="btn danger" data-del="${og.id}">刪除</button>`:''}</td></tr>`;
-          }).join('') || `<tr><td colspan="4"><div class="empty">尚無出發點資料</div></td></tr>`}
+          }).join('') || `<tr><td colspan="4"><div class="empty">尚無任務起點資料</div></td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1980,10 +1980,10 @@ function renderOgList(){
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const og = state.data.origins.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除出發點「${og?.label||og?.address||''}」嗎？\n\n如果這個出發點已被路線或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要刪除任務起點「${og?.label||og?.address||''}」嗎？\n\n如果這個任務起點已被路線或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
       try{
         const result = await deleteOrDeactivateOrigin(btn.dataset.del);
-        if(result==='deactivated') alert('這個出發點已被路線或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        if(result==='deactivated') alert('這個任務起點已被路線或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
         renderContent();
       }catch(err){ alert(err.message); }
     };
@@ -1999,10 +1999,10 @@ function renderRoutes(c){
   const regionOpts = distinctRegions().map(rg=>`<option value="${rg}"></option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">路線管理</h2>
-    <p class="section-sub">路線本身不綁夥伴。修改下貨點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
+    <p class="section-sub">路線本身不綁夥伴。修改店點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
     <div class="panel">
       <div class="grid4">
-        <div class="field"><label>出發點</label><select id="rOrigin">${ogOptsTop}</select></div>
+        <div class="field"><label>任務起點</label><select id="rOrigin">${ogOptsTop}</select></div>
         <div class="field"><label>車次</label><input id="rSeq" placeholder="例：第一車"></div>
         <div class="field"><label>班次</label><select id="rShift"><option value="AM">上午</option><option value="PM">下午</option></select></div>
         <div class="field"><label>地區（選填，用於下方收合分組）</label><input id="rRegion" list="regionOptions" placeholder="例：北區"></div>
@@ -2017,7 +2017,7 @@ function renderRoutes(c){
     const seq = document.getElementById('rSeq').value.trim();
     const shift = document.getElementById('rShift').value;
     const region = document.getElementById('rRegion').value.trim();
-    if(!originAddr || !seq){ alert('請選擇出發點並輸入車次'); return; }
+    if(!originAddr || !seq){ alert('請選擇任務起點並輸入車次'); return; }
     const og = state.data.origins.find(o=>o.address===originAddr);
     const name = `${og?(og.label||og.address):originAddr} ${seq} ${shift==='AM'?'上午':'下午'}`;
     try{
@@ -2048,7 +2048,7 @@ function ensureDraft(route){
 function renderRouteList(){
   const el = document.getElementById('routeList');
   el.innerHTML = `
-    <div class="field" style="max-width:320px;"><label>搜尋路線（依名稱／出發點／車次）</label><input id="routeSearch" value="${routeListSearch}" placeholder="輸入關鍵字篩選，路線多時建議先搜尋"></div>
+    <div class="field" style="max-width:320px;"><label>搜尋路線（依名稱／任務起點／車次）</label><input id="routeSearch" value="${routeListSearch}" placeholder="輸入關鍵字篩選，路線多時建議先搜尋"></div>
     <div id="routeTableWrap"></div>
   `;
   renderRouteTable();
@@ -2168,7 +2168,7 @@ function renderRouteDetail(rid){
   const renderVer = v => `
       <div class="version-block ${!v.end?'open':''}">
         <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
-        <div style="font-size:12.5px; margin:4px 0;">出發點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
+        <div style="font-size:12.5px; margin:4px 0;">任務起點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
         <div style="font-size:12.5px; margin:8px 0 0;">夥伴費用 <strong>$${money(v.driverFare||0)}</strong></div>
         ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
@@ -2181,7 +2181,7 @@ function renderRouteDetail(rid){
       <div class="toolbar"><strong>${r.name}</strong>
         ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
       </div>
-      <p style="font-size:12.5px; color:var(--ink-soft);">出發點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改出發點請新增一條路線）</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">任務起點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改任務起點請新增一條路線）</p>
       <div class="field" style="max-width:260px;"><label>地區（選填，用於路線列表收合分組）</label>
         <div style="display:flex; gap:6px;">
           <input id="rvRegion" list="regionOptionsDetail" value="${r.region||''}" style="flex:1;">
@@ -2203,7 +2203,7 @@ function renderRouteDetail(rid){
       ${!versions.length ? '<div class="empty">尚無版本，請於下方建立</div>' : ''}
       <div class="field" style="margin-top:10px; max-width:220px;"><label>生效日期</label><input type="date" value="${todayStr()}" data-effdate="${r.id}"></div>
 
-      <label>搜尋下貨點加入路線（輸入地址或代號關鍵字）</label>
+      <label>搜尋店點加入路線（輸入地址或代號關鍵字）</label>
       <input id="dpSearchInput" value="${draft.dpSearch||''}" placeholder="例：忠孝東路，或代號A">
       <div id="dpSearchResults" style="margin-top:6px;"></div>
 
@@ -2213,14 +2213,14 @@ function renderRouteDetail(rid){
         ${draft.order.map((id,i)=>{
           const dp = state.data.dropPoints.find(x=>x.id===id);
           return `<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
-            <span>${i+1}. ${dp?dpLabel(dp):'（已刪除的下貨點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
+            <span>${i+1}. ${dp?dpLabel(dp):'（已刪除的店點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
             <span>
               <button class="btn ghost" data-up="${r.id}|${i}" ${i===0?'disabled':''}>↑</button>
               <button class="btn ghost" data-down="${r.id}|${i}" ${i===draft.order.length-1?'disabled':''}>↓</button>
               <button class="btn danger" data-remove="${r.id}|${i}">移除</button>
             </span>
           </div>`;
-        }).join('') || '<div class="empty">尚未加入任何下貨點</div>'}
+        }).join('') || '<div class="empty">尚未加入任何店點</div>'}
       </div>
       <h4 style="margin:14px 0 4px;">費用資料（人工輸入，跟著這個版本走）</h4>
       <div class="grid3">
@@ -2250,7 +2250,7 @@ function renderRouteDetail(rid){
     resultsEl.innerHTML = kw ? (matches.map(dp=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
         <span>${dpLabel(dp)}（${channelName(dp.channelId)}）</span>
         <button class="btn ghost" data-dpaddbtn="${r.id}|${dp.id}">加入</button>
-      </div>`).join('') || '<div class="empty">找不到符合的下貨點</div>') : '<p style="font-size:11.5px; color:var(--ink-soft);">輸入關鍵字開始搜尋（下貨點數量多時，不會一次全部列出）</p>';
+      </div>`).join('') || '<div class="empty">找不到符合的店點</div>') : '<p style="font-size:11.5px; color:var(--ink-soft);">輸入關鍵字開始搜尋（店點數量多時，不會一次全部列出）</p>';
     resultsEl.querySelectorAll('[data-dpaddbtn]').forEach(btn=>{
       btn.onclick = ()=>{
         const [routeId, dpId] = btn.dataset.dpaddbtn.split('|');
@@ -2330,7 +2330,7 @@ function renderRouteDetail(rid){
       draft.billingByChannel = suggested;
     }
     const cids = channelsInDraft();
-    if(!cids.length){ el.innerHTML = '<span style="font-size:12px;color:var(--ink-soft);">尚未加入下貨點</span>'; return; }
+    if(!cids.length){ el.innerHTML = '<span style="font-size:12px;color:var(--ink-soft);">尚未加入店點</span>'; return; }
     el.innerHTML = cids.map(cid=>`
       <div class="field" style="display:inline-block; max-width:160px; margin-right:10px;">
         <label>${channelName(cid)}</label>
@@ -2377,7 +2377,7 @@ function renderRouteDetail(rid){
       const rid2 = btn.dataset.savever;
       const effDate = detailEl.querySelector(`[data-effdate="${rid2}"]`).value;
       const ids = routeDraft[rid2].order;
-      if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個下貨點'); return; }
+      if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個店點'); return; }
       try{
         // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
         // 目前打的數字，避免兩者不小心存成不一致（實際請款/夥伴結算只認拆賬金額，
@@ -2395,7 +2395,7 @@ function renderRouteDetail(rid){
         // 複製成快照了），這裡問一次要不要一鍵套用，避免每一趟都要手動重建。
         const futureCount = state.data.assignments.filter(a=>
           a.routeId===rid2 && a.date>=effDate && (a.status==='scheduled'||a.status==='in_progress')).length;
-        if(futureCount>0 && confirm(`週期任務清單中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（下貨點、里程、夥伴費用、請款拆賬）套用到這些車次嗎？夥伴與日期不會改變，已完成的車次不受影響。`)){
+        if(futureCount>0 && confirm(`週期任務清單中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（店點、里程、夥伴費用、請款拆賬）套用到這些車次嗎？夥伴與日期不會改變，已完成的車次不受影響。`)){
           try{
             const { updated } = await regenerateFutureAssignments(rid2, effDate);
             alert(`已套用到 ${updated} 趟未來車次。`);
@@ -2407,7 +2407,7 @@ function renderRouteDetail(rid){
   });
 }
 
-// ---------- 週期任務清單（直接指派夥伴＋出發點，這裡才產生實際任務） ----------
+// ---------- 週期任務清單（直接指派夥伴＋任務起點，這裡才產生實際任務） ----------
 const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
 // 車次排序用：從「第X車...」抓出中文數字X換算成阿拉伯數字，抓不到的排到最後面
 // （維持原本相對順序，不會亂跳）。支援到「第十九車」，車隊規模通常用不到更多。
@@ -2422,7 +2422,7 @@ function seqSortKey(seq){
   if(s[1] === '十') return (digit[s[0]] || 0) * 10 + (s[2] ? (digit[s[2]] || 0) : 0);
   return 9999;
 }
-// 所有列出多條路線的地方都用這個排序：先依出發點名稱、再依車次數字（第一車
+// 所有列出多條路線的地方都用這個排序：先依任務起點名稱、再依車次數字（第一車
 // ～第十車…）、同車次再讓上午排在下午前面——不管是路線管理列表、批次建立
 // 的路線選單、還是其他任何要列出多條路線的畫面，統一套用這個順序。
 function routeSortCompare(a,b){
@@ -2453,19 +2453,19 @@ async function renderScheduleAdmin(c){
     if(state.tab!=='schedule') return; // 使用者可能已經切走這一頁
   }
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  // 路線依「出發點」分組（optgroup），出發點順序跟出發點資料庫一致，組內維持原本的車次排序。
+  // 路線依「任務起點」分組（optgroup），任務起點順序跟任務起點資料庫一致，組內維持原本的車次排序。
   const routeOpts = (()=>{
     const all = sortedRoutes();
     const groups = state.data.origins.map(og=>({ label: og.label||og.address, list: all.filter(r=>r.originAddr===og.address) }));
     const known = new Set(state.data.origins.map(og=>og.address));
     const rest = all.filter(r=>!known.has(r.originAddr));
-    if(rest.length) groups.push({ label: '（未指定出發點）', list: rest });
+    if(rest.length) groups.push({ label: '（未指定任務起點）', list: rest });
     return groups.filter(g=>g.list.length).map(g=>`<optgroup label="${escapeHtml(g.label)}">${g.list.map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}</optgroup>`).join('');
   })();
-  const originFilterOpts = '<option value="">全部出發點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  const originFilterOpts = '<option value="">全部任務起點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">週期任務清單</h2>
-    <p class="section-sub">格式對照您原本的紙本班表：依出發點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派夥伴、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。夥伴費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週期任務清單。</p>
+    <p class="section-sub">格式對照您原本的紙本班表：依任務起點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派夥伴、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。夥伴費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週期任務清單。</p>
     <div class="panel no-print">
       <p style="font-size:12.5px; font-weight:600; margin:0 0 8px;">批次建立（例如整週一~五都跑同一路線）</p>
       <div class="grid4">
@@ -2563,11 +2563,11 @@ function renderWeekGrid(containerId, dates){
     if(!route) return `<td class="grid-black"></td>`;
     const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
     if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
-    // 驚嘆號的判斷改成「這趟只要有任何一個下貨點沒有status=completed」就顯示，
+    // 驚嘆號的判斷改成「這趟只要有任何一個店點沒有status=completed」就顯示，
     // 不管是還沒處理、還是夥伴已經填了未配達原因（通路未下單/央廚未出貨等）——
     // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
-    // 會漏掉「夥伴把每個下貨點都填了原因、allHandled視為true、結案時沒觸發
-    // has_issue」的情況（詳細是哪個下貨點、什麼原因，只在點進去的任務明細顯示，
+    // 會漏掉「夥伴把每個店點都填了原因、allHandled視為true、結案時沒觸發
+    // has_issue」的情況（詳細是哪個店點、什麼原因，只在點進去的任務明細顯示，
     // 這裡週期任務清單格子維持簡單，不重複塞理由文字）。
     return `<td class="grid-cell" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
   }
@@ -2638,7 +2638,7 @@ function renderWeekGrid(containerId, dates){
         <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody></table>
       </div>`;
   }).join('');
-  wrap.innerHTML = blocks || '<div class="empty">此出發點尚無路線，請先到「路線管理」建立</div>';
+  wrap.innerHTML = blocks || '<div class="empty">此任務起點尚無路線，請先到「路線管理」建立</div>';
   // 任務明細改成直接展開在點擊的那一列下方（同一張表格裡插入一列），不用再滑到
   // 最底部看；同一列（同一個車次/班次）再點一次收合，點別的任務就換成顯示那一趟。
   wrap.querySelectorAll('[data-viewassign]').forEach(td=>{
@@ -2678,7 +2678,7 @@ function renderQuickCreate(routeId, date){
   const route = state.data.routes.find(r=>r.id===routeId);
   const version = getActiveVersion(route, date);
   if(!version){
-    box.innerHTML = `<div class="panel"><div class="note" style="border-color:var(--danger); color:var(--danger);">此路線在 ${date} 尚無生效的下貨點版本，請先到「路線管理」建立對應版本後再指派，避免任務下貨點是空的。</div></div>`;
+    box.innerHTML = `<div class="panel"><div class="note" style="border-color:var(--danger); color:var(--danger);">此路線在 ${date} 尚無生效的店點版本，請先到「路線管理」建立對應版本後再指派，避免任務店點是空的。</div></div>`;
     return;
   }
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
@@ -2686,7 +2686,7 @@ function renderQuickCreate(routeId, date){
   box.innerHTML = `
     <div class="panel">
       <h3 style="margin-top:0;">指派：${date} · ${route.name}</h3>
-      <p style="font-size:12.5px;">出發點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
+      <p style="font-size:12.5px;">任務起點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
       <p style="font-size:12.5px; color:var(--ink-soft);">里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
       <div class="field"><label>夥伴</label><select id="qDriver">${driverOpts}</select></div>
       <div class="field"><label>調整金額（元，選填，留空則使用路線目前生效版本的夥伴費用 $${money(version.driverFare||0)}）</label><input id="qFareAdjust" type="number" placeholder="$${money(version.driverFare||0)}"></div>
@@ -2878,7 +2878,7 @@ function renderAssignmentDetail(id, box){
           ${a.status==='scheduled'? `<button class="btn danger" data-delassign="${a.id}">刪除</button>` : ''}
         </span>
       </div>
-      <p style="font-size:12.5px;">出發點：${a.origin||'—'}</p>
+      <p style="font-size:12.5px;">任務起點：${a.origin||'—'}</p>
       <p style="font-size:12.5px; color:var(--ink-soft);">夥伴費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
       ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>夥伴回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
       ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -2922,7 +2922,7 @@ function renderAssignmentDetail(id, box){
       </div>
       ${channelIds.length ? `<label style="margin-top:4px; display:block;">各通路請款金額（元）</label><div class="grid3">${channelIds.map(cid=>`
         <div class="field"><label>${channelName(cid)}</label><input class="afBillingInput" data-channel="${cid}" type="number" value="${byChannel[cid] ?? ''}"></div>
-      `).join('')}</div>` : '<p class="note">這趟車還沒有下貨點，無法輸入請款金額。</p>'}
+      `).join('')}</div>` : '<p class="note">這趟車還沒有店點，無法輸入請款金額。</p>'}
       <button class="btn amber" id="afSave">儲存這一趟的費用</button>
     `;
     box2.querySelector('#afSave').onclick = async ()=>{
@@ -3677,7 +3677,7 @@ function renderPayrollPage(c, mode){
 // ---------- 夥伴搜尋選單 ----------
 // 把原本的 <select>（夥伴太多時很難找）升級成「可輸入文字搜尋」的選單：原本的 select 仍保留在頁面上
 // （隱藏），選到的值照常讀 select.value、照常觸發 change，所以呼叫端程式完全不用改。
-// 排班／換夥伴這幾處可以傳 getOrigin，優先列出「最近 60 天實際跑過這個出發點」的夥伴（自動判斷，免維護）。
+// 排班／換夥伴這幾處可以傳 getOrigin，優先列出「最近 60 天實際跑過這個任務起點」的夥伴（自動判斷，免維護）。
 async function loadDriverOriginStats(){
   const c = state._driverOriginStats;
   if(c && Date.now() - c.at < 30*60*1000) return c.map;
@@ -3720,7 +3720,7 @@ function enhanceDriverSelect(sel, opts){
   const currentText = ()=>{ const o = sel.options[sel.selectedIndex]; return o && o.value ? o.textContent : (o && o.textContent.includes('全部') ? o.textContent : ''); };
   const syncText = ()=>{ input.value = currentText(); input.placeholder = (sel.options[0] && !sel.options[0].value && !sel.options[0].textContent.includes('全部')) ? sel.options[0].textContent+'（可輸入名字搜尋）' : '輸入名字搜尋…'; };
   sel.syncPicker = syncText;
-  let freq = null; // Map(driverId -> 趟數)，這個出發點最近60天常跑的
+  let freq = null; // Map(driverId -> 趟數)，這個任務起點最近60天常跑的
   const loadFreq = ()=>{
     if(!opts.getOrigin) return;
     const og = opts.getOrigin();
@@ -3763,9 +3763,9 @@ function enhanceDriverSelect(sel, opts){
 }
 function originLabel(addr){
   const og = state.data.origins.find(o=>o.address===addr);
-  return og ? (og.label||og.address) : (addr || '（未知出發點）');
+  return og ? (og.label||og.address) : (addr || '（未知任務起點）');
 }
-// 算出一個通路在某區間的請款總覽資料（未稅/含稅/各出發點總額，純資料不含畫面），
+// 算出一個通路在某區間的請款總覽資料（未稅/含稅/各任務起點總額，純資料不含畫面），
 // 畫面渲染跟Excel匯出共用同一份資料，確保兩邊數字保證一致。
 function computeChannelBillingReport(channelId, start, end, assignmentsList = state.data.assignments){
   const channel = state.data.channels.find(ch=>ch.id===channelId);
@@ -3786,9 +3786,9 @@ function computeChannelBillingReport(channelId, start, end, assignmentsList = st
 }
 // 多通路合併配送明細：只計入「已選通路」的店數/金額，未勾選的通路即使共用同一
 // 任務也完全不會出現（避免把其他通路的請款資訊洩漏到對帳用的明細表裡）。
-// 同一條路線如果連續好幾天下貨點組成、金額都完全相同（代表路線沒有異動），
+// 同一條路線如果連續好幾天店點組成、金額都完全相同（代表路線沒有異動），
 // 會自動合併成一列「生效區間＋天數」；只有真的異動過的路線才會拆成好幾列，
-// 不需要像人工作業一樣，一有異動就整個出發點的車都重新複製一份。
+// 不需要像人工作業一樣，一有異動就整個任務起點的車都重新複製一份。
 function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assignments){
   const rows = assignmentsList.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
   const byOriginRoute = {};
@@ -3798,8 +3798,8 @@ function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assi
     const fullByChannel = effectiveByChannelForAssignment(a);
 
     // 有星期一報價版本的路線家族：金額（fullByChannel，上面 effectiveByChannelForAssignment
-    // 已經處理）跟「配送路線」內容（下貨點清單／店數／公里）在請款單上一律顯示星期一版本
-    // 當天生效的內容，不用當天任務實際跑的下貨點——平日實際停靠站難免天天略有出入，
+    // 已經處理）跟「配送路線」內容（店點清單／店數／公里）在請款單上一律顯示星期一版本
+    // 當天生效的內容，不用當天任務實際跑的店點——平日實際停靠站難免天天略有出入，
     // 沒有這步的話，同一個車次會因為內容細節不同被拆成好幾筆看起來不一樣的請款明細，
     // 即使金額其實已經是同一個數字。
     const mondayRoute = findMondayQuoteRoute(route);
@@ -3886,7 +3886,7 @@ function channelSummaryPanelHtml(report){
         <tr><td><strong>稅額</strong></td><td class="amount"><strong>$${money(grand.tax)}</strong></td></tr>
         <tr><td><strong>含稅合計</strong></td><td class="amount"><strong>$${money(grand.withTax)}</strong></td></tr></tfoot>
       </table>
-      <h4 style="margin:14px 0 6px;">各區費用總覽（依供應商／出發點）</h4>
+      <h4 style="margin:14px 0 6px;">各區費用總覽（依供應商／任務起點）</h4>
       <table>
         <thead><tr><th>供應商</th><th>任務數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
         <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關任務</div></td></tr>'}</tbody>
@@ -3915,10 +3915,10 @@ function buildChannelSummarySheet(wb, report){
   aoa.push(['稅額', grand.tax]);
   aoa.push(['含稅合計', grand.withTax]);
   aoa.push([]);
-  aoa.push(['各區費用總覽（依供應商／出發點）']);
+  aoa.push(['各區費用總覽（依供應商／任務起點）']);
   aoa.push(['供應商','任務數','配送店次','未稅','稅額','含稅']);
   originWithTax.forEach(o=> aoa.push([originLabel(o.originAddr), o.tripCount, o.storeCount, o.untaxed, o.tax, o.withTax]));
-  const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:1,c:0}, e:{r:1,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／出發點）'), c:5} }];
+  const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:1,c:0}, e:{r:1,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／任務起點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／任務起點）'), c:5} }];
   addAOASheet(wb, `${channel.name}請款總覽`, aoa, merges);
 }
 function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
@@ -4266,9 +4266,9 @@ function renderExport(c){
             <thead><tr><th>日期</th><th>路線</th><th>夥伴</th><th>車資</th><th>狀態</th></tr></thead>
             <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(a.fare)}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
           ` : type==='routeVersions' ? `
-            <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>夥伴費用</th><th>請款總額</th><th>下貨點（當時）</th></tr></thead>
+            <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>夥伴費用</th><th>請款總額</th><th>店點（當時）</th></tr></thead>
             <tbody>${rows.map(v=>{
-              const pts = (v.dropPointIds||[]).map(id=>{ const dp = state.data.dropPoints.find(x=>x.id===id); return dp ? dpLabel(dp) : '（已刪除的下貨點）'; }).join('、') || '—';
+              const pts = (v.dropPointIds||[]).map(id=>{ const dp = state.data.dropPoints.find(x=>x.id===id); return dp ? dpLabel(dp) : '（已刪除的店點）'; }).join('、') || '—';
               return `<tr><td>${escapeHtml(v.routeName)}</td><td>${v.start} ~ ${v.end}</td><td>${v.distanceKm??'—'}km</td><td class="amount">$${money(v.driverFare||0)}</td><td class="amount">$${money(v.billingTotal||0)}</td><td style="font-size:12px;">${pts}</td></tr>`;
             }).join('') || '<tr><td colspan="6"><div class="empty">此區間無資料</div></td></tr>'}
           ` : `
@@ -4342,10 +4342,10 @@ function openWeekTripPreview(assignmentId){
       <div class="modal-box" style="max-width:480px;">
         <div class="toolbar"><h3 style="margin:0;">${routeName(a.routeId)}</h3><button class="btn ghost" id="closeWeekTrip">關閉</button></div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 8px;">${a.date}（星期${['日','一','二','三','四','五','六'][new Date(a.date+'T00:00:00').getDay()]}）</p>
-        <p style="font-size:12.5px;">出發點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+        <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
         <p style="font-size:12.5px;">里程：${a.distanceKm??'—'} km ・ <strong>夥伴費用：$${money(tripPay(a))}</strong></p>
-        <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">下貨點（${a.dropPoints.length}）</label>
-        ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排下貨點</div>'}
+        <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">店點（${a.dropPoints.length}）</label>
+        ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排店點</div>'}
       </div>
     </div>
   `;
@@ -4362,10 +4362,10 @@ function renderTodayDetail(todays){
         <strong>${routeName(a.routeId)}</strong>
         <span>
           ${a.status==='scheduled'?'<span class="badge pending">尚未開始</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':''}
-          <a class="btn ghost" href="${lineShareLink(`【出車提醒】${a.date} ${routeName(a.routeId)}\n出發點：${a.origin||'—'}\n下貨點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
+          <a class="btn ghost" href="${lineShareLink(`【出車提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
         </span>
       </div>
-      <p style="font-size:12.5px;">出發點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始行程</button>` : `
         ${a.dropPoints.map(dp=>{
           const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
@@ -4398,7 +4398,7 @@ function renderTodayDetail(todays){
           </div>`;
         }).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
-        ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有下貨點未完成拍照或未選擇未配達原因，結束時需填寫備註說明原因</p>':''}
+        ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未配達原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;
   }).join('');
@@ -4424,7 +4424,7 @@ function renderTodayDetail(todays){
       const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
       let issueNote;
       if(!allHandled){
-        const note = prompt('尚有下貨點未完成拍照、也沒有選擇未配達原因，請說明原因（此備註主控端會看到）：');
+        const note = prompt('尚有店點未完成拍照、也沒有選擇未配達原因，請說明原因（此備註主控端會看到）：');
         if(note===null) return;
         if(!note.trim()){ alert('請填寫備註原因'); return; }
         issueNote = note.trim();
@@ -4434,7 +4434,7 @@ function renderTodayDetail(todays){
     };
   });
   // 「拍照上傳」跟「上傳照片」兩顆按鈕共用同一套「填下一格」邏輯：一個
-  // 下貨點最多3格照片，第1格是主要送達證明照（決定這個點是否算已送達），
+  // 店點最多3格照片，第1格是主要送達證明照（決定這個點是否算已送達），
   // 第2、3格是附加照片。不管是先按拍照還是先用相簿上傳、按第幾次，都是
   // 「填下一個還空著的格子」，沒有「重新拍照＝覆蓋」這種概念了——按鈕
   // 名稱/行為固定，同一顆「拍照上傳」按第一次拍主要照片，再按同一顆按
@@ -4510,7 +4510,7 @@ function renderTodayDetail(todays){
           const dataUrls = [];
           for(const f of acceptFiles) dataUrls.push(await compressImageFile(f));
           for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
-          if(droppedCount>0) alert(`一個下貨點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
+          if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
           renderContent();
         }catch(err){
           console.error('照片處理失敗', err);
@@ -4519,7 +4519,7 @@ function renderTodayDetail(todays){
       })();
     };
   });
-  // 未配達原因：選了代表這個下貨點暫時不會有送達照片，直接存檔，不用等到
+  // 未配達原因：選了代表這個店點暫時不會有送達照片，直接存檔，不用等到
   // 整趟結束才統一填一個籠統的備註；選完之後如果夥伴還是補拍了照片，
   // uploadDropPointPhoto() 會自動把這裡的原因清掉（見 data-layer.js）。
   box.querySelectorAll('[data-issue]').forEach(sel=>{
@@ -4562,21 +4562,21 @@ async function renderHistory(c){
   // 自己的任務（driver_select_own policy），不會因為系統整體規模（多少夥伴/
   // 多少店家）變大而跟著變重，所以這裡直接補到半年前，比預設的14天窗口寬
   // 很多，不受主控端那邊刻意縮小窗口的影響。
-  const HISTORY_LOOKBACK_DAYS = 180;
-  const lookbackStart = ymd(addDays(todayStr(), -HISTORY_LOOKBACK_DAYS));
+  // 只顯示「本月」已完成的紀錄：每月 1 號起，上個月以前的紀錄自動隱藏（各月份金額請看「我的報酬」）。
+  const lookbackStart = todayStr().slice(0,7) + '-01';
   if(state.data.assignmentsWindowStart && lookbackStart < state.data.assignmentsWindowStart){
     c.innerHTML = '<h2 class="section-title">歷史班表</h2><div class="empty">載入中...</div>';
     try{ await ensureAssignmentsRange(lookbackStart); }
     catch(e){ c.innerHTML = `<h2 class="section-title">歷史班表</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
     if(state.tab!=='history') return; // 使用者可能已經切走這一頁
   }
-  const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed').sort((a,b)=>b.date.localeCompare(a.date));
+  const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed' && a.date>=lookbackStart).sort((a,b)=>b.date.localeCompare(a.date));
   const groups = {};
   list.forEach(a=>{ if(!groups[a.date]) groups[a.date] = []; groups[a.date].push(a); });
   const dateKeys = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
   c.innerHTML = `
     <h2 class="section-title">歷史班表</h2>
-    <p class="section-sub">已完成並封存的行程紀錄，不可再編輯。</p>
+    <p class="section-sub">本月已完成並封存的行程紀錄，不可再編輯；上個月以前的紀錄會自動隱藏。</p>
     ${dateKeys.map(date=>{
       const items = groups[date];
       return `<div class="date-group" data-key="${date}">
@@ -4588,7 +4588,7 @@ async function renderHistory(c){
           ${items.map(a=>`
             <div class="panel" style="margin-top:12px;">
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
-              <p style="font-size:12.5px;">出發點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
+              <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ・ 車資 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
               ${a.dropPoints.map(dp=>{
                 const photoUrls = dpPhotoUrls(dp);
@@ -4601,7 +4601,7 @@ async function renderHistory(c){
           `).join('')}
         </div>
       </div>`;
-    }).join('') || '<div class="empty">尚無已完成的歷史行程</div>'}
+    }).join('') || '<div class="empty">本月尚無已完成的歷史行程</div>'}
   `;
   c.querySelectorAll('.date-head').forEach(head=>{
     head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
@@ -5122,7 +5122,7 @@ function showApp(){
   document.getElementById('appLayout').style.display = 'flex';
   updateHeaderBar();
   updateTitle(); renderNav(); renderContent();
-  // 首頁即時更新改成主要靠 Realtime（任務/下貨點一有異動就推播），不用再
+  // 首頁即時更新改成主要靠 Realtime（任務/店點一有異動就推播），不用再
   // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
   startRealtimeSync(()=> refreshHomeDataIfIdle());
@@ -5185,7 +5185,7 @@ async function checkForUpdate(){
   if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
   if(sig !== __bootPageSignature) showUpdateBanner();
 }
-// 首頁即時更新主要靠 Realtime 推播（見 startRealtimeSync，任務/下貨點一有
+// 首頁即時更新主要靠 Realtime 推播（見 startRealtimeSync，任務/店點一有
 // 異動，debounce一下就會呼叫這支函式刷新），不用再每25秒硬去問一次資料庫。
 // 這裡的定時輪詢改成保險用的備援（例如WebSocket連線中途斷掉、或Realtime
 // 訂閱失敗退回純輪詢的情況），間隔放寬到3分鐘即可，平常都是Realtime先
@@ -5202,7 +5202,7 @@ async function refreshHomeDataIfIdle(){
     const today = todayStr();
     if(state.role==='admin'){ await refreshAssignmentsRange(today.slice(0,7)+'-01', today); await refreshFuelClaims(); }
     else await refreshAssignmentsRange(today, today);
-    // 夥伴首頁的「同出發點今日出發狀況」是另外呼叫loadDepotOverview()
+    // 夥伴首頁的「同任務起點今日出發狀況」是另外呼叫loadDepotOverview()
     // 查的（夥伴身份是走RPC，不在loadAllData()裡），有自己的一層快取
     // （depotOverviewCache），這裡一起清掉，讓renderContent()重新渲染時
     // 順便重新抓一次，不然這個面板不會跟著這裡的25秒一起變新。
