@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
-<title>信興｜碳金車隊</title>
+<title>信興｜碳金展業服務團隊</title>
 <link rel="shortcut icon" href="favicon.ico">
 <link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
@@ -15,7 +15,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon-180.png">
 <link rel="manifest" href="site.webmanifest">
 <meta name="theme-color" content="#F3E7CF">
-<meta name="apple-mobile-web-app-title" content="信興｜碳金車隊">
+<meta name="apple-mobile-web-app-title" content="信興｜碳金展業服務團隊">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -150,7 +150,7 @@
 </head>
 <body>
 <header>
-  <h1 id="appTitle"><span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span></h1>
+  <h1 id="appTitle"><span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金展業服務團隊</span></h1>
   <div class="role-switch">
     <span id="whoAmI" style="font-size:12.5px;"></span>
     <button class="btn ghost" id="logoutBtn" style="display:none; padding:5px 10px; font-size:12px;">登出／切換身份</button>
@@ -4184,7 +4184,7 @@ function renderSettings(c){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `碳金車隊系統備份_${todayStr()}.json`;
+    a.download = `碳金展業服務團隊系統備份_${todayStr()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -5090,11 +5090,11 @@ function renderMyStatement(c){
 // 沒有真正的驗證）與 renderLoginGate（直接比對 state.data 裡的明文PIN/代碼）
 // 已經整個由 js/auth.js 取代：改成呼叫 Vercel Serverless Function 驗證、拿到簽過名的
 // JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
-// 承攬人員視角原本只顯示「碳金車隊」，把「信興」拿掉——沒有留下原因，
+// 承攬人員視角原本只顯示「碳金展業服務團隊」，把「信興」拿掉——沒有留下原因，
 // 使用者反映承攬人員登入後「信興」不見了要修正，改成不管主控／承攬人員視角都
-// 顯示完整的「信興｜碳金車隊」。
+// 顯示完整的「信興｜碳金展業服務團隊」。
 function updateTitle(){
-  document.getElementById('appTitle').innerHTML = '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金車隊</span>';
+  document.getElementById('appTitle').innerHTML = '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金展業服務團隊</span>';
 }
 function updateHeaderBar(){
   const who = document.getElementById('whoAmI');
