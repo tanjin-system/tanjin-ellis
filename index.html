@@ -4599,16 +4599,18 @@ function openWeekTripPreview(assignmentId){
       <div class="modal-box" style="max-width:480px;">
         <div class="toolbar"><h3 style="margin:0;">${routeName(a.routeId)}</h3><button class="btn ghost" id="closeWeekTrip">關閉</button></div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 8px;">${a.date}（星期${['日','一','二','三','四','五','六'][new Date(a.date+'T00:00:00').getDay()]}）</p>
-        <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+        <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, ownDropPoints(a)); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
         <h3 style="margin:0 0 8px;">報酬：$${money(tripPay(a))}</h3>
-        <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">店點（${a.dropPoints.length}）</label>
-        ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排店點</div>'}
+        <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">店點（${ownDropPoints(a).length}）</label>
+        ${ownDropPoints(a).length ? ownDropPoints(a).map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排店點</div>'}
       </div>
     </div>
   `;
   document.getElementById('closeWeekTrip').onclick = ()=>{ host.innerHTML=''; };
   document.getElementById('weekTripBackdrop').onclick = (e)=>{ if(e.target.id==='weekTripBackdrop') host.innerHTML=''; };
 }
+// 夥伴自己的店點：交給支援夥伴的店點不再出現在原夥伴的畫面（任務明細、導航、LINE 提醒、完成判斷都不含）。
+function ownDropPoints(a){ return (a.dropPoints||[]).filter(dp=>!dp.helperId); }
 function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
   // 「交給我支援」的店點（資料庫只讓我看到被交給我的那幾個）：另外一張卡片，沒有開始／完成按鈕、不顯示報酬。
@@ -4652,18 +4654,19 @@ function renderTodayDetail(todays){
       ${a.dropPoints.map(dp=>dpRow(a, dp, false)).join('')}
     </div>`).join('');
   box.innerHTML = todays.map(a=>{
-    const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
+    const mine = ownDropPoints(a);
+    const allHandled = mine.length>0 && mine.every(dp=>dp.status==='completed' || dp.issueReason);
     return `<div class="panel">
       <div class="toolbar">
         <strong>${routeName(a.routeId)}</strong>
         <span>
           ${a.status==='scheduled'?'<span class="badge pending">尚未開始</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':''}
-          <a class="btn ghost" href="${lineShareLink(`【任務提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${a.dropPoints.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
+          <a class="btn ghost" href="${lineShareLink(`【任務提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${mine.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
         </span>
       </div>
-      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, mine); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
-        ${a.dropPoints.map(dp=>dpRow(a, dp, !!dp.helperId)).join('')}
+        ${mine.map(dp=>dpRow(a, dp, false)).join('')}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成任務（自動封存進歷史任務）</button>
         ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
@@ -4688,7 +4691,7 @@ function renderTodayDetail(todays){
   box.querySelectorAll('[data-finish]').forEach(btn=>{
     btn.onclick = async ()=>{
       const a = state.data.assignments.find(x=>x.id===btn.dataset.finish);
-      const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
+      const allHandled = ownDropPoints(a).length>0 && ownDropPoints(a).every(dp=>dp.status==='completed' || dp.issueReason);
       let issueNote;
       if(!allHandled){
         const note = prompt('尚有店點未完成拍照、也沒有選擇未完成原因，請說明原因（此備註主控端會看到）：');
@@ -4867,7 +4870,7 @@ async function renderHistory(c){
               <p style="font-size:12.5px; margin-bottom:4px;">任務起點：${a.origin||'—'}</p>
               <p style="margin:0 0 8px;"><strong>報酬：$${money(a.fare)}</strong></p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
-              ${a.dropPoints.map(dp=>{
+              ${ownDropPoints(a).map(dp=>{
                 const photoUrls = dpPhotoUrls(dp);
                 const statusBadge = dp.status==='completed'
                   ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
