@@ -1073,3 +1073,8 @@ create policy driver_select_own on assignments for select to app_driver using (d
 drop policy if exists driver_update_own on assignments;
 create policy driver_update_own on assignments for update to app_driver using (driver_id = auth_driver_id() and published) with check (driver_id = auth_driver_id() and published);
 -- driver_depot_overview(p_date)：where 加 a.published，子查詢 a2 也加 a2.published（完整內容見上方 PART 的函式，已用 create or replace 更新）
+
+-- PART 20：即時同步擴大範圍（2026-10-08，已在線上資料庫直接執行過）
+-- Realtime publication 原本只有 assignments / assignment_drop_points，現在加上 statements（勞報單／簽名）、
+-- adjustments（調整項）、fuel_claims（代墊申報）；RLS 照樣套用（夥伴只收得到自己的）。
+alter publication supabase_realtime add table statements, adjustments, fuel_claims;

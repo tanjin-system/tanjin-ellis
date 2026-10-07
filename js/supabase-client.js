@@ -40,7 +40,11 @@ function debounce(fn, wait) {
   };
 }
 
-async function startRealtimeSync(onChange) {
+// onEvent(payload)：每一筆資料異動各呼叫一次（payload.table / eventType / new / old），
+// 由呼叫端自己合併、只抓有變的那幾筆，不再「整段任務重抓」。
+// 訂閱的表：任務、店點（任務明細）、勞報單（簽名）、調整項、代墊申報——RLS 照樣套用，
+// 夥伴只收得到自己的、主控收得到全部。
+async function startRealtimeSync(onEvent) {
   const token = localStorage.getItem('fleet_auth_token');
   if (!token || realtimeClient) return; // 沒登入，或已經在跑了（不重複訂閱）
   try {
@@ -48,12 +52,13 @@ async function startRealtimeSync(onChange) {
       auth: { persistSession: false, autoRefreshToken: false }
     });
     await realtimeClient.realtime.setAuth(token);
-    const debouncedChange = debounce(onChange, 1200);
-    realtimeChannel = realtimeClient
-      .channel('assignments-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments' }, debouncedChange)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'assignment_drop_points' }, debouncedChange)
-      .subscribe();
+    let ch = realtimeClient.channel('live-sync');
+    ['assignments', 'assignment_drop_points', 'statements', 'adjustments', 'fuel_claims'].forEach(table => {
+      ch = ch.on('postgres_changes', { event: '*', schema: 'public', table }, payload => onEvent({
+        table, eventType: payload.eventType, new: payload.new || {}, old: payload.old || {}
+      }));
+    });
+    realtimeChannel = ch.subscribe();
   } catch (e) {
     console.error('Realtime 訂閱失敗，將繼續依賴定期輪詢：', e.message);
     realtimeClient = null;

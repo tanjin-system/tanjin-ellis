@@ -5352,7 +5352,7 @@ function showApp(){
   // 首頁即時更新改成主要靠 Realtime（任務/店點一有異動就推播），不用再
   // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
-  startRealtimeSync(()=> refreshHomeDataIfIdle());
+  startRealtimeSync(handleLiveEvent);
 }
 // renderLoginGate() 的正式版實作在 js/auth.js（呼叫 /api/auth-driver、/api/auth-admin，
 // 不再直接比對 state.data 裡的明文PIN/代碼；此時 state.data 根本還沒載入）。
@@ -5419,6 +5419,92 @@ async function checkForUpdate(){
 // 觸發。分頁切到背景時暫停，不做沒人看的無意義請求；另外記錄「上次更新
 // 時間」讓畫面上看得到資料新鮮度，面板也保留手動「重新整理」按鈕。
 let lastHomeRefreshAt = null;
+// ---------- 即時同步 ----------
+// 資料庫一有異動（任務、店點、勞報單簽名、調整項、代墊申報），Realtime 就推播過來：
+// 只抓「有變的那幾筆」合併進記憶體，然後讓「目前這一頁」立刻跟著更新（不再只有首頁會更新）。
+// 使用者正在輸入、或開著明細／簽名視窗時，不硬重畫（以免打到一半的字被洗掉），改成稍後安全時再更新。
+const LIVE_TABS = {
+  assignments: ['home','schedule','today','history','my-earnings'],
+  statements: ['home','slips','my-statement'],
+  adjustments: ['home','payroll','my-earnings'],
+  fuel_claims: ['home','payroll','my-earnings']
+};
+let liveQ = { assignments:new Set(), assignmentsDel:new Set(), statements:new Set(), statementsDel:new Set(), adjustments:new Set(), adjustmentsDel:new Set(), fuel_claims:new Set(), fuel_claimsDel:new Set() };
+let liveTimer = null, livePendingTabs = null;
+function handleLiveEvent(ev){
+  const id = ev.new.id || ev.old.id;
+  const del = ev.eventType==='DELETE';
+  if(ev.table==='assignment_drop_points'){
+    const aid = ev.new.assignment_id;
+    if(aid) liveQ.assignments.add(aid);
+  } else if(liveQ[ev.table]){
+    if(del && id) liveQ[ev.table+'Del'].add(id); else if(id) liveQ[ev.table].add(id);
+  }
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(flushLive, 350);
+}
+async function flushLive(){
+  const q = liveQ;
+  liveQ = { assignments:new Set(), assignmentsDel:new Set(), statements:new Set(), statementsDel:new Set(), adjustments:new Set(), adjustmentsDel:new Set(), fuel_claims:new Set(), fuel_claimsDel:new Set() };
+  if(!state.data) return;
+  const touched = new Set();
+  const upsert = (arr, item)=>{ const i = arr.findIndex(x=>x.id===item.id); if(i>=0) arr[i]=item; else arr.push(item); };
+  try{
+    const supabase = getSupabase();
+    // 任務（含店點明細與照片連結）：一筆一筆抓，抓不到（刪除、或已不在權限範圍，例如被取消發佈）就從記憶體移除。
+    await Promise.all([...q.assignments].map(async id=>{
+      try{ const a = await fetchAssignment(id); upsert(state.data.assignments, a); }
+      catch(e){ if(/0 rows|no rows/i.test(e.message)) state.data.assignments = state.data.assignments.filter(x=>x.id!==id); else throw e; }
+    }));
+    if(q.assignments.size) state.data.assignments.sort((a,b)=>a.date.localeCompare(b.date));
+    if(q.assignmentsDel.size){ state.data.assignments = state.data.assignments.filter(x=>!q.assignmentsDel.has(x.id)); }
+    if(q.assignments.size || q.assignmentsDel.size) touched.add('assignments');
+    if(q.statements.size){
+      const { data } = await supabase.from('statements').select('*').in('id', [...q.statements]);
+      const rows = (data||[]).map(mapStatement);
+      await resolveSignatureUrls(rows);
+      rows.forEach(r=> upsert(state.data.statements, r));
+      touched.add('statements');
+    }
+    if(q.statementsDel.size){ state.data.statements = state.data.statements.filter(x=>!q.statementsDel.has(x.id)); touched.add('statements'); }
+    if(q.adjustments.size){
+      const { data } = await supabase.from('adjustments').select('*').in('id', [...q.adjustments]);
+      (data||[]).map(mapAdjustment).forEach(r=> upsert(state.data.adjustments, r));
+      touched.add('adjustments');
+    }
+    if(q.adjustmentsDel.size){ state.data.adjustments = state.data.adjustments.filter(x=>!q.adjustmentsDel.has(x.id)); touched.add('adjustments'); }
+    if(q.fuel_claims.size){
+      const { data } = await supabase.from('fuel_claims').select('*').in('id', [...q.fuel_claims]);
+      state.data.fuelClaims = state.data.fuelClaims || [];
+      (data||[]).map(mapFuelClaim).forEach(r=> upsert(state.data.fuelClaims, r));
+      touched.add('fuel_claims');
+    }
+    if(q.fuel_claimsDel.size){ state.data.fuelClaims = (state.data.fuelClaims||[]).filter(x=>!q.fuel_claimsDel.has(x.id)); touched.add('fuel_claims'); }
+  }catch(e){ console.error('即時同步失敗，改用備援刷新', e); refreshHomeDataIfIdle(); return; }
+  if(!touched.size) return;
+  lastHomeRefreshAt = new Date();
+  const need = [...touched].some(t=> (LIVE_TABS[t]||[]).includes(state.tab));
+  if(!need) return;
+  tryLiveRender();
+}
+// 使用者正在輸入、或開著會被重畫洗掉的視窗／明細時，不重畫，稍後再試。
+function liveRenderBlocked(){
+  if(document.hidden) return true;
+  const ae = document.activeElement;
+  if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+  if(document.querySelector('.modal-backdrop, .sig-full')) return true;
+  if(document.querySelector('.assign-detail-row')) return true;
+  const sheet = document.getElementById('assignDetail'); if(sheet && sheet.innerHTML.trim()) return true;
+  const weekModal = document.getElementById('weekTripModal'); if(weekModal && weekModal.innerHTML.trim()) return true;
+  return false;
+}
+function tryLiveRender(){
+  if(liveRenderBlocked()){ livePendingTabs = true; return; }
+  livePendingTabs = null;
+  try{ renderNav(); renderContent(); }catch(e){ console.error('即時更新畫面失敗', e); }
+}
+setInterval(()=>{ if(livePendingTabs && !liveRenderBlocked()) tryLiveRender(); }, 2500);
+
 async function refreshHomeDataIfIdle(){
   if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
@@ -5443,6 +5529,22 @@ document.addEventListener('visibilitychange', ()=>{
   if(!document.hidden){ checkForUpdate(); refreshHomeDataIfIdle(); }
 });
 window.addEventListener('focus', ()=>{ checkForUpdate(); refreshHomeDataIfIdle(); });
+// 手機把分頁丟到背景一陣子後，WebSocket 可能已經休眠、錯過中間的推播：回到前景時（離開超過 30 秒）
+// 主動補抓一次目前會看到的任務範圍，補完再更新畫面。
+let hiddenAtTs = null;
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden){ hiddenAtTs = Date.now(); return; }
+  if(hiddenAtTs && Date.now()-hiddenAtTs > 30000){ hiddenAtTs = null; catchUpAfterResume(); }
+});
+async function catchUpAfterResume(){
+  if(!state.data || !state.role) return;
+  try{
+    const today = todayStr();
+    if(state.role==='admin'){ await refreshAssignmentsRange(getWeekDates(0)[0], getWeekDates(1)[6]); await refreshFuelClaims(); }
+    else await refreshAssignmentsRange(today, ymd(addDays(today, 14)));
+    tryLiveRender();
+  }catch(e){ console.error('回到前景補抓資料失敗', e); }
+}
 setInterval(checkForUpdate, 5*60*1000);
 setInterval(refreshHomeDataIfIdle, 180*1000);
 
