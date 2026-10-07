@@ -4760,13 +4760,20 @@ async function renderMyEarnings(c){
           <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
           <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || `<tr><td colspan="3"><div class="empty">${m}尚無已完成車趟</div></td></tr>`}</tbody>
         </table>
-        ${r.adjustments.length ? `
+        ${(()=>{
+          // 由加油／保養申報確認轉進來的代墊款，下方「申報紀錄」已經有（含日期、發票號碼、狀態），
+          // 這裡不重複列；上面的金額表仍會計入。只剩預支、加減項與主控手動新增的代墊款。
+          const claimAdjIds = new Set((state.data.fuelClaims||[]).filter(f=>f.adjustmentId).map(f=>f.adjustmentId));
+          const shown = r.adjustments.filter(adj=>!claimAdjIds.has(adj.id));
+          if(!shown.length) return '';
+          return `
           <h3>${m}調整項明細</h3>
           <table>
             <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
-            <tbody>${r.adjustments.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='reimbursement'?'':adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+            <tbody>${shown.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='reimbursement'?'':adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
           </table>
-        ` : ''}
+        `;
+        })()}
       </div>`;
   }
   await refresh();
