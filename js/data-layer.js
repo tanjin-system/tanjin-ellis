@@ -1647,13 +1647,13 @@ function computePayrollDeductions(grossAmount, reimbursement = 0) {
 // 重新排除預支再算一次（見index.html該函式旁邊的說明）。
 // 勞報單勞務名稱：預設「貨物配送及到店協助理貨勞務」。主控可以依承攬人員改名稱，但規則是名稱
 // 要符合系統記錄的實際工作——當月有完成車趟時，名稱必須含「配送」；當月沒有車趟才可自由填寫。
-const DEFAULT_SERVICE_NAME = '貨物配送及到店協助理貨勞務';
+const DEFAULT_SERVICE_NAME = '到店協助理貨勞務';
 function validateServiceName(name, tripCount) {
   name = (name || '').trim();
   if (!name) return;
   if (name.length > 30) throw new Error('勞務名稱最多 30 個字');
-  if (tripCount > 0 && !name.includes('配送')) {
-    throw new Error(`勞務名稱「${name}」沒有寫到「配送」，但這位承攬人員本月在系統裡有 ${tripCount} 趟完成的車趟。名稱必須符合實際工作，請修改承攬人員資料裡的勞務名稱（需含「配送」）。`);
+  if (tripCount > 0 && !name.includes('理貨')) {
+    throw new Error(`勞務名稱「${name}」沒有寫到「理貨」，但這位承攬人員本月在系統裡有 ${tripCount} 趟完成的車趟。名稱必須符合實際工作，請修改承攬人員資料裡的勞務名稱（需含「理貨」）。`);
   }
 }
 
