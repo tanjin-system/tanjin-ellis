@@ -4965,12 +4965,12 @@ function renderMyStatement(c){
   const waiting = periodStmts.filter(s=>s.status==='awaiting_signature').length;
   c.innerHTML = `
     <h2 class="section-title">對帳單 / 勞報單</h2>
+    <div class="panel no-print" style="position:sticky; top:0; z-index:20; box-shadow:0 2px 6px rgba(27,33,41,.12);"><div class="field" style="max-width:200px; margin-bottom:0;"><label>月份（月結勞報單）</label><input id="smMonth" type="month" value="${monthStr}"></div></div>
     ${periodStmts.length ? `<div class="panel">
       <h3 style="margin:0 0 6px;">每次付款的勞報單${waiting?`　<span class="badge progress">${waiting} 份待簽名</span>`:''}</h3>
       <table><thead><tr><th>期間</th><th>給付日期</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
       <tbody>${periodStmts.map(x=>`<tr><td>${statementLabel(x)}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.actualNet)}</td><td>${x.status==='awaiting_signature'?'<span class="badge progress">待簽名</span>':x.status==='signed'?'<span class="badge signed">已簽（未鎖定）</span>':'<span class="badge signed">已鎖定</span>'}</td><td><button class="btn ${x.status==='awaiting_signature'?'amber':'ghost'}" data-openstmt="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
     </div>` : ''}
-    <div class="panel"><div class="field" style="max-width:200px;"><label>月份（月結勞報單）</label><input id="smMonth" type="month" value="${monthStr}"></div></div>
     <div id="statementBox"></div>`;
   let currentPeriodId = state._myStatementPeriodId || null;
   async function refresh(){
