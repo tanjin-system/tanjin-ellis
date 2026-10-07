@@ -4363,7 +4363,7 @@ function openWeekTripPreview(assignmentId){
 }
 function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
-  if(!todays.length){ box.innerHTML = '<div class="empty">今天沒有排定行程</div>'; return; }
+  if(!todays.length){ box.innerHTML = '<div class="empty">今天沒有排定任務</div>'; return; }
   box.innerHTML = todays.map(a=>{
     const allHandled = a.dropPoints.length>0 && a.dropPoints.every(dp=>dp.status==='completed' || dp.issueReason);
     return `<div class="panel">
@@ -4770,7 +4770,7 @@ async function renderMyEarnings(c){
       <div class="panel">
         <h3 style="margin-top:0;">已完成任務</h3>
         <table>
-          <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
+          <thead><tr><th>日期</th><th>項目</th><th>報酬</th></tr></thead>
           <tbody>${r.trips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || `<tr><td colspan="3"><div class="empty">${m}尚無已完成任務</div></td></tr>`}</tbody>
         </table>
         ${(()=>{
