@@ -868,7 +868,7 @@ const ADMIN_TABS = [
 const DRIVER_TABS = [
   {id:'home', label:'首頁'},
   {id:'today', label:'今日任務'},
-  {id:'history', label:'歷史班表'},
+  {id:'history', label:'歷史任務'},
   {id:'my-earnings', label:'我的報酬'},
   {id:'my-statement', label:'對帳單'},
   {id:'profile', label:'我的資料'}
@@ -1282,7 +1282,7 @@ function renderHomeDriver(c){
   const todays = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===todayStr() && a.status!=='completed');
   const tiles = [
     {id:'today', label:'今日任務', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無排班'},
-    {id:'history', label:'歷史班表', sub:'已完成紀錄'},
+    {id:'history', label:'歷史任務', sub:'已完成紀錄'},
     {id:'my-earnings', label:'我的報酬', sub:'本月即時金額'},
     {id:'my-statement', label:'對帳單', sub:'月結與回簽'},
     {id:'profile', label:'我的資料', sub:'車輛/銀行資訊'}
@@ -4352,7 +4352,7 @@ function openWeekTripPreview(assignmentId){
         <div class="toolbar"><h3 style="margin:0;">${routeName(a.routeId)}</h3><button class="btn ghost" id="closeWeekTrip">關閉</button></div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 8px;">${a.date}（星期${['日','一','二','三','四','五','六'][new Date(a.date+'T00:00:00').getDay()]}）</p>
         <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, a.dropPoints); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
-        <p style="font-size:12.5px;">里程：${a.distanceKm??'—'} km ・ <strong>報酬：$${money(tripPay(a))}</strong></p>
+        <h3 style="margin:0 0 8px;">報酬：$${money(tripPay(a))}</h3>
         <label style="font-size:12px; color:var(--ink-soft); display:block; margin:10px 0 4px;">店點（${a.dropPoints.length}）</label>
         ${a.dropPoints.length ? a.dropPoints.map(dp=>`<div class="drop-point-driver"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）</div>`).join('') : '<div class="empty">尚未安排店點</div>'}
       </div>
@@ -4406,12 +4406,12 @@ function renderTodayDetail(todays){
             </div>` : ''}
           </div>`;
         }).join('')}
-        <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史班表）</button>
+        <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成本趟（自動封存進歷史任務）</button>
         ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
     </div>`;
   }).join('');
-  // 照片改成跟歷史班表一樣，點擊「已完成」才載入——手機背景切換常把頁面砍掉
+  // 照片改成跟歷史任務一樣，點擊「已完成」才載入——手機背景切換常把頁面砍掉
   // 重開，之前「一開頁面就自動載入當天所有已完成照片」會讓同一批照片被
   // 重複下載很多次，是 Storage 流量爆量的主因之一。
   const dpById = {};
@@ -4540,7 +4540,7 @@ function renderTodayDetail(todays){
   });
 }
 
-// ---------- 夥伴端：歷史班表 ----------
+// ---------- 夥伴端：歷史任務 ----------
 // 送達照片（主照片＋附加照片）共用的點擊看圖彈窗，跟客戶查詢頁面同一個
 // 精神：預設完全不載入照片，點了才跳出視窗、才真的去下載那幾張，避免
 // 像之前那樣「同一頁裡有的門店有照片縮圖、有的沒有」看起來時有時無
@@ -4567,16 +4567,16 @@ function dpPhotoUrls(dp){
 }
 async function renderHistory(c){
   const dId = state.activeDriverId;
-  // 夥伴自己的歷史班表想看多久以前都合理，而且夥伴端因為RLS本來就只看得到
+  // 夥伴自己的歷史任務想看多久以前都合理，而且夥伴端因為RLS本來就只看得到
   // 自己的任務（driver_select_own policy），不會因為系統整體規模（多少夥伴/
   // 多少店家）變大而跟著變重，所以這裡直接補到半年前，比預設的14天窗口寬
   // 很多，不受主控端那邊刻意縮小窗口的影響。
   // 只顯示「本月」已完成的紀錄：每月 1 號起，上個月以前的紀錄自動隱藏（各月份金額請看「我的報酬」）。
   const lookbackStart = todayStr().slice(0,7) + '-01';
   if(state.data.assignmentsWindowStart && lookbackStart < state.data.assignmentsWindowStart){
-    c.innerHTML = '<h2 class="section-title">歷史班表</h2><div class="empty">載入中...</div>';
+    c.innerHTML = '<h2 class="section-title">歷史任務</h2><div class="empty">載入中...</div>';
     try{ await ensureAssignmentsRange(lookbackStart); }
-    catch(e){ c.innerHTML = `<h2 class="section-title">歷史班表</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    catch(e){ c.innerHTML = `<h2 class="section-title">歷史任務</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
     if(state.tab!=='history') return; // 使用者可能已經切走這一頁
   }
   const list = state.data.assignments.filter(a=>a.driverId===dId && a.status==='completed' && a.date>=lookbackStart).sort((a,b)=>b.date.localeCompare(a.date));
@@ -4584,8 +4584,8 @@ async function renderHistory(c){
   list.forEach(a=>{ if(!groups[a.date]) groups[a.date] = []; groups[a.date].push(a); });
   const dateKeys = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
   c.innerHTML = `
-    <h2 class="section-title">歷史班表</h2>
-    <p class="section-sub">本月已完成並封存的行程紀錄，不可再編輯；上個月以前的紀錄會自動隱藏。</p>
+    <h2 class="section-title">歷史任務</h2>
+    <p class="section-sub">本月已完成並封存的任務紀錄，不可再編輯。</p>
     ${dateKeys.map(date=>{
       const items = groups[date];
       return `<div class="date-group" data-key="${date}">
@@ -4597,7 +4597,8 @@ async function renderHistory(c){
           ${items.map(a=>`
             <div class="panel" style="margin-top:12px;">
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
-              <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ・ 報酬 $${money(a.fare)} ・ 里程 ${a.distanceKm||0} km</p>
+              <p style="font-size:12.5px; margin-bottom:4px;">任務起點：${a.origin||'—'}</p>
+              <p style="margin:0 0 8px;"><strong>報酬：$${money(a.fare)}</strong></p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
               ${a.dropPoints.map(dp=>{
                 const photoUrls = dpPhotoUrls(dp);
@@ -4610,7 +4611,7 @@ async function renderHistory(c){
           `).join('')}
         </div>
       </div>`;
-    }).join('') || '<div class="empty">本月尚無已完成的歷史行程</div>'}
+    }).join('') || '<div class="empty">本月尚無已完成的歷史任務</div>'}
   `;
   c.querySelectorAll('.date-head').forEach(head=>{
     head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
