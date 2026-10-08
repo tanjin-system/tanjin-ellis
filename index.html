@@ -42,7 +42,7 @@
   nav.tabs button{ display:block; width:100%; text-align:left; padding:9px 16px; background:none; border:none; border-left:3px solid transparent; cursor:pointer; font-family:inherit; font-size:13px; color:var(--ink-soft); }
   nav.tabs button.active{ border-left-color:var(--amber); color:var(--ink); font-weight:600; background:#FAF7F1; }
   main{ flex:1; padding:20px; max-width:1000px; min-width:0; }
-  /* 電腦版：週期任務清單、請款結算、資料匯出這種寬表格，內容區放寬到幾乎滿版，不用在小框裡左右滑。 */
+  /* 電腦版：主控所有頁面的內容區都放寬到可用寬度（夥伴端維持原本的窄版）。 */
   main.wide{ max-width:none; }
   h2.section-title{ font-size:16px; font-weight:600; margin:0 0 4px; }
   p.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
@@ -181,8 +181,9 @@
   .tile{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:22px 14px; text-align:center; cursor:pointer; font-weight:600; font-size:13.5px; transition:border-color .15s; }
   .tile:hover{ border-color:var(--amber); }
   .tile .tile-sub{ display:block; font-weight:400; font-size:11.5px; color:var(--ink-soft); margin-top:5px; }
-  table.route-grid{ table-layout:auto; }
-  table.route-grid th, table.route-grid td{ text-align:center; padding:7px 10px; font-size:13px; border:1px solid #B9BEC6; white-space:nowrap; min-width:52px; }
+  /* 週期任務清單：車次欄固定寬，其餘 14 欄（7天×上午下午）一律等寬；螢幕太窄才橫向捲動。 */
+  table.route-grid{ table-layout:fixed; width:100%; min-width:1040px; }
+  table.route-grid th, table.route-grid td{ text-align:center; padding:7px 6px; font-size:13px; border:1px solid #B9BEC6; white-space:normal; overflow-wrap:anywhere; }
   table.route-grid td.grid-cell{ font-weight:700; font-size:13.5px; }
   table.route-grid th.weekend{ color:var(--amber); }
   table.route-grid td.grid-black{ background:#15181D; }
@@ -970,7 +971,7 @@ function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
   const mainEl = c && c.closest('main');
-  if(mainEl) mainEl.classList.toggle('wide', !inDriverView && ['schedule','billing','export'].includes(state.tab));
+  if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
     ({home:renderHomeAdmin, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
@@ -2833,7 +2834,7 @@ function renderWeekGrid(containerId, dates){
     }).join('');
     return `<div class="origin-title">${og.label||og.address}</div>
       <div class="panel" style="overflow-x:auto; padding:8px;">
-        <table class="route-grid">${headerHtml()}<tbody>${rows}</tbody></table>
+        <table class="route-grid"><colgroup><col style="width:60px">${dates.map(()=>'<col><col>').join('')}</colgroup>${headerHtml()}<tbody>${rows}</tbody></table>
       </div>`;
   }).join('');
   wrap.innerHTML = blocks || '<div class="empty">此任務起點尚無路線，請先到「路線管理」建立</div>';
