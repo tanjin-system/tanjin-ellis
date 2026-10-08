@@ -1332,6 +1332,8 @@ async function renderHomeAdmin(c){
   const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
   // 下週（含之後）還有草稿任務沒發佈：提醒主控（夥伴看不到）。
   const draftWeekCount = state.data.assignments.filter(a=>a.published===false && a.date>=getWeekDates(0)[0]).length;
+  // 過了那天還停在「執行中」（夥伴忘了按完成）的任務：不會被算進請款與報酬，要提醒主控處理。
+  const stuckTasks = state.data.assignments.filter(a=>a.status==='in_progress' && a.date<today && a.published!==false);
   let deferredDue = [];
   try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
   let unsettledNames = [];
@@ -1345,9 +1347,10 @@ async function renderHomeAdmin(c){
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${stuckTasks.length ? `<div style="font-size:13px; padding:4px 0;">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
       ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往報酬結算</button></div>` : ''}
       ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
@@ -1389,6 +1392,7 @@ async function renderHomeAdmin(c){
       if(state._profitOpen) show(true);
     }
   }
+  c.querySelectorAll('[data-gostuck]').forEach(el=>{ el.onclick = ()=>{ const d = el.dataset.gostuck; for(let off=-8; off<=8; off++){ if(getWeekDates(off).includes(d)){ state.weekOffset = off; break; } } state._mDay = d; goTab('schedule'); }; });
   c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
   c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
   c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
@@ -1401,7 +1405,7 @@ async function renderHomeAdmin(c){
 }
 function renderHomeDriver(c){
   const dId = state.activeDriverId;
-  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===todayStr() && a.status!=='completed');
+  const todays = myOpenTasks(dId);
   const tiles = [
     {id:'today', label:'今日任務', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無任務'},
     {id:'history', label:'歷史任務', sub:'已完成紀錄'},
@@ -3178,6 +3182,10 @@ function renderAssignmentDetail(id, box){
         <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換夥伴</button>
       </div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由夥伴端自行操作，完成後會自動封存，主控端無需再次確認。</p>
+      ${a.status==='in_progress' && a.published!==false ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-color:var(--amber);">
+        <span>夥伴忘了按「完成任務」（過了那天他自己也能補按，但你也可以直接處理）：</span>
+        <button class="btn amber" id="afForceComplete" style="padding:5px 10px; font-size:12px;">主控代為完成</button>
+      </div>` : ''}
       ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待完成</span>'}${dp.helperId?` <span class="badge" style="background:#E3EEF7; color:#2F6EA5;">${dp.status==='completed'?'支援完成':'支援中'}：${escapeHtml(dp.helperName||'')}</span>${dp.status!=='completed'?` <button class="btn ghost" data-revokedel="${dp.delegationId}" style="padding:2px 8px; font-size:11.5px;">收回</button>`:''}`:''}</div>`).join('')}
       <div id="afSupportSection"></div>
       <div class="note" id="afPaySection" style="margin-top:10px;"><div class="empty">載入額外金額與已付款…</div></div>
@@ -3200,6 +3208,13 @@ function renderAssignmentDetail(id, box){
     if(!newDriverId){ alert('請選擇夥伴'); return; }
     try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
     catch(err){ alert(err.message); }
+  };
+  const forceBtn = box.querySelector('#afForceComplete');
+  if(forceBtn) forceBtn.onclick = async ()=>{
+    if(!confirm(`確定要代 ${driverName(a.driverId)} 完成 ${a.date} ${routeName(a.routeId)} 嗎？\n完成後金額會依這趟目前的報酬與請款鎖定、自動封存，之後不能再改。`)) return;
+    forceBtn.disabled = true;
+    try{ await markAssignmentComplete(a.id, '主控代為完成'); renderContent(); }
+    catch(err){ alert(err.message); forceBtn.disabled = false; }
   };
   renderSupportSection(a, box.querySelector('#afSupportSection'));
   box.querySelectorAll('[data-revokedel]').forEach(b=>{
@@ -4599,11 +4614,18 @@ function assignmentShiftKey(a){
   const route = state.data.routes.find(r=>r.id===a.routeId);
   return route?.shift==='PM' ? 1 : 0;
 }
+// 夥伴「還要處理」的任務：今天沒完成的，加上最近 7 天內「已經開始但忘了按完成」的舊任務
+// （過了那天不然就沒有地方可以按完成了）。舊的排在前面。
+function myOpenTasks(dId){
+  const today = todayStr(), weekAgo = ymd(addDays(today, -7));
+  return state.data.assignments.filter(a=>a.driverId===dId && !a.isSupport && a.published!==false && (
+      (a.date===today && a.status!=='completed') || (a.date<today && a.date>=weekAgo && a.status==='in_progress')))
+    .sort((a,b)=> a.date.localeCompare(b.date) || assignmentShiftKey(a)-assignmentShiftKey(b));
+}
 function renderToday(c){
   const dId = state.activeDriverId;
   const today = todayStr();
-  const todays = state.data.assignments.filter(a=>a.driverId===dId && a.published!==false && a.date===today && a.status!=='completed')
-    .sort((a,b)=> assignmentShiftKey(a)-assignmentShiftKey(b));
+  const todays = myOpenTasks(dId);
   const weekDates = [...getWeekDates(0), ...getWeekDates(1)];
   c.innerHTML = `
     <h2 class="section-title">今日任務</h2>
@@ -4732,9 +4754,10 @@ function renderTodayDetail(todays){
   box.innerHTML = todays.map(a=>{
     const mine = ownDropPoints(a);
     const allHandled = mine.length>0 && mine.every(dp=>dp.status==='completed' || dp.issueReason);
-    return `<div class="panel">
+    const isPast = a.date < todayStr();
+    return `<div class="panel" ${isPast?'style="border-color:var(--danger); border-width:2px;"':''}>
       <div class="toolbar">
-        <strong>${routeName(a.routeId)}</strong>
+        <strong>${isPast?`<span class="badge" style="background:#FBEAE6; color:var(--danger); margin-right:6px;">${a.date.slice(5).replace('-','/')} 還沒完成</span>`:''}${routeName(a.routeId)}</strong>
         <span>
           ${a.status==='scheduled'?'<span class="badge pending">尚未開始</span>':a.status==='in_progress'?'<span class="badge progress">執行中</span>':''}
           <a class="btn ghost" href="${lineShareLink(`【任務提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${mine.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
