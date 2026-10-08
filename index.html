@@ -41,7 +41,9 @@
   nav.tabs{ width:150px; background:#fff; border-right:1px solid var(--border); padding:14px 0; flex-shrink:0; }
   nav.tabs button{ display:block; width:100%; text-align:left; padding:9px 16px; background:none; border:none; border-left:3px solid transparent; cursor:pointer; font-family:inherit; font-size:13px; color:var(--ink-soft); }
   nav.tabs button.active{ border-left-color:var(--amber); color:var(--ink); font-weight:600; background:#FAF7F1; }
-  main{ flex:1; padding:20px; max-width:1000px; }
+  main{ flex:1; padding:20px; max-width:1000px; min-width:0; }
+  /* 電腦版：週期任務清單、請款結算、資料匯出這種寬表格，內容區放寬到幾乎滿版，不用在小框裡左右滑。 */
+  main.wide{ max-width:none; }
   h2.section-title{ font-size:16px; font-weight:600; margin:0 0 4px; }
   p.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
   .panel{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
@@ -967,6 +969,8 @@ function switchTab(id){
 function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
+  const mainEl = c && c.closest('main');
+  if(mainEl) mainEl.classList.toggle('wide', !inDriverView && ['schedule','billing','export'].includes(state.tab));
   if(!inDriverView){
     ({home:renderHomeAdmin, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
