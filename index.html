@@ -64,6 +64,25 @@
   .btn.danger{ background:none; border:1px solid var(--danger); color:var(--danger); }
   button.btn:hover{ opacity:.88; }
   button.btn[disabled]{ opacity:.4; cursor:not-allowed; }
+  /* 按鈕「確實按下去」的回饋：平時有一點立體感，按下時往下沉、縮一點、變暗、內陷陰影；
+     手機點擊（:active）立刻看得到。 */
+  .btn, .sig-icon-btn, .sig-clear-link, nav.tabs button, .tile, .m-day, .m-slot, .sl-row[data-previewtrip], .trip-chip, .date-head, details > summary{
+    -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none;
+    transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out, background-color .1s ease-out;
+  }
+  .btn{ box-shadow:0 2px 0 rgba(27,33,41,.22), 0 3px 6px rgba(27,33,41,.10); }
+  .btn.ghost, .btn.danger{ box-shadow:0 1px 0 rgba(27,33,41,.14); }
+  .btn:active:not([disabled]), .sig-icon-btn:active, .sig-clear-link:active{
+    transform:translateY(2px) scale(.96); filter:brightness(.86); opacity:1;
+    box-shadow:inset 0 3px 6px rgba(27,33,41,.35);
+  }
+  .btn.ghost:active:not([disabled]){ background:rgba(27,33,41,.12); }
+  .btn.danger:active:not([disabled]){ background:rgba(181,73,58,.18); }
+  nav.tabs button:active, .tile:active, .m-day:active, .m-slot:active, .sl-row[data-previewtrip]:active, .trip-chip:active, .date-head:active, details > summary:active{
+    transform:scale(.97); filter:brightness(.92);
+  }
+  .tile:active{ border-color:var(--amber); }
+  @media (prefers-reduced-motion: reduce){ .btn, .tile, .m-day, .m-slot{ transition:none; } }
   .badge{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
   .badge.pending{ background:#F2E4D0; color:#8A5A17; }
   .badge.completed{ background:#DCEBE0; color:#2C6B44; }
@@ -5590,6 +5609,8 @@ async function refreshHomeDataIfIdle(){
     renderContent();
   }catch(e){ console.error('背景重新整理資料失敗', e); }
 }
+// iOS Safari 要有 touchstart 監聽，:active（按下去的視覺回饋）才會在手機上即時生效。
+document.addEventListener('touchstart', ()=>{}, { passive:true });
 document.addEventListener('visibilitychange', ()=>{
   if(!document.hidden){ checkForUpdate(); refreshHomeDataIfIdle(); }
 });
