@@ -958,12 +958,16 @@ async function createAssignment(input) {
 // 發佈：未來週次的任務預設是草稿（published=false，夥伴端 RLS 看不到），主控排完按「發佈」才開放。
 // 自動延續：每週第一次打開週期任務清單時，如果下週還沒補過（schedule_rollovers 沒有紀錄）且下週是空的，
 // 就把本週每一格（路線＋夥伴＋星期幾）複製到下週，一律是草稿。先寫入紀錄再複製，之後刪掉哪格都不會再補回來。
-async function publishWeek(start, end) {
+async function publishWeek(start, end, driverIds) {
   const supabase = getSupabase();
-  const { error } = await supabase.from('assignments').update({ published: true })
+  // driverIds 有給＝只發佈這幾位夥伴在這個區間的草稿（可以提前發佈）；沒給＝整週一起發佈。
+  let q = supabase.from('assignments').update({ published: true })
     .gte('trip_date', start).lte('trip_date', end).eq('published', false);
+  if (driverIds && driverIds.length) q = q.in('driver_id', driverIds);
+  const { error } = await q;
   if (error) throw new Error('發佈失敗：' + error.message);
-  state.data.assignments.forEach(a => { if (a.date >= start && a.date <= end) a.published = true; });
+  const only = driverIds && driverIds.length ? new Set(driverIds) : null;
+  state.data.assignments.forEach(a => { if (a.date >= start && a.date <= end && (!only || only.has(a.driverId))) a.published = true; });
 }
 
 async function rolloverNextWeekIfNeeded() {

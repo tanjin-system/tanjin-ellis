@@ -2634,9 +2634,22 @@ async function renderScheduleAdmin(c){
       const drafts = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
       const msg = state._rolloverMsg ? `<div class="note no-print" style="margin-bottom:8px;">${escapeHtml(state._rolloverMsg)}</div>` : '';
       if(!drafts) return msg;
-      return msg + `<div class="panel no-print" style="border-color:var(--amber); border-width:2px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-        <span>📝 這週有 <b>${drafts}</b> 趟尚未發佈（草稿，夥伴目前看不到）</span>
-        <button class="btn amber" id="publishWeekBtn">發佈這週（${week1[0].slice(5)}～${week1[6].slice(5)}）</button>
+      // 依夥伴統計草稿數：可以只發佈勾選的夥伴（提前發佈），也保留「整週一起發佈」。
+      const perDriver = new Map();
+      state.data.assignments.forEach(a=>{ if(a.published===false && a.date>=week1[0] && a.date<=week1[6]) perDriver.set(a.driverId, (perDriver.get(a.driverId)||0)+1); });
+      const list = [...perDriver.entries()].sort((x,y)=> driverName(x[0]).localeCompare(driverName(y[0]), 'zh-Hant'));
+      return msg + `<div class="panel no-print" style="border-color:var(--amber); border-width:2px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span>📝 這週有 <b>${drafts}</b> 趟尚未發佈（草稿，夥伴目前看不到），涉及 ${list.length} 位夥伴</span>
+          <button class="btn amber" id="publishWeekBtn">全部一起發佈（${week1[0].slice(5)}～${week1[6].slice(5)}）</button>
+        </div>
+        <details style="margin-top:8px;"><summary style="cursor:pointer; font-size:13px; font-weight:600;">只發佈部分夥伴（提前發佈）</summary>
+          <div style="display:flex; gap:8px; margin:6px 0;"><button class="btn ghost" id="pubAll" style="padding:3px 10px; font-size:12px;">全選</button><button class="btn ghost" id="pubNone" style="padding:3px 10px; font-size:12px;">全不選</button></div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:2px 12px;">
+            ${list.map(([id,n])=>`<label style="display:flex; align-items:center; gap:6px; font-size:13px; padding:4px 0;"><input type="checkbox" class="pubDriver" value="${id}" style="width:auto;"> ${escapeHtml(driverName(id))}<span style="color:var(--ink-soft); font-size:11.5px;">（${n}）</span></label>`).join('')}
+          </div>
+          <button class="btn amber" id="publishSelectedBtn" style="margin-top:6px;">發佈勾選的夥伴</button>
+        </details>
       </div>`;
     })()}
     </div>
@@ -2653,11 +2666,25 @@ async function renderScheduleAdmin(c){
   const publishBtn = document.getElementById('publishWeekBtn');
   if(publishBtn) publishBtn.onclick = async ()=>{
     const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
-    if(!confirm(`確定要發佈 ${week1[0]}～${week1[6]} 的 ${n} 趟車嗎？發佈後夥伴馬上看得到自己的行程。`)) return;
+    if(!confirm(`確定要發佈 ${week1[0]}～${week1[6]} 的 ${n} 個任務嗎？發佈後夥伴馬上看得到自己的行程。`)) return;
     publishBtn.disabled = true;
     try{ await publishWeek(week1[0], week1[6]); state._rolloverMsg = ''; renderContent(); }
     catch(err){ alert(err.message); publishBtn.disabled = false; }
   };
+  const pubSel = document.getElementById('publishSelectedBtn');
+  if(pubSel){
+    document.getElementById('pubAll').onclick = ()=> document.querySelectorAll('.pubDriver').forEach(x=>x.checked = true);
+    document.getElementById('pubNone').onclick = ()=> document.querySelectorAll('.pubDriver').forEach(x=>x.checked = false);
+    pubSel.onclick = async ()=>{
+      const ids = [...document.querySelectorAll('.pubDriver:checked')].map(x=>x.value);
+      if(!ids.length){ alert('請至少勾選一位夥伴'); return; }
+      const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6] && ids.includes(a.driverId)).length;
+      if(!confirm(`只發佈 ${ids.map(driverName).join('、')} 這週的 ${n} 趟任務嗎？發佈後這幾位夥伴馬上看得到自己的行程，其他夥伴的草稿不受影響。`)) return;
+      pubSel.disabled = true;
+      try{ await publishWeek(week1[0], week1[6], ids); renderContent(); }
+      catch(err){ alert(err.message); pubSel.disabled = false; }
+    };
+  }
   enhanceDriverSelect(document.getElementById('sDriver'), { getOrigin: ()=>{ const r = state.data.routes.find(x=>x.id===document.getElementById('sRoute').value); return r ? r.originAddr : null; } });
   document.getElementById('sRoute').addEventListener('change', ()=>{ const d = document.getElementById('sDriver'); if(d && d.syncPicker) d.syncPicker(); });
   document.getElementById('addAssign').onclick = async ()=>{
