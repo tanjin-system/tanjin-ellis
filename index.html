@@ -897,6 +897,44 @@ function statementNetFromAdjustments(tripTotal, adjustments){
 // 同一段時間，容易誤判。統一成自然月之後，這裡顯示的各通路金額會跟
 // 「請款結算」裡那個通路自己週期算出來的正式金額有落差，是刻意的
 // （快速參考 vs 正式請款單，本來就不需要一致）。
+// 點「利潤總額」展開的每日明細：跟上面的月合計用同一份資料與同一套算法，逐日加總後一定等於月合計。
+// 請款＝當天完成任務的請款金額（各通路拆賬加總）；夥伴薪資支出＝當天完成任務的報酬＋當天的加減項
+// （預支、代墊款不算；加減項沒有填日期的視為該月 1 號）。
+function computeProfitDaily(){
+  const today = todayStr();
+  const monthStr = today.slice(0,7);
+  const start = monthStr + '-01';
+  const days = {};
+  const bucket = d=> days[d] || (days[d] = { date:d, revenue:0, expense:0, trips:0 });
+  const activeCh = new Set(state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>ch.id));
+  state.data.assignments.forEach(a=>{
+    if(a.status!=='completed' || a.isSupport || a.date<start || a.date>today) return;
+    const byChannel = effectiveByChannelForAssignment(a);
+    const rev = Object.entries(byChannel).reduce((sum,[cid,v])=> activeCh.has(cid) ? sum+(Number(v)||0) : sum, 0);
+    const b = bucket(a.date); b.revenue += rev; b.expense += tripPay(a); b.trips++;
+  });
+  state.data.adjustments.forEach(adj=>{
+    if(adj.month!==monthStr || adj.type==='advance' || adj.type==='reimbursement') return;
+    const d = adjustmentEffectiveDate(adj);
+    if(d<start || d>today) return;
+    bucket(d).expense += adj.type==='add' ? Number(adj.amount) : -Math.abs(Number(adj.amount));
+  });
+  return Object.values(days).sort((x,y)=>y.date.localeCompare(x.date));
+}
+function profitDailyHtml(){
+  const rows = computeProfitDaily();
+  if(!rows.length) return '<div class="empty">本月還沒有已完成的任務</div>';
+  const WD = ['日','一','二','三','四','五','六'];
+  const sum = rows.reduce((t,r)=>({ revenue:t.revenue+r.revenue, expense:t.expense+r.expense, trips:t.trips+r.trips }), { revenue:0, expense:0, trips:0 });
+  const fmt = n=> `${n<0?'-':''}$${money(Math.abs(Math.round(n)))}`;
+  const profitCell = n=> `<td class="amount" style="color:${n>=0?'var(--teal)':'var(--danger)'}; font-weight:700;">${fmt(n)}</td>`;
+  return `<div style="overflow-x:auto;"><table>
+    <thead><tr><th>日期</th><th>任務數</th><th>請款總額</th><th>夥伴薪資支出</th><th>利潤</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td>${r.date.slice(5).replace('-','/')}（${WD[new Date(r.date+'T00:00:00').getDay()]}）</td><td class="amount">${r.trips}</td><td class="amount">${fmt(r.revenue)}</td><td class="amount">${fmt(r.expense)}</td>${profitCell(r.revenue-r.expense)}</tr>`).join('')}
+    <tr style="font-weight:700; background:#F4F3EF;"><td>本月合計</td><td class="amount">${sum.trips}</td><td class="amount">${fmt(sum.revenue)}</td><td class="amount">${fmt(sum.expense)}</td>${profitCell(sum.revenue-sum.expense)}</tr></tbody>
+  </table></div>
+  <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0;">每天的數字是當天完成的任務；加減項依調整項日期歸入（沒填日期的算在 1 號）。僅供參考。</p>`;
+}
 function computeProfitSnapshot(){
   const monthStr = todayStr().slice(0,7);
   const today = todayStr();
@@ -1328,8 +1366,9 @@ async function renderHomeAdmin(c){
       <table style="margin-top:10px;">
         <tr><td>請款總額</td><td class="amount">$${money(p.revenueTotal.toFixed(0))}</td></tr>
         <tr><td>夥伴薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
-        <tr><td><strong>利潤總額</strong></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
+        <tr id="profitRow" style="cursor:pointer;" title="點一下看每一天的明細"><td><strong>利潤總額</strong> <span style="font-size:12px; color:var(--ink-soft);">每日明細 <span id="profitChevron">▸</span></span></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
       </table>
+      <div id="profitDaily" style="display:none; margin-top:8px;"></div>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟報酬結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
     </div>
     ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
@@ -1342,6 +1381,14 @@ async function renderHomeAdmin(c){
     </div>` : ''}
     <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
+  { // 點「利潤總額」展開／收合每日明細（資料更新重畫後維持展開狀態）
+    const row = document.getElementById('profitRow'), box = document.getElementById('profitDaily'), chev = document.getElementById('profitChevron');
+    if(row && box){
+      const show = open=>{ state._profitOpen = open; box.style.display = open ? 'block' : 'none'; chev.textContent = open ? '▾' : '▸'; if(open) box.innerHTML = profitDailyHtml(); };
+      row.onclick = ()=> show(!state._profitOpen);
+      if(state._profitOpen) show(true);
+    }
+  }
   c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
   c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
   c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
