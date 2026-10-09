@@ -1201,16 +1201,28 @@ async function markAssignmentComplete(assignmentId, issueNote) {
 // 只需要包含這趟車實際牽涉到的通路；總額在這裡直接加總，不留給資料庫算。
 async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billingByChannel }) {
   const total = Object.values(billingByChannel || {}).reduce((s, v) => s + (Number(v) || 0), 0);
-  const supabase = getSupabase();
-  const { error } = await supabase.from('assignments').update({
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  const payload = {
     fare, distance_km: distanceKm,
     billing_total_snapshot: total,
     billing_by_channel_snapshot: billingByChannel
-  }).eq('id', assignmentId);
+  };
+  // 已完成的任務，報酬是用完成當下凍結的快照（payroll_fare_snapshot）在算，只改 fare 不會動到
+  // 夥伴看到的金額。主控在這裡改夥伴費用，就是要這趟的報酬跟著變，所以已完成的一併更新快照；
+  // 但這個日期如果已經有確認過（簽名／凍結）的報酬單，金額已經結出去了，不能再悄悄改，要擋下來。
+  if (a && a.status === 'completed') {
+    const frozen = findCoveringStatement(a.driverId, a.date);
+    if (frozen && Number(fare) !== Number(a.payrollFareSnapshot ?? a.fare)) {
+      throw new Error(`${a.date} 已經包含在 ${driverName(a.driverId)} 已確認的報酬單裡，這趟的夥伴費用不能再改。請改用「額外金額」調整，或先把那張報酬單退回。`);
+    }
+    if (!frozen) payload.payroll_fare_snapshot = fare === '' || fare == null ? 0 : Number(fare);
+  }
+  const supabase = getSupabase();
+  const { error } = await supabase.from('assignments').update(payload).eq('id', assignmentId);
   if (error) throw new Error('儲存費用失敗：' + error.message);
 
-  const a = state.data.assignments.find(x => x.id === assignmentId);
   if (a) {
+    if ('payroll_fare_snapshot' in payload) a.payrollFareSnapshot = payload.payroll_fare_snapshot;
     a.fare = Number(fare) || 0;
     a.distanceKm = distanceKm === '' || distanceKm == null ? null : Number(distanceKm);
     a.billingSnapshot = { totalAmount: total, totalPoints: a.dropPoints.length, byChannel: billingByChannel };
