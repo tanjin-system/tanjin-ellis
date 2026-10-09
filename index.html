@@ -2885,7 +2885,11 @@ function renderWeekGrid(containerId, dates){
   function slotCellHtml(candidates, preferred, date){
     if(!preferred) return cellHtml(preferred, date);
     const byId = new Map(candidates.map(r=>[r.id, r]));
-    const list = state.data.assignments.filter(x=>x.date===date && byId.has(x.routeId));
+    // 同一格有多趟時，順序固定：先放這一天預設該用的那條路線，其餘依路線名稱（沒有標註的在前）排，
+    // 每一天都同一個順序，不會一天上面是「星期二到五」、隔天上面變成沒標註的。
+    const rank = a=> (a.routeId===preferred.id ? 0 : 1);
+    const list = state.data.assignments.filter(x=>x.date===date && byId.has(x.routeId))
+      .sort((x,y)=> rank(x)-rank(y) || (byId.get(x.routeId).seq||'').localeCompare(byId.get(y.routeId).seq||'', 'zh-Hant') || x.id.localeCompare(y.id));
     if(list.length===0) return cellHtml(preferred, date);
     if(list.length===1) return cellHtml(byId.get(list[0].routeId), date);
     return `<td class="grid-cell grid-multi">${list.map(a=>{
