@@ -160,6 +160,13 @@
   .m-slot .go{ color:var(--ink-soft); }
   .m-slot.empty{ background:#FBEAE6; color:var(--danger); } .m-slot.empty .nm{ font-weight:700; }
   .m-slot.draft{ box-shadow:0 0 0 1px var(--amber) inset; }
+  .bulk-sel{ background:#FFE3A6 !important; outline:3px solid var(--amber); outline-offset:-3px; }
+  .bulk-on th[data-bdate], .bulk-on td.row-label, .bulk-on .m-route-title{ cursor:pointer; text-decoration:underline dotted; }
+  .bulk-bar{ position:fixed; left:0; right:0; bottom:0; z-index:60; background:var(--panel,#fff); border-top:3px solid var(--amber); box-shadow:0 -4px 14px rgba(0,0,0,.15); padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  .bulk-bar .bulk-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0; font-size:13px; }
+  .bulk-bar .btn{ padding:5px 10px; font-size:12.5px; }
+  .bulk-bar select{ width:auto; max-width:180px; }
+  .bulk-bar .bulk-pick{ width:200px; max-width:46vw; }
   .day-card{ background:#FAF9F7; border:1px solid var(--border); border-radius:var(--radius); padding:8px; min-height:110px; }
   .day-card .day-label{ font-size:11.5px; color:var(--ink-soft); margin-bottom:6px; font-weight:600; }
   .trip-chip{ background:#fff; border:1px solid var(--border); border-left:3px solid var(--teal); border-radius:2px; padding:5px 7px; margin-bottom:5px; font-size:11px; cursor:pointer; }
@@ -1027,6 +1034,7 @@ function switchTab(id){
 function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
+  if(state.tab!=='schedule' && state._bulk) state._bulk = null;
   const mainEl = c && c.closest('main');
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
@@ -2627,6 +2635,7 @@ async function renderScheduleAdmin(c){
       <div style="display:flex; gap:8px;">
         <select id="originFilter" style="max-width:200px;">${originFilterOpts}</select>
         <button class="btn ghost m-only" id="mBatchBtn">批次建立</button>
+        <button class="btn ${bulkOn()?'amber':'ghost'}" id="bulkToggle">${bulkOn()?'結束批量修改':'批量修改'}</button>
         <button class="btn ghost" id="printWeek">另存PDF（本週）</button>
       </div>
     </div>
@@ -2654,14 +2663,16 @@ async function renderScheduleAdmin(c){
     })()}
     </div>
     <h3 class="sched-grid-title">${week1[0]} ~ ${week1[6]}</h3>
-    <div class="m-sched" id="mSchedule"></div>
+    <div class="m-sched ${bulkOn()?'bulk-on':''}" id="mSchedule"></div>
     <div id="mSheetBackdrop"></div>
-    <div id="gridWeek1"></div>
+    <div id="gridWeek1" class="${bulkOn()?'bulk-on':''}"></div>
     <div id="assignDetail"></div>
+    ${bulkOn()?'<div style="height:150px;"></div><div id="bulkBar" class="bulk-bar no-print"></div>':''}
   `;
-  document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; renderContent(); };
-  document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; renderContent(); };
-  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); renderMobileSchedule(week1); };
+  document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
+  document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
+  document.getElementById('bulkToggle').onclick = ()=>{ state._bulk = bulkOn() ? null : { on:true, sel:new Set() }; renderContent(); };
+  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); renderMobileSchedule(week1); if(bulkOn()) renderBulkBar(week1); };
   document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週期任務清單_${week1[0]}_${week1[6]}`);
   const publishBtn = document.getElementById('publishWeekBtn');
   if(publishBtn) publishBtn.onclick = async ()=>{
@@ -2721,6 +2732,7 @@ async function renderScheduleAdmin(c){
   };
   renderWeekGrid('gridWeek1', week1);
   renderMobileSchedule(week1);
+  if(bulkOn()) renderBulkBar(week1);
 }
 // ---------- 主控手機版：一天一頁＋點一下換人（電腦版格子完全不動，這段只在窄螢幕顯示） ----------
 // 每個「時段」＝(任務起點, 車次, 上午/下午)；跟電腦版格子用同一套規則挑路線（星期一／週二到五兩個版本）。
@@ -2829,6 +2841,7 @@ function renderMobileSchedule(week){
   if(!sheet._mObs){ sheet._mObs = new MutationObserver(()=>{ if(!sheet.innerHTML.trim()) backdrop.classList.remove('show'); }); sheet._mObs.observe(sheet, { childList:true }); }
   host.querySelectorAll('[data-mview]').forEach(el=>{
     el.onclick = ()=>{
+      if(bulkOn()){ bulkClick([el]); return; }
       sheet.innerHTML = '';
       backdrop.classList.add('show');
       renderAssignmentDetail(el.dataset.mview, sheet);
@@ -2838,6 +2851,7 @@ function renderMobileSchedule(week){
   });
   host.querySelectorAll('[data-mquick]').forEach(el=>{
     el.onclick = ()=>{
+      if(bulkOn()){ bulkClick([el]); return; }
       const [routeId, date] = el.dataset.mquick.split('|');
       backdrop.classList.add('show');
       renderQuickCreate(routeId, date);
@@ -2845,10 +2859,173 @@ function renderMobileSchedule(week){
       const cb = document.getElementById('mSheetClose'); if(cb) cb.onclick = closeSheet;
     };
   });
+  host.querySelectorAll('.m-route-title').forEach(t=>{ t.onclick = ()=>{ if(bulkOn()) bulkClick([t.parentElement]); }; });
+  bulkRefresh();
   document.getElementById('mCopyYesterday').onclick = ()=> copyDayAssignments(ymd(addDays(day,-1)), day);
   document.getElementById('mCopyLastWeek').onclick = ()=> copyDayAssignments(ymd(addDays(day,-7)), day);
   const mb = document.getElementById('mBatchBtn');
   if(mb) mb.onclick = ()=>{ const bp = document.getElementById('batchPanel'); bp.classList.toggle('open'); if(bp.classList.contains('open')) bp.scrollIntoView({behavior:'smooth', block:'start'}); };
+}
+// ---------- 批量修改（週期任務清單）----------
+// 開啟後，點格子不再開明細，而是「選取」：已排任務和空格都能選。選好之後一次：
+// ‧指派給某位夥伴（已排任務＝換人、空格＝新增任務）　‧刪除選取的任務。
+// 點日期標題＝選那一天全部、點車次名稱＝選那一車整週；也有「全週草稿／某位夥伴」等快速選取。
+// 只動「已排定、尚未出發」的任務；已出發、已完成的會自動略過。下週自動延續的草稿正好適合這樣一次改完再發佈。
+const BULK_SEL = '[data-viewassign],[data-quickcreate],[data-mview],[data-mquick]';
+function bulkOn(){ return !!(state._bulk && state._bulk.on); }
+function bulkKeyOf(el){
+  const d = el.dataset;
+  if(d.viewassign) return 'a:'+d.viewassign;
+  if(d.mview) return 'a:'+d.mview;
+  if(d.quickcreate) return 'e:'+d.quickcreate;
+  if(d.mquick) return 'e:'+d.mquick;
+  return null;
+}
+function bulkClick(roots){
+  if(!bulkOn()) return;
+  const keys = [];
+  roots.forEach(r=>{ (r.matches && r.matches(BULK_SEL) ? [r] : [...r.querySelectorAll(BULK_SEL)]).forEach(el=>{ const k = bulkKeyOf(el); if(k) keys.push(k); }); });
+  if(!keys.length) return;
+  const sel = state._bulk.sel;
+  const allSel = keys.every(k=>sel.has(k));
+  keys.forEach(k=> allSel ? sel.delete(k) : sel.add(k));
+  bulkRefresh();
+}
+// 這一週（套用目前的任務起點篩選）所有任務與空格
+function bulkWeekInfo(){
+  const week = getWeekDates(state.weekOffset);
+  const of = (document.getElementById('originFilter')||{}).value || '';
+  const tasks = [], empties = [];
+  week.forEach(d=> mobileSlotsFor(d, of).forEach(o=>o.routes.forEach(r=>r.slots.forEach(sl=>{
+    if(sl.items.length) sl.items.forEach(a=>tasks.push(a));
+    else empties.push({ routeId: sl.route.id, date: d, shift: sl.shift });
+  }))));
+  return { week, tasks, empties };
+}
+function bulkSelection(){
+  const tasks = [], empties = [];
+  state._bulk.sel.forEach(k=>{
+    if(k.startsWith('a:')){ const a = state.data.assignments.find(x=>x.id===k.slice(2)); if(a) tasks.push(a); }
+    else { const [routeId, date] = k.slice(2).split('|'); const r = state.data.routes.find(x=>x.id===routeId); if(r) empties.push({ routeId, date, shift: r.shift }); }
+  });
+  return { tasks, empties };
+}
+function bulkRefresh(){
+  if(!bulkOn()) return;
+  const sel = state._bulk.sel;
+  document.querySelectorAll('#gridWeek1 '+BULK_SEL.split(',').join(', #gridWeek1 ')+', #mSchedule '+BULK_SEL.split(',').join(', #mSchedule ')).forEach(el=>{
+    const k = bulkKeyOf(el);
+    el.classList.toggle('bulk-sel', !!k && sel.has(k));
+  });
+  const cnt = document.getElementById('bulkCount');
+  if(cnt){
+    const { tasks, empties } = bulkSelection();
+    cnt.textContent = `已選 ${tasks.length} 個任務、${empties.length} 個空格`;
+  }
+}
+function renderBulkBar(week){
+  const bar = document.getElementById('bulkBar');
+  if(!bar) return;
+  const info = bulkWeekInfo();
+  const perDriver = new Map();
+  info.tasks.forEach(a=> perDriver.set(a.driverId, (perDriver.get(a.driverId)||0)+1));
+  const srcOpts = [...perDriver.entries()].sort((x,y)=> driverName(x[0]).localeCompare(driverName(y[0]), 'zh-Hant'))
+    .map(([id,n])=>`<option value="${id}">${escapeHtml(driverName(id))}（${n}）</option>`).join('');
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+  bar.innerHTML = `
+    <div class="bulk-row"><b>批量修改</b><span id="bulkCount"></span><button class="btn ghost" id="bulkClear">清除選取</button></div>
+    <div class="bulk-row"><span>指派給：</span><div class="bulk-pick"><select id="bulkDriver"><option value="">選擇夥伴</option>${driverOpts}</select></div>
+      <button class="btn amber" id="bulkApply">套用（換人／空格新增）</button>
+      <button class="btn danger" id="bulkDelete">刪除選取的任務</button>
+    </div>
+    <details class="bulk-row" style="display:block;"><summary style="cursor:pointer; font-weight:600;">快速選取／說明</summary>
+      <div class="bulk-row" style="color:var(--ink-soft);">點格子選取／取消；電腦版可點日期標題選整天、點車次名稱選整車；手機版點車次名稱選那一車。</div>
+      <div class="bulk-row"><button class="btn ghost" id="bulkQDraft">全週草稿</button>
+        <button class="btn ghost" id="bulkQAll">全週所有任務</button>
+        <button class="btn ghost" id="bulkQEmpty">全週空格</button>
+        <button class="btn ghost m-only" id="bulkQDay">這一天全部</button>
+        <select id="bulkSrc"><option value="">某位夥伴的全週任務…</option>${srcOpts}</select>
+      </div>
+    </details>`;
+  const pick = bar.querySelector('#bulkDriver');
+  enhanceDriverSelect(pick, {});
+  const list = pick.nextElementSibling && pick.nextElementSibling.children[1];
+  if(list){ list.style.top = 'auto'; list.style.bottom = '100%'; } // 底部工具列：選單往上展開
+  const add = keys=>{ keys.forEach(k=>state._bulk.sel.add(k)); bulkRefresh(); };
+  bar.querySelector('#bulkClear').onclick = ()=>{ state._bulk.sel.clear(); bulkRefresh(); };
+  bar.querySelector('#bulkQDraft').onclick = ()=> add(info.tasks.filter(a=>a.published===false).map(a=>'a:'+a.id));
+  bar.querySelector('#bulkQAll').onclick = ()=> add(info.tasks.map(a=>'a:'+a.id));
+  bar.querySelector('#bulkQEmpty').onclick = ()=> add(info.empties.map(e=>'e:'+e.routeId+'|'+e.date));
+  bar.querySelector('#bulkQDay').onclick = ()=>{
+    const day = state._mDay;
+    add(info.tasks.filter(a=>a.date===day).map(a=>'a:'+a.id).concat(info.empties.filter(e=>e.date===day).map(e=>'e:'+e.routeId+'|'+e.date)));
+  };
+  bar.querySelector('#bulkSrc').onchange = e=>{
+    const id = e.target.value; if(!id) return;
+    add(info.tasks.filter(a=>a.driverId===id).map(a=>'a:'+a.id));
+    e.target.value = '';
+  };
+  bar.querySelector('#bulkApply').onclick = bulkApply;
+  bar.querySelector('#bulkDelete').onclick = bulkDelete;
+  bulkRefresh();
+}
+async function bulkApply(){
+  const driverId = document.getElementById('bulkDriver').value;
+  if(!driverId){ alert('請先選擇要指派的夥伴'); return; }
+  const { tasks, empties } = bulkSelection();
+  if(!tasks.length && !empties.length){ alert('還沒有選任何格子'); return; }
+  const toChange = tasks.filter(a=>a.status==='scheduled' && a.driverId!==driverId);
+  const sameAlready = tasks.filter(a=>a.status==='scheduled' && a.driverId===driverId).length;
+  const locked = tasks.filter(a=>a.status!=='scheduled').length;
+  const toCreate = [], noVersion = [];
+  empties.forEach(e=>{
+    const route = state.data.routes.find(r=>r.id===e.routeId);
+    if(!route || !getActiveVersion(route, e.date)) noVersion.push(e); else toCreate.push(e);
+  });
+  if(!toChange.length && !toCreate.length){ alert('沒有需要異動的格子' + (locked?`（${locked} 個已出發／已完成的任務不能改）`:'') + (noVersion.length?`（${noVersion.length} 個空格當天路線沒有生效版本，無法新增）`:'')); return; }
+  // 同一位夥伴同一天同一班次已經有別的任務（或這次一起被排到同一格）→ 提醒，不阻擋
+  const shiftOf = a=>{ const r = state.data.routes.find(x=>x.id===a.routeId); return r ? r.shift : ''; };
+  const targetIds = new Set(toChange.map(a=>a.id));
+  const occupied = new Map();
+  state.data.assignments.forEach(a=>{ if(a.driverId===driverId && a.status!=='cancelled' && !targetIds.has(a.id)) occupied.set(a.date+'|'+shiftOf(a), (occupied.get(a.date+'|'+shiftOf(a))||0)+1); });
+  const batch = new Map();
+  let clash = 0;
+  toChange.map(a=>a.date+'|'+shiftOf(a)).concat(toCreate.map(e=>e.date+'|'+e.shift)).forEach(k=>{
+    batch.set(k, (batch.get(k)||0)+1);
+    if(occupied.has(k) || batch.get(k)>1) clash++;
+  });
+  const lines = [];
+  if(toChange.length) lines.push(`把 ${toChange.length} 個已排任務換成「${driverName(driverId)}」`);
+  if(toCreate.length) lines.push(`在 ${toCreate.length} 個空格新增任務給「${driverName(driverId)}」`);
+  if(sameAlready) lines.push(`${sameAlready} 個本來就是他，不變`);
+  if(locked) lines.push(`${locked} 個已出發／已完成的任務略過`);
+  if(noVersion.length) lines.push(`${noVersion.length} 個空格當天路線沒有生效版本，略過`);
+  if(clash) lines.push(`⚠️ 有 ${clash} 格會讓他同一天同一班次有 2 趟以上，請確認`);
+  if(!confirm(lines.join('\n') + '\n\n確定要套用嗎？')) return;
+  const btn = document.getElementById('bulkApply'); if(btn) btn.disabled = true;
+  const failed = [];
+  try{
+    if(toChange.length) await reassignAssignmentsBulk(toChange.map(a=>a.id), driverId);
+    for(let i=0; i<toCreate.length; i+=5){
+      await Promise.all(toCreate.slice(i, i+5).map(e=> createAssignment({ date:e.date, routeId:e.routeId, driverId }).catch(err=>{ failed.push(`${e.date} ${routeName(e.routeId)}：${err.message}`); })));
+    }
+  }catch(err){ alert(err.message); }
+  if(failed.length) alert(`有 ${failed.length} 格新增失敗：\n` + failed.slice(0,5).join('\n'));
+  state._bulk.sel.clear();
+  renderContent();
+}
+async function bulkDelete(){
+  const { tasks } = bulkSelection();
+  if(!tasks.length){ alert('還沒有選任何任務（空格不需要刪除）'); return; }
+  const del = tasks.filter(a=>a.status==='scheduled');
+  const locked = tasks.length - del.length;
+  if(!del.length){ alert('選到的任務都已出發或已完成，不能刪除。'); return; }
+  const pubN = del.filter(a=>a.published!==false).length;
+  if(!confirm(`確定要刪除 ${del.length} 個已排定的任務嗎？無法復原。` + (pubN?`\n其中 ${pubN} 個已發佈，夥伴會看不到這幾趟。`:'') + (locked?`\n${locked} 個已出發／已完成的任務不會刪。`:''))) return;
+  try{ await deleteAssignmentsBulk(del.map(a=>a.id)); }
+  catch(err){ alert(err.message); }
+  state._bulk.sel.clear();
+  renderContent();
 }
 function renderWeekGrid(containerId, dates){
   const wrap = document.getElementById(containerId);
@@ -2858,14 +3035,14 @@ function renderWeekGrid(containerId, dates){
   function cellHtml(route, date){
     if(!route) return `<td class="grid-black"></td>`;
     const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
-    if(!a) return `<td class="grid-cell" data-quickcreate="${route.id}|${date}">　</td>`;
+    if(!a) return `<td class="grid-cell" data-bdate="${date}" data-quickcreate="${route.id}|${date}">　</td>`;
     // 驚嘆號的判斷改成「這趟只要有任何一個店點沒有status=completed」就顯示，
     // 不管是還沒處理、還是夥伴已經填了未完成原因（通路未下單/央廚未出貨等）——
     // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
     // 會漏掉「夥伴把每個店點都填了原因、allHandled視為true、結案時沒觸發
     // has_issue」的情況（詳細是哪個店點、什麼原因，只在點進去的任務明細顯示，
     // 這裡週期任務清單格子維持簡單，不重複塞理由文字）。
-    return `<td class="grid-cell" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
+    return `<td class="grid-cell" data-bdate="${date}" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
   }
   function assignmentInner(a){
     const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
@@ -2892,7 +3069,7 @@ function renderWeekGrid(containerId, dates){
       .sort((x,y)=> rank(x)-rank(y) || (byId.get(x.routeId).seq||'').localeCompare(byId.get(y.routeId).seq||'', 'zh-Hant') || x.id.localeCompare(y.id));
     if(list.length===0) return cellHtml(preferred, date);
     if(list.length===1) return cellHtml(byId.get(list[0].routeId), date);
-    return `<td class="grid-cell grid-multi">${list.map(a=>{
+    return `<td class="grid-cell grid-multi" data-bdate="${date}">${list.map(a=>{
       const label = (byId.get(a.routeId).seq.match(/[（(]([^）)]*)[）)]/)||[])[1] || '';
       return `<div class="grid-sub" data-viewassign="${a.id}">${label?`<span class="grid-sub-label">${escapeHtml(label)}</span><br>`:''}${assignmentInner(a)}</div>`;
     }).join('')}</td>`;
@@ -2902,7 +3079,7 @@ function renderWeekGrid(containerId, dates){
       const wd = new Date(d+'T00:00:00').getDay();
       const isWeekend = wd===0||wd===6;
       const holiday = holidayForDate(d);
-      return `<th colspan="2" class="${isWeekend?'weekend':''}">${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）${holiday?`<br><span style="font-weight:400; font-size:10.5px; color:var(--amber);">${escapeHtml(holiday.name)}</span>`:''}</th>`;
+      return `<th colspan="2" data-bdate="${d}" class="${isWeekend?'weekend':''}">${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）${holiday?`<br><span style="font-weight:400; font-size:10.5px; color:var(--amber);">${escapeHtml(holiday.name)}</span>`:''}</th>`;
     }).join('');
     const shiftRow = dates.map(d=>{
       const wd = new Date(d+'T00:00:00').getDay();
@@ -2943,6 +3120,7 @@ function renderWeekGrid(containerId, dates){
   // 最底部看；同一列（同一個車次/班次）再點一次收合，點別的任務就換成顯示那一趟。
   wrap.querySelectorAll('[data-viewassign]').forEach(td=>{
     td.onclick = ()=>{
+      if(bulkOn()){ bulkClick([td]); return; }
       const tr = td.closest('tr');
       const next = tr.nextElementSibling;
       const alreadyOpenForThis = next && next.classList.contains('assign-detail-row') && next.dataset.forId===td.dataset.viewassign;
@@ -2968,10 +3146,19 @@ function renderWeekGrid(containerId, dates){
   });
   wrap.querySelectorAll('[data-quickcreate]').forEach(td=>{
     td.onclick = ()=>{
+      if(bulkOn()){ bulkClick([td]); return; }
       const [routeId, date] = td.dataset.quickcreate.split('|');
       renderQuickCreate(routeId, date);
     };
   });
+  // 批量修改模式：點日期標題＝選那一天全部、點車次名稱＝選那一車整週
+  wrap.querySelectorAll('th[data-bdate]').forEach(th=>{
+    th.onclick = ()=>{ if(bulkOn()) bulkClick([...wrap.querySelectorAll('td[data-bdate="'+th.dataset.bdate+'"]')]); };
+  });
+  wrap.querySelectorAll('td.row-label').forEach(td=>{
+    td.onclick = ()=>{ if(bulkOn()) bulkClick([...td.closest('tr').querySelectorAll('td[data-bdate]')]); };
+  });
+  bulkRefresh();
 }
 function renderQuickCreate(routeId, date){
   const box = document.getElementById('assignDetail');
@@ -5679,6 +5866,7 @@ function liveRenderBlocked(){
   if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
   if(document.querySelector('.modal-backdrop, .sig-full')) return true;
   if(document.querySelector('.assign-detail-row')) return true;
+  if(state._bulk && state._bulk.on && state._bulk.sel.size) return true; // 批量選取到一半不要被即時更新洗掉
   const sheet = document.getElementById('assignDetail'); if(sheet && sheet.innerHTML.trim()) return true;
   const weekModal = document.getElementById('weekTripModal'); if(weekModal && weekModal.innerHTML.trim()) return true;
   return false;

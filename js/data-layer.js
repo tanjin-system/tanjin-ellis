@@ -1149,6 +1149,27 @@ async function reassignAssignmentDriver(assignmentId, newDriverId) {
   if (a) a.driverId = newDriverId;
 }
 
+// 批量修改（週期任務清單）：一次換很多趟的夥伴／一次刪很多趟。只動「已排定、尚未出發」的任務
+// （已出發、已完成的不動），資料庫那端也再擋一次狀態，不會誤改到。分批送出避免網址過長。
+async function reassignAssignmentsBulk(ids, newDriverId) {
+  const supabase = getSupabase();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).in('id', chunk).eq('status', 'scheduled');
+    if (error) throw new Error('批量換夥伴失敗：' + error.message);
+    state.data.assignments.forEach(a => { if (chunk.includes(a.id) && a.status === 'scheduled') a.driverId = newDriverId; });
+  }
+}
+async function deleteAssignmentsBulk(ids) {
+  const supabase = getSupabase();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const { error } = await supabase.from('assignments').delete().in('id', chunk).eq('status', 'scheduled');
+    if (error) throw new Error('批量刪除失敗：' + error.message);
+    state.data.assignments = state.data.assignments.filter(a => !(chunk.includes(a.id) && a.status === 'scheduled'));
+  }
+}
+
 async function markAssignmentDeparted(assignmentId) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update({ status: 'in_progress' }).eq('id', assignmentId);
