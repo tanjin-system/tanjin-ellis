@@ -5197,7 +5197,7 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     const list = merged[addr];
     const head = `<tr><th>生效區間</th><th class="num">天數</th><th>時段</th><th>車次</th><th>配送路線</th>${multi ? channelIds.map(cid=>`<th class="num">${escapeHtml(channelName(cid))}店數</th>`).join('') : '<th class="num">店數</th>'}<th class="num">公里</th><th class="num">單日金額</th><th class="num">期間合計</th>${multi ? channelIds.map(cid=>`<th class="num">${escapeHtml(channelName(cid))}請款</th>`).join('') : ''}</tr>`;
     const body = list.map(r=>{
-      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}～${r.dateEnd}`;
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}<br>${r.dateEnd}`; // 起訖日上下兩行，省下寬度給配送路線
       const stops = (r.dropLabel||'—').split('➔').map(escapeHtml).join(' → ');
       const total = channelIds.reduce((sum,cid)=> sum+(r.storeCounts[cid]||0), 0);
       return `<tr><td style="white-space:nowrap;">${period}</td><td class="num">${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td><td class="route">${stops}</td>
