@@ -5291,7 +5291,7 @@ function renderBilling(c){
         <div id="bChannelChecks" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;">${chChecks}</div>
       </div>
       <div class="grid3">
-        <div class="field"><label>對應月份（各通路的請款總覽會自動套用自己的週期）</label><input id="bMonth" type="month" value="${month}"></div>
+        <div class="field"><label>對應月份（各通路的請款總覽會自動套用自己的週期）</label><select id="bMonth">${(()=>{ const ms = recentMonthOptions(24); if(month && !ms.includes(month)) ms.push(month); ms.sort().reverse(); const thisMonth = todayStr().slice(0,7); return ms.map(m=>`<option value="${m}" ${m===month?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join(''); })()}</select></div>
         <div class="field"><label>抓取範圍起（可調整；只勾一個通路時＝該通路自己的週期）</label><input id="bStart" type="date"></div>
         <div class="field"><label>抓取範圍迄（可調整；只勾一個通路時＝該通路自己的週期）</label><input id="bEnd" type="date"></div>
       </div>
