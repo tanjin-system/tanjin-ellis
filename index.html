@@ -209,6 +209,26 @@
   .pp-tag{ font-size:11px; padding:1px 8px; border-radius:99px; background:var(--chip); color:var(--ink-soft); }
   .pp-tag.busy{ background:var(--tint-warn); color:#8A5A17; } .pp-tag.freq{ background:var(--tint-info); color:#3F6E6C; } .pp-tag.now{ background:#2C6B44; color:#fff; }
   .pp-row.saving{ opacity:.5; pointer-events:none; }
+  /* 請款結算「配送明細」：手機改成卡片（表格十幾欄擠在窄螢幕根本看不了）；電腦版維持表格 */
+  .bill-cards{ display:none; }
+  @media (max-width:700px){
+    .bill-tbl{ display:none; }
+    .bill-cards{ display:block; }
+  }
+  .bill-card{ background:var(--panel); border:1px solid var(--border); border-left:5px solid var(--amber); border-radius:10px; padding:12px 14px; margin:8px 0; }
+  .bill-card .bc-top{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .bill-card .bc-top b{ font-size:16px; }
+  .bill-card .bc-days{ background:var(--chip); border-radius:99px; font-size:12px; padding:1px 10px; color:var(--ink-soft); }
+  .bill-card .bc-period{ font-size:12px; color:var(--ink-soft); margin:2px 0 8px; font-family:'IBM Plex Mono',monospace; }
+  .bill-card .bc-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; background:var(--bg-soft); border-radius:8px; padding:8px; }
+  .bill-card .bc-grid div{ text-align:center; } .bill-card .bc-grid small{ display:block; font-size:11px; color:var(--ink-soft); } .bill-card .bc-grid b{ font-size:15px; font-family:'IBM Plex Mono',monospace; }
+  .bill-card .bc-sum{ display:flex; justify-content:space-between; align-items:baseline; margin-top:10px; font-size:13px; }
+  .bill-card .bc-sum b{ font-size:20px; font-family:'IBM Plex Mono',monospace; }
+  .bill-card .bc-ch{ display:flex; justify-content:space-between; font-size:12.5px; color:var(--ink-soft); padding:2px 0; }
+  .bill-card .bc-ch b{ color:var(--ink); font-family:'IBM Plex Mono',monospace; }
+  .bill-card details{ margin-top:8px; } .bill-card details > summary{ cursor:pointer; font-size:13px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-soft); list-style:none; }
+  .bill-card details > summary::-webkit-details-marker{ display:none; } .bill-card details[open] > summary{ background:var(--bg-hover); }
+  .bill-card ol{ margin:8px 0 0; padding-left:22px; font-size:13px; } .bill-card ol li{ padding:2px 0; }
   .fold{ padding:0; cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out, background-color .1s ease-out; }
   .fold-head{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; border-radius:var(--radius); }
   .fold-title{ font-weight:700; font-size:15px; }
@@ -5049,11 +5069,33 @@ function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
         ${pctCells}<td class="amount">$${money(Math.round(r.dailyTotal*r.dayCount))}</td>${periodAmtCells}
       </tr>`;
     }).join('');
+    // 手機版卡片：同一份資料，電腦版隱藏；.no-print 讓匯出／列印只留表格
+    const multiCh = channelIds.length > 1;
+    const cards = list.map(r=>{
+      const totalStores = channelIds.reduce((sum,cid)=> sum+(r.storeCounts[cid]||0), 0);
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}～${r.dateEnd}`;
+      const stops = (r.dropLabel && r.dropLabel!=='—') ? r.dropLabel.split('➔') : [];
+      const chRows = channelIds.map(cid=>{
+        const pct = r.dailyTotal ? ((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1) : '0.0';
+        return `<div class="bc-ch"><span>${escapeHtml(channelName(cid))}請款${multiCh?`（店數 ${r.storeCounts[cid]||0}・佔 ${pct}%）`:''}</span><b>$${money(Math.round((r.byChannel[cid]||0)*r.dayCount))}</b></div>`;
+      }).join('');
+      return `<div class="bill-card">
+        <div class="bc-top"><b>${seqToR(stripWeekdayLabel(r.route.seq))} ${r.route.shift==='AM'?'上午':'下午'}</b><span class="bc-days">${r.dayCount} 天</span></div>
+        <div class="bc-period">${period}</div>
+        <div class="bc-grid"><div><small>店數</small><b>${totalStores}</b></div><div><small>公里</small><b>${r.km??'—'}</b></div><div><small>單日金額</small><b>$${money(Math.round(r.dailyTotal))}</b></div></div>
+        <div class="bc-sum"><span>期間合計</span><b>$${money(Math.round(r.dailyTotal*r.dayCount))}</b></div>
+        ${multiCh ? chRows : ''}
+        ${stops.length ? `<details><summary>配送路線（${stops.length} 站）▸</summary><ol>${stops.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ol></details>` : ''}
+      </div>`;
+    }).join('');
     return `<h4 style="margin:14px 0 6px;">${originLabel(addr)}｜配送明細</h4>
+      <div class="bill-cards no-print">${cards}</div>
+      <div class="bill-tbl" style="overflow-x:auto;">
       <table>
         <thead><tr><th>生效區間</th><th>天數</th><th>時段</th><th>車次</th><th>配送路線</th>${channelIds.map(cid=>`<th>${channelName(cid)}店數</th>`).join('')}<th>總店數</th><th>公里</th><th>單日總金額</th>${channelIds.map(cid=>`<th>${channelName(cid)}佔比</th>`).join('')}<th>期間合計</th>${channelIds.map(cid=>`<th>${channelName(cid)}請款</th>`).join('')}</tr></thead>
         <tbody>${bodyRows}</tbody>
-      </table>`;
+      </table>
+      </div>`;
   }).join('');
 }
 function channelSummaryPanelHtml(report){
