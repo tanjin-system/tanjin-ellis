@@ -746,20 +746,69 @@ async function setDropPointAllowDuplicate(dpId, allow) {
 //   ‧已停用的店還留在生效路線裡（inactiveIn），要提醒從路線拿掉
 // override={routeId, ids} 可以假設某條路線改用另一組店點，用來在儲存前預覽影響。
 function routeFamilyKey(r) { return (r.originAddr || '') + '|' + stripWeekdayLabel(r.seq || ''); }
+// 路線名稱括號裡的星期標註 → 這條路線實際會跑的星期（1=一…7=日）；沒標註＝每天都可能跑（回傳 null）。
+// 例：（星期一）→[1]；（星期二到五）／（週二到週五）→[2,3,4,5]；（週六）→[6]。
+const WD_NUM = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7 };
+function routeWeekdays(r) {
+  const label = ((r.seq || '').match(/[（(]([^）)]*)[）)]/) || [])[1] || '';
+  if (!label) return null;
+  const range = label.match(/(?:星期|週|周)\s*([一二三四五六日天])\s*(?:到|至|~|～|-)\s*(?:星期|週|周)?\s*([一二三四五六日天])/);
+  if (range) {
+    let from = WD_NUM[range[1]], to = WD_NUM[range[2]];
+    const out = [];
+    for (let d = from, n = 0; n < 7; n++, d = d % 7 + 1) { out.push(d); if (d === to) break; }
+    return out;
+  }
+  const multi = label.match(/(?:星期|週|周)\s*([一二三四五六日天]{2,})/);
+  if (multi) return [...new Set([...multi[1]].map(ch => WD_NUM[ch]))];
+  const singles = [...label.matchAll(/(?:星期|週|周)\s*([一二三四五六日天])/g)].map(m => WD_NUM[m[1]]);
+  return singles.length ? [...new Set(singles)] : null;
+}
+// 檢查範圍是「從 asOf 起的連續 7 天」，每一天只看「當天實際會跑」的路線（依路線標註的星期）、
+// 並用當天生效的版本——這樣星期一專屬路線、換版本的交接期，都不會被誤判成重複。
+// asOf='9999-12-31' 代表看各路線「最新版本」，七個星期各檢查一次。
 function computeCoverage(asOf, override) {
+  const latest = asOf === '9999-12-31';
+  const days = [];
+  if (latest) for (let w = 1; w <= 7; w++) days.push({ date: asOf, wd: w });
+  else for (let i = 0; i < 7; i++) { const d = ymd(addDays(asOf, i)); const g = new Date(d + 'T00:00:00').getDay(); days.push({ date: d, wd: g === 0 ? 7 : g }); }
   const byDp = new Map();
-  const dupWithin = new Set();
-  state.data.routes.forEach(r => {
-    if (r.status === 'inactive') return; // 已停用的路線不算涵蓋
-    let ids;
-    if (override && override.routeId === r.id) ids = override.ids;
-    else { const v = getActiveVersion(r, asOf); if (!v) return; ids = v.dropPointIds || []; }
-    const seen = new Set();
-    ids.forEach(id => {
-      if (seen.has(id)) dupWithin.add(id);
-      seen.add(id);
-      if (!byDp.has(id)) byDp.set(id, []);
-      if (!byDp.get(id).includes(r)) byDp.get(id).push(r);
+  const dupInfo = new Map(); // dpId -> { routes:Set, days:Set, within:boolean }
+  const dpById = new Map(state.data.dropPoints.map(d => [d.id, d]));
+  days.forEach(({ date, wd }) => {
+    const dayMap = new Map();
+    const withinToday = new Set();
+    state.data.routes.forEach(r => {
+      if (r.status === 'inactive') return; // 已停用的路線不算涵蓋
+      const wds = routeWeekdays(r);
+      if (wds && !wds.includes(wd)) return;
+      let ids;
+      if (override && override.routeId === r.id) ids = override.ids;
+      else { const v = getActiveVersion(r, date); if (!v) return; ids = v.dropPointIds || []; }
+      const seen = new Set();
+      ids.forEach(id => {
+        if (seen.has(id)) withinToday.add(id);
+        seen.add(id);
+        if (!dayMap.has(id)) dayMap.set(id, []);
+        if (!dayMap.get(id).includes(r)) dayMap.get(id).push(r);
+        if (!byDp.has(id)) byDp.set(id, []);
+        if (!byDp.get(id).includes(r)) byDp.get(id).push(r);
+      });
+    });
+    dayMap.forEach((rs, id) => {
+      const dp = dpById.get(id);
+      if (!dp || dp.status === 'inactive' || dp.allowDuplicate) return;
+      const conflicts = [];
+      ['AM', 'PM'].forEach(sh => {
+        const inShift = rs.filter(r => r.shift === sh);
+        if (new Set(inShift.map(routeFamilyKey)).size > 1) conflicts.push(...inShift);
+      });
+      if (!conflicts.length && !withinToday.has(id)) return;
+      if (!dupInfo.has(id)) dupInfo.set(id, { routes: new Set(), days: new Set(), within: true });
+      const info = dupInfo.get(id);
+      info.days.add(wd);
+      (conflicts.length ? conflicts : rs).forEach(r => info.routes.add(r));
+      if (conflicts.length) info.within = false;
     });
   });
   const missing = [], dups = [], inactiveIn = [];
@@ -769,13 +818,8 @@ function computeCoverage(asOf, override) {
     if (dp.status === 'inactive') { if (rs.length) inactiveIn.push({ dp, routes: rs }); return; }
     activeCount++;
     if (!rs.length) { missing.push(dp); return; }
-    if (dp.allowDuplicate) return;
-    const conflicts = [];
-    ['AM', 'PM'].forEach(sh => {
-      const inShift = rs.filter(r => r.shift === sh);
-      if (new Set(inShift.map(routeFamilyKey)).size > 1) conflicts.push(...inShift);
-    });
-    if (conflicts.length || dupWithin.has(dp.id)) dups.push({ dp, routes: conflicts.length ? conflicts : rs, within: !conflicts.length });
+    const info = dupInfo.get(dp.id);
+    if (info) dups.push({ dp, routes: [...info.routes], within: info.within, days: [...info.days].sort() });
   });
   return { byDp, missing, dups, inactiveIn, activeCount };
 }

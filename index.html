@@ -2004,9 +2004,9 @@ function renderCoveragePanel(){
     </div>`;
   } else if(open==='dup' && cov.dups.length){
     detail = `<div class="note" style="margin-top:10px;">
-      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">同一班次排進兩條以上不同車次（星期一版／週二到五版、上午＋下午各一次不算）。如果是刻意的，按「允許重複」之後就不再警示；排錯了就點路線去移除。</div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">同一天、同一班次排進兩條以上不同車次（路線名稱括號裡標了星期的，只看那幾天；星期一版／週二到五版、上午＋下午各一次不算）。如果是刻意的，按「允許重複」之後就不再警示；排錯了就點路線去移除。</div>
       ${cov.dups.map(x=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px;">
-        <div>${dpRow(x.dp)}${x.within?' <span class="badge pending">同一條路線放了兩次</span>':''}</div>
+        <div>${dpRow(x.dp)}${x.within?' <span class="badge pending">同一條路線放了兩次</span>':''} <span style="font-size:11.5px; color:var(--ink-soft);">（${x.days.length===7?'每天':'星期'+x.days.map(d=>'一二三四五六日'[d-1]).join('、')}）</span></div>
         <div>${covRouteLinks(x.routes)} <button class="btn ghost" data-allowdup="${x.dp.id}" style="padding:2px 8px; font-size:11.5px;">允許重複</button></div></div>`).join('')}
     </div>`;
   } else if(open==='inactive' && cov.inactiveIn.length){
@@ -2024,7 +2024,7 @@ function renderCoveragePanel(){
     <div style="font-size:13.5px;">使用中店點 <b>${cov.activeCount}</b> 家　已排入路線 <b>${routed}</b> 家${bad?'':'　✅ 全部都有路線，沒有誤重複'}</div>
     ${bad ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">${chip('missing','🔴 未排入路線',cov.missing.length)}${chip('dup','🟡 同班次重複',cov.dups.length)}${chip('inactive','⚠️ 已停用卻還在路線裡',cov.inactiveIn.length)}</div>` : ''}
     ${detail}
-    <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">規則：使用中的店點要出現在至少一條生效的路線；已停用的店不檢查。調整路線儲存時也會即時提醒。</div>
+    <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">規則：檢查從今天起連續 7 天，每天只看當天實際會跑（依路線名稱括號的星期標註）、當天生效版本的路線；已停用的店不檢查。調整路線儲存時也會即時提醒。</div>
   </div>`;
   host.querySelector('#covAsOf').onchange = e=>{ state._cov.asOf = e.target.value; renderContent(); };
   host.querySelectorAll('[data-cov]').forEach(b=>{ b.onclick = ()=>{ state._cov.open = open===b.dataset.cov ? null : b.dataset.cov; renderCoveragePanel(); }; });
