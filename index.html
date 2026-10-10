@@ -640,7 +640,10 @@ async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
 // 只拿去當下載檔名用（已經有做過檔名安全字元替換），跟heading是兩件
 // 事——請款單特別傳空字串heading，因為請款單內文最上面已經自己放了
 // 「信興行銷有限公司」，不需要再重複顯示一次跟檔名一樣的標題。
-function exportPrintable(title, bodyHtml, heading){
+// opts（選填，請款單用）：fixedWidth＝固定頁面寬度（不讓寬表格撐大、字被縮小）、repeatHeader＝跨頁的表格
+// 每一頁都重複表頭、pageNumbers＝頁尾加頁碼；內容裡有 .pdf-break 的元素會強制從那裡換頁。
+function exportPrintable(title, bodyHtml, heading, opts){
+  opts = opts || {};
   if(heading===undefined) heading = title;
   const previewWin = window.open('', '_blank');
   if(previewWin){
@@ -661,7 +664,9 @@ function exportPrintable(title, bodyHtml, heading){
   // 用 white-space:nowrap 讓每一欄不擠字）可以自然撐開到實際需要的寬度，不會被
   // 硬性限制在1050px內導致最右邊的欄位（例如週六、週日）被截斷看不到。
   wrap.setAttribute('data-force-light','');
-  wrap.style.cssText = 'min-width:1050px; width:max-content; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+  wrap.style.cssText = opts.fixedWidth
+    ? `width:${opts.fixedWidth}px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;`
+    : 'min-width:1050px; width:max-content; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
   wrap.innerHTML = `
     <style>
       @page { size: A4 landscape; margin: 10mm; }
@@ -699,6 +704,12 @@ function exportPrintable(title, bodyHtml, heading){
     const r = el.getBoundingClientRect();
     return { top: r.top - wrapTop, bottom: r.bottom - wrapTop };
   }).filter(z=> z.bottom > z.top);
+  // 強制換頁位置、跨頁表格的表頭位置（都是相對 wrap 頂端的 CSS px）
+  const forcedCss = Array.from(wrap.querySelectorAll('.pdf-break')).map(el=> el.getBoundingClientRect().top - wrapTop);
+  const tablesCss = opts.repeatHeader ? Array.from(wrap.querySelectorAll('table')).filter(t=>t.tHead).map(t=>{
+    const tr = t.getBoundingClientRect(), hr = t.tHead.getBoundingClientRect();
+    return { top: tr.top - wrapTop, bottom: tr.bottom - wrapTop, headTop: hr.top - wrapTop, headBottom: hr.bottom - wrapTop };
+  }) : [];
   html2canvas(wrap, { scale: 2, useCORS: true, scrollX: -scrollX, scrollY: -scrollY, windowWidth: document.documentElement.scrollWidth, windowHeight: document.documentElement.scrollHeight }).then(canvas=>{
     document.body.removeChild(wrap);
     const { jsPDF } = window.jspdf;
@@ -725,18 +736,27 @@ function exportPrintable(title, bodyHtml, heading){
       return safe > cursorPx ? safe : idealBreakPx;
     }
     const totalHeightPx = canvas.height;
+    const forcedPx = forcedCss.map(y=>y*canvasScale).sort((a,b)=>a-b);
+    const tablesPx = tablesCss.map(t=>({ top:t.top*canvasScale, bottom:t.bottom*canvasScale, headTop:t.headTop*canvasScale, headBottom:t.headBottom*canvasScale }));
     let cursorPx = 0, pageIndex = 0;
     while(cursorPx < totalHeightPx - 1){
-      const idealBreakPx = Math.min(cursorPx + pageHeightPx, totalHeightPx);
-      const breakPx = idealBreakPx >= totalHeightPx ? totalHeightPx : findBreakPoint(idealBreakPx, cursorPx);
+      // 這一頁是不是從某張表格的中間開始：是的話，先在頁首補上那張表的表頭
+      const hdr = tablesPx.find(t=> t.headBottom <= cursorPx + 1 && t.top < cursorPx && t.bottom > cursorPx + 8);
+      const hdrPx = hdr ? Math.round(hdr.headBottom - hdr.headTop) : 0;
+      const idealBreakPx = Math.min(cursorPx + pageHeightPx - hdrPx, totalHeightPx);
+      const forced = forcedPx.find(y=> y > cursorPx + 2 && y < idealBreakPx);
+      const breakPx = forced !== undefined ? forced : (idealBreakPx >= totalHeightPx ? totalHeightPx : findBreakPoint(idealBreakPx, cursorPx));
       const sliceHeightPx = Math.max(1, Math.round(breakPx - cursorPx));
       const pageCanvas = document.createElement('canvas');
       pageCanvas.width = canvas.width;
-      pageCanvas.height = sliceHeightPx;
-      pageCanvas.getContext('2d').drawImage(canvas, 0, Math.round(cursorPx), canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+      pageCanvas.height = sliceHeightPx + hdrPx;
+      const pctx = pageCanvas.getContext('2d');
+      pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+      if(hdr) pctx.drawImage(canvas, 0, Math.round(hdr.headTop), canvas.width, hdrPx, 0, 0, canvas.width, hdrPx);
+      pctx.drawImage(canvas, 0, Math.round(cursorPx), canvas.width, sliceHeightPx, 0, hdrPx, canvas.width, sliceHeightPx);
       const imgData = pageCanvas.toDataURL('image/jpeg', 0.95);
       if(pageIndex>0) pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', marginMm, marginMm, pageWmm, sliceHeightPx / pxPerMm);
+      pdf.addImage(imgData, 'JPEG', marginMm, marginMm, pageWmm, (sliceHeightPx + hdrPx) / pxPerMm);
       cursorPx = breakPx;
       pageIndex++;
       if(pageIndex > 200) break; // 保險絲，避免斷點邏輯出錯陷入無限迴圈
@@ -745,6 +765,10 @@ function exportPrintable(title, bodyHtml, heading){
     // Safari（尤其iPhone）常常沒辦法在另一個分頁（我們另外開的預覽分頁）打開別的
     // 分頁建立的blob URL，PDF因此看起來像「打不開」。data URI是自帶完整內容的
     // 字串，不受這個限制，用<embed>嵌入＋<a download>都能穩定運作。
+    if(opts.pageNumbers){
+      const n = pdf.getNumberOfPages();
+      for(let i=1; i<=n; i++){ pdf.setPage(i); pdf.setFontSize(9); pdf.setTextColor(120); pdf.text(`${i} / ${n}`, pdf.internal.pageSize.getWidth()/2, pdf.internal.pageSize.getHeight()-4, { align:'center' }); }
+    }
     const dataUri = pdf.output('datauristring');
     // 電腦版Chrome桌機曾回報「另存PDF都無法顯示」：實測發現這裡的 window.open('', '_blank')
     // 常常被瀏覽器的彈出視窗封鎖直接回傳 null——程式碼原本雖然有 fallback（改成
@@ -780,11 +804,11 @@ function exportPrintable(title, bodyHtml, heading){
     alert('產生PDF失敗：' + err.message);
   });
 }
-function exportPanelPrint(panelEl, title, heading){
+function exportPanelPrint(panelEl, title, heading, opts){
   if(!panelEl){ alert('找不到可列印的內容'); return; }
   const clone = panelEl.cloneNode(true);
   clone.querySelectorAll('.no-print').forEach(el=>el.remove());
-  exportPrintable(title, clone.innerHTML, heading);
+  exportPrintable(title, clone.innerHTML, heading, opts);
 }
 // 勞報單專用的直式PDF：每份 slipHtml（payrollSlipHtml() 產生的字串）固定佔
 // 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週期任務清單那樣允許
@@ -5114,6 +5138,61 @@ function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
       </div>`;
   }).join('');
 }
+// 請款單（PDF）專用版面：字放大、欄位精簡、金額醒目、摘要與明細分頁、依任務起點分頁、跨頁表頭重複。
+// 螢幕上的表格（電腦版／手機卡片）不受影響。
+function billingPrintHtml(reports, merged, channelIds, start, end){
+  const multi = channelIds.length > 1;
+  const chNames = reports.map(r=>escapeHtml(r.channel.name)).join('、');
+  const css = `<style>
+    .bp{ font-size:14px; color:#1B2129; }
+    .bp h1{ font-size:28px; text-align:center; margin:0 0 4px; letter-spacing:.06em; }
+    .bp .sub{ text-align:center; color:#444; font-size:14px; margin-bottom:6px; }
+    .bp h2{ font-size:18px; margin:22px 0 8px; border-left:6px solid #E0902E; padding-left:10px; }
+    .bp table{ width:100%; border-collapse:collapse; font-size:14px; margin-top:6px; table-layout:auto; }
+    .bp th{ background:#EDEFF2; text-align:left; padding:8px 10px; border:1px solid #888; font-size:13px; }
+    .bp td{ padding:8px 10px; border:1px solid #bbb; vertical-align:top; }
+    .bp tbody tr:nth-child(even) td{ background:#F7F8FA; }
+    .bp .num{ text-align:right; font-family:monospace; font-weight:700; white-space:nowrap; }
+    .bp th.num{ font-family:inherit; }
+    .bp .tot td{ font-size:16px; font-weight:700; background:#FFF3DC !important; }
+    .bp .grand td{ font-size:20px; background:#FFE2A6 !important; }
+    .bp .route{ font-size:13px; line-height:1.55; }
+    .bp td:nth-child(3), .bp td:nth-child(4), .bp th:nth-child(3), .bp th:nth-child(4){ white-space:nowrap; }
+  </style>`;
+  const fmt = n=> '$' + money(Math.round(n));
+  const summary = reports.map(rp=>{
+    const segs = rp.segRows.filter(x=>Math.round(x.amount)!==0);
+    const segRows = (segs.length ? segs : rp.segRows).map(x=>`<tr><td>${x.start} ~ ${x.end}</td><td class="num">${fmt(x.amount)}</td></tr>`).join('');
+    const adj = rp.adjustments.map(x=>`<tr><td>${escapeHtml(x.note)}</td><td class="num">${x.amount>=0?'+':'−'}${fmt(Math.abs(x.amount))}</td></tr>`).join('');
+    const orig = rp.originWithTax.map(o=>`<tr><td>${escapeHtml(originLabel(o.originAddr))}</td><td class="num">${o.tripCount}</td><td class="num">${o.storeCount}</td><td class="num">${fmt(o.untaxed)}</td><td class="num">${fmt(o.tax)}</td><td class="num">${fmt(o.withTax)}</td></tr>`).join('');
+    return `<h2>${escapeHtml(rp.channel.name)}｜物流費用請款總覽（${rp.start} ~ ${rp.end}）</h2>
+      <table><thead><tr><th>請款期間</th><th class="num">物流費</th></tr></thead><tbody>${segRows}${adj}</tbody>
+        <tfoot><tr class="tot"><td>未稅合計</td><td class="num">${fmt(rp.grand.untaxed)}</td></tr><tr class="tot"><td>稅額</td><td class="num">${fmt(rp.grand.tax)}</td></tr><tr class="tot grand"><td>含稅合計</td><td class="num">${fmt(rp.grand.withTax)}</td></tr></tfoot></table>
+      <h2>各區費用總覽（依供應商／任務起點）</h2>
+      <table><thead><tr><th>供應商</th><th class="num">任務數</th><th class="num">配送店次</th><th class="num">未稅</th><th class="num">稅額</th><th class="num">含稅</th></tr></thead><tbody>${orig || '<tr><td colspan="6">此區間無相關任務</td></tr>'}</tbody></table>`;
+  }).join('');
+  const details = Object.keys(merged).map(addr=>{
+    const list = merged[addr];
+    const head = `<tr><th>生效區間</th><th class="num">天數</th><th>時段</th><th>車次</th><th>配送路線</th>${multi ? channelIds.map(cid=>`<th class="num">${escapeHtml(channelName(cid))}店數</th>`).join('') : '<th class="num">店數</th>'}<th class="num">公里</th><th class="num">單日金額</th><th class="num">期間合計</th>${multi ? channelIds.map(cid=>`<th class="num">${escapeHtml(channelName(cid))}請款</th>`).join('') : ''}</tr>`;
+    const body = list.map(r=>{
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}～${r.dateEnd}`;
+      const stops = (r.dropLabel||'—').split('➔').map(escapeHtml).join(' → ');
+      const total = channelIds.reduce((sum,cid)=> sum+(r.storeCounts[cid]||0), 0);
+      return `<tr><td style="white-space:nowrap;">${period}</td><td class="num">${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td><td class="route">${stops}</td>
+        ${multi ? channelIds.map(cid=>`<td class="num">${r.storeCounts[cid]||0}</td>`).join('') : `<td class="num">${total}</td>`}
+        <td class="num">${r.km??'—'}</td><td class="num">${fmt(r.dailyTotal)}</td><td class="num">${fmt(r.dailyTotal*r.dayCount)}</td>
+        ${multi ? channelIds.map(cid=>`<td class="num">${fmt((r.byChannel[cid]||0)*r.dayCount)}</td>`).join('') : ''}</tr>`;
+    }).join('');
+    return `<div class="pdf-break" style="padding-top:1px;"><h2>${escapeHtml(originLabel(addr))}｜配送明細（已選通路：${chNames}）</h2>
+      <table><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }).join('') || '<div class="pdf-break"><h2>配送明細</h2><p>此區間無相關任務</p></div>';
+  return `${css}<div class="bp">
+    <h1>信興行銷有限公司</h1>
+    <div class="sub">物流費用請款單　｜　通路：${chNames}　｜　請款區間：${start} ~ ${end}　｜　製表日期：${todayStr()}</div>
+    ${summary}
+    ${details}
+  </div>`;
+}
 function channelSummaryPanelHtml(report){
   const { channel, start, end, segRows, adjustments, grand, originWithTax } = report;
   return `
@@ -5331,7 +5410,7 @@ function renderBilling(c){
         <button class="btn amber" id="printBilling">產生請款單（列印/另存PDF）</button>
         <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
       </div>`;
-    document.getElementById('printBilling').onclick = ()=> exportPanelPrint(document.getElementById('billingPrintArea'), `請款單_${start}_${end}`, '');
+    document.getElementById('printBilling').onclick = ()=> exportPrintable(`請款單_${start}_${end}`, billingPrintHtml(reports, merged, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
     document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end, billingAssignments);
   }
   document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
