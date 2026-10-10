@@ -1234,7 +1234,14 @@ function enhanceTables(root){
         th.classList.toggle('amount', cells.length>0 && cells.every(c=>c.classList.contains('amount')));
       });
     }
-    tb.classList.toggle('tbl-sticky', rows.length >= 14);
+    // 表頭釘住只在「沒有被橫向捲動容器包住」的長表格才有效；包在 overflow 容器裡（例如路線管理的地區卡片）
+    // 表頭會被推到第一列上面蓋住內容，所以這種不釘。
+    let clipped = false;
+    for(let el = tb.parentElement; el && el !== root; el = el.parentElement){
+      const ov = getComputedStyle(el).overflowX;
+      if(ov !== 'visible'){ clipped = true; break; }
+    }
+    tb.classList.toggle('tbl-sticky', rows.length >= 14 && !clipped);
   });
 }
 (function initTableObserver(){
