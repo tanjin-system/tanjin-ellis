@@ -1101,3 +1101,11 @@ create trigger trg_dp_completed_by before update on assignment_drop_points for e
 -- assignment_drop_point_media：select/insert 加上 helper_id=我（原夥伴 insert 需 helper_id is null）
 -- storage.objects（assignment-photos）select/insert/update 加上 exists(assignment_drop_points where assignment_id=路徑第一層 and helper_id=我)
 -- my_support_context(date,date)：見線上資料庫函式，grant execute to app_driver
+
+
+-- ============================================================
+-- PART 22：店點涵蓋檢查（路線管理／店點資料庫）
+-- allow_duplicate：刻意同一班次排進多條路線的店，標了之後涵蓋檢查不警示。
+-- 其餘（遺漏／重複／已停用卻還在路線）全部由程式依現有路線版本即時計算，不另存資料。
+-- ============================================================
+alter table drop_points add column if not exists allow_duplicate boolean not null default false;

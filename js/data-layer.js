@@ -41,7 +41,7 @@ function mapOrigin(row) {
 }
 
 function mapDropPoint(row) {
-  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status };
+  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate };
 }
 
 function mapRoute(row) {
@@ -714,6 +714,87 @@ async function updateDropPoint(dpId, input) {
       }
     }
   }
+}
+
+// 停止配送／恢復使用（可一次多家）。不是刪除：歷史任務、請款、報酬紀錄都保留，
+// 只是新路線不會再列出它，涵蓋檢查也不再把它算進「應該排入路線」。
+async function setDropPointsStatus(ids, status) {
+  if (!['active', 'inactive'].includes(status)) throw new Error('狀態不正確');
+  const supabase = getSupabase();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const { error } = await supabase.from('drop_points').update({ status }).in('id', chunk);
+    if (error) throw new Error((status === 'inactive' ? '停止配送' : '恢復使用') + '失敗：' + error.message);
+    state.data.dropPoints.forEach(dp => { if (chunk.includes(dp.id)) dp.status = status; });
+  }
+}
+// 刻意同一班次排進多條路線的店，標「允許重複」之後涵蓋檢查就不再警示它。
+async function setDropPointAllowDuplicate(dpId, allow) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('drop_points').update({ allow_duplicate: !!allow }).eq('id', dpId);
+  if (error) throw new Error('儲存失敗：' + error.message);
+  const dp = state.data.dropPoints.find(x => x.id === dpId);
+  if (dp) dp.allowDuplicate = !!allow;
+}
+
+// ---------------- 店點涵蓋檢查（有沒有遺漏／重複） ----------------
+// 以某一天（asOf；'9999-12-31' 代表各路線的最新版本，含未來才生效的）為準，
+// 看每家「使用中」的店點出現在哪些路線的生效版本裡：
+//   ‧0 條＝遺漏（missing）
+//   ‧同一班次裡出現在 2 個以上「不同車次」＝重複（dups）；同一車次的「星期一版／週二到五版」、
+//     上午＋下午各一次都不算重複；標了「允許重複」的店不警示；同一條路線裡放兩次也算重複
+//   ‧已停用的店還留在生效路線裡（inactiveIn），要提醒從路線拿掉
+// override={routeId, ids} 可以假設某條路線改用另一組店點，用來在儲存前預覽影響。
+function routeFamilyKey(r) { return (r.originAddr || '') + '|' + stripWeekdayLabel(r.seq || ''); }
+function computeCoverage(asOf, override) {
+  const byDp = new Map();
+  const dupWithin = new Set();
+  state.data.routes.forEach(r => {
+    let ids;
+    if (override && override.routeId === r.id) ids = override.ids;
+    else { const v = getActiveVersion(r, asOf); if (!v) return; ids = v.dropPointIds || []; }
+    const seen = new Set();
+    ids.forEach(id => {
+      if (seen.has(id)) dupWithin.add(id);
+      seen.add(id);
+      if (!byDp.has(id)) byDp.set(id, []);
+      if (!byDp.get(id).includes(r)) byDp.get(id).push(r);
+    });
+  });
+  const missing = [], dups = [], inactiveIn = [];
+  let activeCount = 0;
+  state.data.dropPoints.forEach(dp => {
+    const rs = byDp.get(dp.id) || [];
+    if (dp.status === 'inactive') { if (rs.length) inactiveIn.push({ dp, routes: rs }); return; }
+    activeCount++;
+    if (!rs.length) { missing.push(dp); return; }
+    if (dp.allowDuplicate) return;
+    const conflicts = [];
+    ['AM', 'PM'].forEach(sh => {
+      const inShift = rs.filter(r => r.shift === sh);
+      if (new Set(inShift.map(routeFamilyKey)).size > 1) conflicts.push(...inShift);
+    });
+    if (conflicts.length || dupWithin.has(dp.id)) dups.push({ dp, routes: conflicts.length ? conflicts : rs, within: !conflicts.length });
+  });
+  return { byDp, missing, dups, inactiveIn, activeCount };
+}
+// 儲存路線版本前預覽：這次調整會讓哪些店「變成」遺漏／重複／停用店被加進來。
+function previewRouteChange(routeId, effDate, newIds) {
+  const route = state.data.routes.find(r => r.id === routeId);
+  const old = route ? getActiveVersion(route, effDate) : null;
+  const oldIds = old ? (old.dropPointIds || []) : [];
+  const before = computeCoverage(effDate);
+  const after = computeCoverage(effDate, { routeId, ids: newIds });
+  const beforeMissing = new Set(before.missing.map(d => d.id));
+  const beforeDup = new Set(before.dups.map(x => x.dp.id));
+  const oldSet = new Set(oldIds), newSet = new Set(newIds);
+  return {
+    added: [...new Set(newIds)].filter(id => !oldSet.has(id)),
+    removed: [...new Set(oldIds)].filter(id => !newSet.has(id)),
+    newlyMissing: after.missing.filter(d => !beforeMissing.has(d.id)),
+    newDups: after.dups.filter(x => !beforeDup.has(x.dp.id)).map(x => x.dp),
+    inactiveAdded: [...new Set(newIds)].filter(id => !oldSet.has(id)).map(id => state.data.dropPoints.find(d => d.id === id)).filter(d => d && d.status === 'inactive'),
+  };
 }
 
 async function deleteOrDeactivateDropPoint(dpId) {

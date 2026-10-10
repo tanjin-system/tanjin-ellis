@@ -1352,11 +1352,14 @@ async function renderHomeAdmin(c){
       unsettledNames = unsettledRows(prevMonthStr, lite).map(r=>r.d.name);
     }catch(e){ console.error('讀取月結名單失敗', e); }
   }
+  const covNow = computeCoverage(todayStr());
+  const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length;
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
+    ${covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
       <h3 style="margin-top:0;">⏰ 提醒</h3>
+      ${covBad ? `<div style="font-size:13px; padding:4px 0;">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:''].filter(Boolean).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="routes">前往路線管理</button></div>` : ''}
       ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
       ${stuckTasks.length ? `<div style="font-size:13px; padding:4px 0;">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
       ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
@@ -1960,12 +1963,106 @@ function renderChannelList(){
 
 // ---------- 店點資料庫 ----------
 let editingDpId = null;
+let dpOnlyMissing = false; // 店點資料庫「只看未排入路線的店」篩選
 const dpExpandedChannels = new Set(); // 使用者手動展開過的通路id，預設全部收合
+// ---------- 店點涵蓋檢查面板（店點資料庫＋路線管理頂端共用） ----------
+// 規則見 js/data-layer.js 的 computeCoverage()。只做檢查與導引，不會自動改任何路線。
+state._cov = state._cov || { asOf:'today', open:null };
+function covAsOfDate(){ return state._cov.asOf==='latest' ? '9999-12-31' : todayStr(); }
+function openRouteForEdit(routeId){
+  const r = state.data.routes.find(x=>x.id===routeId); if(!r) return;
+  routeListSearch = '';
+  regionExpandedSet.add(r.region || '未分類');
+  expandedRouteId = routeId; expandedRouteBox = null;
+  switchTab('routes');
+}
+function covRouteLinks(routes){
+  return routes.map(r=>`<button class="btn ghost" data-openroute="${r.id}" style="padding:2px 8px; font-size:11.5px; margin:1px 2px;">${escapeHtml(routeDisplayName(r.name))}</button>`).join('');
+}
+function renderCoveragePanel(){
+  const host = document.getElementById('covHost');
+  if(!host) return;
+  const cov = computeCoverage(covAsOfDate());
+  const open = state._cov.open;
+  const bad = cov.missing.length + cov.dups.length + cov.inactiveIn.length;
+  const routed = cov.activeCount - cov.missing.length;
+  const chip = (key, label, n)=> n ? `<button class="btn ${open===key?'amber':'ghost'}" data-cov="${key}">${label} ${n}</button>` : '';
+  const dpRow = dp=>`${escapeHtml(dp.code||'')} ${escapeHtml(dp.address)}（${escapeHtml(channelName(dp.channelId))}）`;
+  let detail = '';
+  if(open==='missing' && cov.missing.length){
+    const rows = cov.missing.slice(0, 300);
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <select id="covRoute" style="width:auto; max-width:260px;"><option value="">選擇要加入的路線</option>${sortedRoutes().map(r=>`<option value="${r.id}">${escapeHtml(routeDisplayName(r.name))}</option>`).join('')}</select>
+        <button class="btn amber" id="covAddDraft">把勾選的店加到這條路線的草稿</button>
+        <button class="btn danger" id="covStopSel">勾選的店 → 停止配送</button>
+      </div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">「加到草稿」只是放進該路線的編輯草稿，到路線管理設定生效日期並儲存才會生效；「停止配送」是這家店已經不送了（歷史紀錄都保留）。</div>
+      <label style="font-size:12.5px;"><input type="checkbox" id="covAll" style="width:auto;"> 全選</label>
+      <div style="max-height:320px; overflow:auto;">${rows.map(dp=>`<label style="display:block; font-size:13px; padding:3px 0;"><input type="checkbox" class="covPick" value="${dp.id}" style="width:auto;"> ${dpRow(dp)}</label>`).join('')}</div>
+      ${cov.missing.length>rows.length ? `<div style="font-size:12px;">…還有 ${cov.missing.length-rows.length} 家，處理完上面的再看。</div>` : ''}
+    </div>`;
+  } else if(open==='dup' && cov.dups.length){
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">同一班次排進兩條以上不同車次（星期一版／週二到五版、上午＋下午各一次不算）。如果是刻意的，按「允許重複」之後就不再警示；排錯了就點路線去移除。</div>
+      ${cov.dups.map(x=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px;">
+        <div>${dpRow(x.dp)}${x.within?' <span class="badge pending">同一條路線放了兩次</span>':''}</div>
+        <div>${covRouteLinks(x.routes)} <button class="btn ghost" data-allowdup="${x.dp.id}" style="padding:2px 8px; font-size:11.5px;">允許重複</button></div></div>`).join('')}
+    </div>`;
+  } else if(open==='inactive' && cov.inactiveIn.length){
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">這些店已經標為「已停用」，但還留在目前生效的路線裡。點路線把它移除（設定生效日期後儲存）；如果其實還要送，按「恢復使用」。</div>
+      ${cov.inactiveIn.map(x=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px;">
+        <div>${dpRow(x.dp)}</div>
+        <div>${covRouteLinks(x.routes)} <button class="btn ghost" data-resumedp="${x.dp.id}" style="padding:2px 8px; font-size:11.5px;">恢復使用</button></div></div>`).join('')}
+    </div>`;
+  }
+  host.innerHTML = `<div class="panel no-print" style="border-color:${bad?'var(--danger)':'var(--ok,#2E7D32)'}; border-width:2px;">
+    <div class="toolbar" style="margin-bottom:6px;"><b>店點涵蓋檢查</b>
+      <select id="covAsOf" style="width:auto;"><option value="today" ${state._cov.asOf==='today'?'selected':''}>依今天生效的路線</option><option value="latest" ${state._cov.asOf==='latest'?'selected':''}>依最新版本（含未來才生效的）</option></select>
+    </div>
+    <div style="font-size:13.5px;">使用中店點 <b>${cov.activeCount}</b> 家　已排入路線 <b>${routed}</b> 家${bad?'':'　✅ 全部都有路線，沒有誤重複'}</div>
+    ${bad ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">${chip('missing','🔴 未排入路線',cov.missing.length)}${chip('dup','🟡 同班次重複',cov.dups.length)}${chip('inactive','⚠️ 已停用卻還在路線裡',cov.inactiveIn.length)}</div>` : ''}
+    ${detail}
+    <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">規則：使用中的店點要出現在至少一條生效的路線；已停用的店不檢查。調整路線儲存時也會即時提醒。</div>
+  </div>`;
+  host.querySelector('#covAsOf').onchange = e=>{ state._cov.asOf = e.target.value; renderContent(); };
+  host.querySelectorAll('[data-cov]').forEach(b=>{ b.onclick = ()=>{ state._cov.open = open===b.dataset.cov ? null : b.dataset.cov; renderCoveragePanel(); }; });
+  host.querySelectorAll('[data-openroute]').forEach(b=>{ b.onclick = ()=> openRouteForEdit(b.dataset.openroute); });
+  host.querySelectorAll('[data-allowdup]').forEach(b=>{
+    b.onclick = async ()=>{ try{ await setDropPointAllowDuplicate(b.dataset.allowdup, true); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  host.querySelectorAll('[data-resumedp]').forEach(b=>{
+    b.onclick = async ()=>{ try{ await setDropPointsStatus([b.dataset.resumedp], 'active'); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  const all = host.querySelector('#covAll');
+  if(all) all.onchange = ()=> host.querySelectorAll('.covPick').forEach(x=>x.checked = all.checked);
+  const picked = ()=> [...host.querySelectorAll('.covPick:checked')].map(x=>x.value);
+  const add = host.querySelector('#covAddDraft');
+  if(add) add.onclick = ()=>{
+    const ids = picked(), rid = host.querySelector('#covRoute').value;
+    if(!ids.length){ alert('請先勾選要加入的店'); return; }
+    if(!rid){ alert('請先選擇要加入的路線'); return; }
+    const route = state.data.routes.find(r=>r.id===rid);
+    const draft = ensureDraft(route);
+    let n = 0; ids.forEach(id=>{ if(!draft.order.includes(id)){ draft.order.push(id); n++; } });
+    alert(`已把 ${n} 家店放進「${routeDisplayName(route.name)}」的編輯草稿（排在最後面）。\n接下來到路線管理調整順序、設定生效日期後按儲存，才會真的生效。`);
+    openRouteForEdit(rid);
+  };
+  const stop = host.querySelector('#covStopSel');
+  if(stop) stop.onclick = async ()=>{
+    const ids = picked();
+    if(!ids.length){ alert('請先勾選要停止配送的店'); return; }
+    if(!confirm(`確定這 ${ids.length} 家店已經不配送了嗎？\n會改成「已停用」：歷史任務、請款、報酬紀錄都保留，新路線不會再列出，之後可以隨時恢復使用。`)) return;
+    try{ await setDropPointsStatus(ids, 'inactive'); renderContent(); }catch(err){ alert(err.message); }
+  };
+}
 function renderDropPoints(c){
   const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
   c.innerHTML = `
     <h2 class="section-title">店點資料庫</h2>
     <p class="section-sub">先建立好常用店點，之後在「路線管理」用選單直接組成路線，不用每次手key地址。</p>
+    <div id="covHost"></div>
     <div class="panel">
       <div class="grid3">
         <div class="field"><label>地址</label><input id="dpAddr"></div>
@@ -1975,6 +2072,7 @@ function renderDropPoints(c){
       <button class="btn amber" id="addDp">新增店點</button>
     </div>
     <div class="field"><label>搜尋地址或代號</label><input id="dpSearch" placeholder="輸入關鍵字篩選（數量多時建議先搜尋）"></div>
+    <label style="display:flex; align-items:center; gap:6px; font-size:13px; margin-bottom:10px;"><input type="checkbox" id="dpOnlyMissing" ${dpOnlyMissing?'checked':''} style="width:auto;"> 只看「使用中但沒排入任何路線」的店</label>
     <div id="dpListBody"></div>
   `;
   document.getElementById('addDp').onclick = async ()=>{
@@ -1986,45 +2084,68 @@ function renderDropPoints(c){
     }catch(err){ alert(err.message); }
   };
   document.getElementById('dpSearch').oninput = renderDpListBody;
+  document.getElementById('dpOnlyMissing').onchange = e=>{ dpOnlyMissing = e.target.checked; renderDpListBody(); };
+  renderCoveragePanel();
   renderDpListBody();
 }
 function renderDpListBody(){
   const wrap = document.getElementById('dpListBody');
   const keyword = (document.getElementById('dpSearch').value||'').trim().toLowerCase();
   const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  // 每家店現在排在哪些路線（依涵蓋檢查設定的日期），讓遺漏／重複在列表上一眼看得到。
+  const cov = computeCoverage(covAsOfDate());
+  const dupIds = new Set(cov.dups.map(x=>x.dp.id));
+  const routeCell = dp=>{
+    const rs = cov.byDp.get(dp.id) || [];
+    if(dp.status==='inactive') return rs.length ? `<span style="color:var(--danger);">⚠️ 已停用卻還在：${escapeHtml(rs.map(r=>routeDisplayName(r.name)).join('、'))}</span>` : '<span style="color:var(--ink-soft);">—</span>';
+    if(!rs.length) return '<span style="color:var(--danger); font-weight:700;">🔴 未排入任何路線</span>';
+    const names = rs.map(r=>routeDisplayName(r.name));
+    const txt = escapeHtml(names.length>3 ? names.slice(0,3).join('、')+` 等${names.length}條` : names.join('、'));
+    return (dupIds.has(dp.id)?'🟡 ':'') + txt;
+  };
+  const rowHtml = dp=>{
+    if(editingDpId === dp.id){
+      return `<tr><td colspan="5">
+        <div class="grid3">
+          <div class="field"><label>地址</label><input id="edpAddr" value="${dp.address}"></div>
+          <div class="field"><label>所屬通路</label><select id="edpChannel">${chOpts.replace(`value="${dp.channelId}"`, `value="${dp.channelId}" selected`)}</select></div>
+          <div class="field"><label>代號</label><input id="edpCode" value="${dp.code||''}"></div>
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:4px 0 8px;"><input type="checkbox" id="edpAllowDup" ${dp.allowDuplicate?'checked':''} style="width:auto;"> 允許重複（刻意同一班次排進多條路線，涵蓋檢查不警示）</label>
+        <button class="btn amber" data-savedp="${dp.id}">儲存</button>
+        <button class="btn ghost" data-canceldp="${dp.id}">取消</button>
+      </td></tr>`;
+    }
+    const inactive = dp.status==='inactive';
+    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
+    <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} <button class="btn danger" data-del="${dp.id}">刪除</button></td></tr>`;
+  };
+  const head = '<thead><tr><th>代號</th><th>地址</th><th>目前排在哪些路線</th><th>狀態</th><th></th></tr></thead>';
   wrap.innerHTML = state.data.channels.map(ch=>{
     let rows = state.data.dropPoints.filter(dp=>dp.channelId===ch.id);
     if(keyword){ rows = rows.filter(dp=> dp.address.toLowerCase().includes(keyword) || (dp.code||'').toLowerCase().includes(keyword)); }
     if(keyword && !rows.length) return '';
-    const collapsed = !dpExpandedChannels.has(ch.id) && !keyword;
+    if(dpOnlyMissing) rows = rows.filter(dp=> dp.status!=='inactive' && !(cov.byDp.get(dp.id)||[]).length);
+    const activeRows = rows.filter(dp=>dp.status!=='inactive');
+    const inactiveRows = rows.filter(dp=>dp.status==='inactive');
+    if(dpOnlyMissing && !rows.length) return '';
+    const collapsed = !dpExpandedChannels.has(ch.id) && !keyword && !dpOnlyMissing;
     return `<div class="panel">
       <h3 data-dptoggle="${ch.id}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-        <span>${ch.name}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
+        <span>${ch.name}（使用中 ${activeRows.length}${inactiveRows.length?`　已停用 ${inactiveRows.length}`:''}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
       </h3>
       <div style="${collapsed?'display:none;':''}">
       <table>
-        <thead><tr><th>代號</th><th>地址</th><th>狀態</th><th></th></tr></thead>
+        ${head}
         <tbody>
-          ${rows.map(dp=>{
-            if(editingDpId === dp.id){
-              return `<tr><td colspan="4">
-                <div class="grid3">
-                  <div class="field"><label>地址</label><input id="edpAddr" value="${dp.address}"></div>
-                  <div class="field"><label>所屬通路</label><select id="edpChannel">${chOpts.replace(`value="${dp.channelId}"`, `value="${dp.channelId}" selected`)}</select></div>
-                  <div class="field"><label>代號</label><input id="edpCode" value="${dp.code||''}"></div>
-                </div>
-                <button class="btn amber" data-savedp="${dp.id}">儲存</button>
-                <button class="btn ghost" data-canceldp="${dp.id}">取消</button>
-              </td></tr>`;
-            }
-            return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}</td><td><span class="badge ${dp.status==='inactive'?'pending':'completed'}">${dp.status==='inactive'?'已停用':'使用中'}</span></td>
-            <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn danger" data-del="${dp.id}">刪除</button></td></tr>`;
-          }).join('') || `<tr><td colspan="4"><div class="empty">此通路尚無店點</div></td></tr>`}
+          ${activeRows.map(rowHtml).join('') || `<tr><td colspan="5"><div class="empty">此通路目前沒有使用中的店點</div></td></tr>`}
         </tbody>
       </table>
+      ${inactiveRows.length ? `<details style="margin-top:8px;" ${keyword?'open':''}><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已停用的店點（${inactiveRows.length}）— 歷史紀錄保留，不列入涵蓋檢查</summary>
+        <table>${head}<tbody>${inactiveRows.map(rowHtml).join('')}</tbody></table></details>` : ''}
       </div>
     </div>`;
-  }).join('');
+  }).join('') || (dpOnlyMissing ? '<div class="empty">🎉 沒有未排入路線的店點</div>' : '');
   wrap.querySelectorAll('[data-dptoggle]').forEach(h=>{
     h.onclick = ()=>{
       const id = h.dataset.dptoggle;
@@ -2040,10 +2161,23 @@ function renderDpListBody(){
       const newAddr = document.getElementById('edpAddr').value.trim() || dp.address;
       try{
         await updateDropPoint(dp.id, { address: newAddr, channelId: document.getElementById('edpChannel').value, code: document.getElementById('edpCode').value.trim() });
+        const allowDup = document.getElementById('edpAllowDup').checked;
+        if(allowDup !== !!dp.allowDuplicate) await setDropPointAllowDuplicate(dp.id, allowDup);
         editingDpId = null;
         renderContent();
       }catch(err){ alert(err.message); }
     };
+  });
+  wrap.querySelectorAll('[data-stopdp]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.stopdp);
+      const inRoutes = cov.byDp.get(btn.dataset.stopdp) || [];
+      if(!confirm(`確定「${dp?dpLabel(dp):''}」已經不配送了嗎？\n\n會改成「已停用」：歷史任務、請款、報酬紀錄都保留，新路線不會再列出它，之後可隨時恢復使用。${inRoutes.length?`\n\n注意：它目前還在 ${inRoutes.map(r=>routeDisplayName(r.name)).join('、')}，停用後涵蓋檢查會提醒你把它從路線移除；已排好的任務不受影響。`:''}`)) return;
+      try{ await setDropPointsStatus([btn.dataset.stopdp], 'inactive'); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-resumedp]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await setDropPointsStatus([btn.dataset.resumedp], 'active'); renderContent(); }catch(err){ alert(err.message); } };
   });
   wrap.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
@@ -2143,6 +2277,7 @@ function renderRoutes(c){
   c.innerHTML = `
     <h2 class="section-title">路線管理</h2>
     <p class="section-sub">路線本身不綁夥伴。修改店點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
+    <div id="covHost"></div>
     <div class="panel">
       <div class="grid4">
         <div class="field"><label>任務起點</label><select id="rOrigin">${ogOptsTop}</select></div>
@@ -2168,6 +2303,7 @@ function renderRoutes(c){
       renderRoutes(c);
     }catch(err){ alert(err.message); }
   };
+  renderCoveragePanel();
   renderRouteList();
 }
 let routeDraft = {};
@@ -2521,6 +2657,17 @@ function renderRouteDetail(rid){
       const effDate = detailEl.querySelector(`[data-effdate="${rid2}"]`).value;
       const ids = routeDraft[rid2].order;
       if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個店點'); return; }
+      // 儲存前先預覽這次調整對「店點涵蓋」的影響：有店因此變成不在任何路線、同班次重複、
+      // 或把已停用的店加進來，先跟你確認，避免調整中不小心漏掉。
+      {
+        const pv = previewRouteChange(rid2, effDate, ids);
+        const names = list=>{ const t = list.slice(0,8).map(dp=>dpLabel(dp)).join('、'); return t + (list.length>8?` …等 ${list.length} 家`:''); };
+        const warn = [];
+        if(pv.newlyMissing.length) warn.push(`🔴 調整後不在任何路線（${pv.newlyMissing.length} 家）：${names(pv.newlyMissing)}`);
+        if(pv.newDups.length) warn.push(`🟡 同一班次變成重複排入（${pv.newDups.length} 家）：${names(pv.newDups)}`);
+        if(pv.inactiveAdded.length) warn.push(`⚠️ 加進了已停用的店（${pv.inactiveAdded.length} 家）：${names(pv.inactiveAdded)}`);
+        if(warn.length && !confirm(`這次調整：新增 ${pv.added.length} 家、移出 ${pv.removed.length} 家（${effDate} 起）。\n\n${warn.join('\n')}\n\n確定要儲存嗎？`)) return;
+      }
       try{
         // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
         // 目前打的數字，避免兩者不小心存成不一致（實際請款/夥伴結算只認拆賬金額，
