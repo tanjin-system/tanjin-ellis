@@ -38,9 +38,18 @@
   .role-switch{ display:flex; gap:6px; align-items:center; font-size:13px; }
   .role-switch select{ background:var(--navy-dim); color:#fff; border:1px solid #445067; border-radius:var(--radius); padding:6px 8px; font-family:inherit; font-size:13px; }
   .layout{ display:flex; min-height:calc(100vh - 54px); }
-  nav.tabs{ width:150px; background:#fff; border-right:1px solid var(--border); padding:14px 0; flex-shrink:0; }
-  nav.tabs button{ display:block; width:100%; text-align:left; padding:9px 16px; background:none; border:none; border-left:3px solid transparent; cursor:pointer; font-family:inherit; font-size:13px; color:var(--ink-soft); }
+  nav.tabs{ width:172px; background:#fff; border-right:1px solid var(--border); padding:14px 0; flex-shrink:0; }
+  nav.tabs button{ display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:9px 16px; background:none; border:none; border-left:3px solid transparent; cursor:pointer; font-family:inherit; font-size:13px; color:var(--ink-soft); }
   nav.tabs button.active{ border-left-color:var(--amber); color:var(--ink); font-weight:600; background:#FAF7F1; }
+  #toastHost{ position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:300; width:min(94vw,440px); display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+  .toast{ pointer-events:auto; display:flex; align-items:flex-start; gap:10px; background:#fff; border:1px solid var(--border); border-left:5px solid #3F6E6C; border-radius:8px; padding:11px 12px; box-shadow:0 6px 22px rgba(27,33,41,.22); font-size:13.5px; line-height:1.5; cursor:pointer; animation:toastin .22s ease-out; }
+  .toast.ok{ border-left-color:#2C6B44; } .toast.warn{ border-left-color:#E0902E; background:#FFFBF1; } .toast.error{ border-left-color:#B5493A; background:#FFF4F2; }
+  .toast .toast-tx{ flex:1; white-space:pre-wrap; word-break:break-word; } .toast .toast-ic{ flex:none; }
+  .toast .toast-x{ flex:none; background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:13px; padding:0 2px; }
+  .toast.out{ opacity:0; transform:translateY(-8px); transition:opacity .25s, transform .25s; }
+  @keyframes toastin{ from{ opacity:0; transform:translateY(-10px);} to{ opacity:1; transform:none;} }
+  .ni{ display:inline-block; width:20px; text-align:center; font-size:15px; flex:none; }
+  .nav-group{ font-size:11px; font-weight:600; color:#8F98A6; letter-spacing:.12em; padding:14px 16px 4px; border-top:1px solid var(--border); margin-top:6px; }
   main{ flex:1; padding:20px; max-width:1000px; min-width:0; }
   /* 電腦版：主控所有頁面的內容區都放寬到可用寬度（夥伴端維持原本的窄版）。 */
   main.wide{ max-width:none; }
@@ -57,7 +66,15 @@
   .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
-  @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} }
+  @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} .nav-group{ display:none; } nav.tabs button{ width:auto; flex:none; } }
+  /* 夥伴端手機：底部固定分頁列（圖示在上、文字在下），單手拇指就按得到 */
+  @media (max-width:640px){
+    body.driver-view nav.tabs{ position:fixed; left:0; right:0; bottom:0; z-index:70; width:100%; padding:0 0 env(safe-area-inset-bottom); background:#fff; border-top:1px solid var(--border); border-right:none; display:flex; overflow:visible; box-shadow:0 -3px 12px rgba(27,33,41,.10); }
+    body.driver-view nav.tabs button{ flex:1; flex-direction:column; justify-content:center; gap:1px; padding:6px 2px 7px; min-width:0; border-bottom:none; border-top:3px solid transparent; text-align:center; font-size:10.5px; white-space:nowrap; }
+    body.driver-view nav.tabs button .ni{ width:auto; font-size:21px; line-height:1.2; }
+    body.driver-view nav.tabs button.active{ border-top-color:var(--amber); border-bottom:none; background:#FFF8EA; }
+    body.driver-view main{ padding-bottom:92px; }
+  }
   .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
   .btn.amber{ background:var(--amber); color:#1B2129; }
   .btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
@@ -1039,27 +1056,27 @@ function getWeekDates(offset){
 
 // ---------- Tabs ----------
 const ADMIN_TABS = [
-  {id:'home', label:'首頁'},
-  {id:'announcements', label:'公告管理'},
-  {id:'schedule', label:'週期任務清單'},
-  {id:'drivers', label:'夥伴資料'},
-  {id:'channels', label:'通路管理'},
-  {id:'dropPoints', label:'店點資料庫'},
-  {id:'origins', label:'任務起點資料庫'},
-  {id:'routes', label:'路線管理'},
-  {id:'payroll', label:'報酬結算'},
-  {id:'slips', label:'勞報單'},
-  {id:'billing', label:'請款結算'},
-  {id:'export', label:'資料匯出'},
-  {id:'settings', label:'系統設定'}
+  {id:'home', label:'首頁', icon:'🏠'},
+  {id:'announcements', label:'公告管理', icon:'📢', group:'排班'},
+  {id:'schedule', label:'週期任務清單', icon:'📅', group:'排班'},
+  {id:'drivers', label:'夥伴資料', icon:'👥', group:'基本資料'},
+  {id:'channels', label:'通路管理', icon:'🏷️', group:'基本資料'},
+  {id:'dropPoints', label:'店點資料庫', icon:'📍', group:'基本資料'},
+  {id:'origins', label:'任務起點資料庫', icon:'🏭', group:'基本資料'},
+  {id:'routes', label:'路線管理', icon:'🛣️', group:'基本資料'},
+  {id:'payroll', label:'報酬結算', icon:'💰', group:'帳務'},
+  {id:'slips', label:'勞報單', icon:'📝', group:'帳務'},
+  {id:'billing', label:'請款結算', icon:'🧾', group:'帳務'},
+  {id:'export', label:'資料匯出', icon:'📤', group:'系統'},
+  {id:'settings', label:'系統設定', icon:'⚙️', group:'系統'}
 ];
 const DRIVER_TABS = [
-  {id:'home', label:'首頁'},
-  {id:'today', label:'今日任務'},
-  {id:'history', label:'歷史任務'},
-  {id:'my-earnings', label:'我的報酬'},
-  {id:'my-statement', label:'對帳單'},
-  {id:'profile', label:'我的資料'}
+  {id:'home', label:'首頁', icon:'🏠'},
+  {id:'today', label:'今日任務', icon:'📋'},
+  {id:'history', label:'歷史任務', icon:'🕘'},
+  {id:'my-earnings', label:'我的報酬', icon:'💰'},
+  {id:'my-statement', label:'對帳單', icon:'🧾'},
+  {id:'profile', label:'我的資料', icon:'👤'}
 ];
 // 電話、銀行資訊、身分證／居留證號為必填(車牌/車型選填)——身分證字號是
 // 勞報單「所得人」欄位要用的，沒有這個勞報單資料不完整。夥伴本人（非主控
@@ -1069,6 +1086,32 @@ function isDriverProfileRequiredComplete(d){
   if(!d) return true;
   return !!(d.phone && d.idNumber && d.bank && d.bank.bankName && d.bank.branch && d.bank.account && d.bank.holder);
 }
+// ---------- 輕量通知（取代 alert 彈窗）----------
+// 操作結果（儲存成功、請先選擇…）改成上方淡出的小通知，不用多按一次「確定」才能繼續；
+// 失敗類訊息停留較久、點一下可關閉。破壞性操作的 confirm() 仍然保留。
+function toast(msg, opts){
+  opts = opts || {};
+  let host = document.getElementById('toastHost');
+  if(!host){ host = document.createElement('div'); host.id = 'toastHost'; document.body.appendChild(host); }
+  const text = String(msg==null?'':msg);
+  const type = opts.type || (/失敗|錯誤|無法|不能|不可|逾時|異常/.test(text) ? 'error'
+    : /^請|請先|請選擇|請輸入|請填|請至少|找不到|沒有|還沒|尚未|不足|重複|不一致/.test(text) ? 'warn'
+    : /已|成功|完成|儲存|建立|套用|複製|發佈|更新|刪除|恢復|停用/.test(text) ? 'ok' : 'info');
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.innerHTML = `<span class="toast-ic">${{ok:'✅',error:'⛔',warn:'⚠️',info:'ℹ️'}[type]}</span><span class="toast-tx"></span><button class="toast-x" aria-label="關閉">✕</button>`;
+  el.querySelector('.toast-tx').textContent = text;
+  const dismiss = ()=>{ if(!el.isConnected) return; el.classList.add('out'); setTimeout(()=>el.remove(), 250); };
+  el.onclick = dismiss;
+  host.appendChild(el);
+  while(host.children.length > 4) host.firstChild.remove();
+  if(!opts.sticky){
+    const ms = Math.min(12000, (type==='error'||type==='warn' ? 5000 : 2800) + text.length*45);
+    setTimeout(dismiss, ms);
+  }
+  return { dismiss, el };
+}
+window.alert = msg=>{ toast(msg); };
 function renderNav(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
   const tabs = inDriverView ? DRIVER_TABS : ADMIN_TABS;
@@ -1077,9 +1120,13 @@ function renderNav(){
   if(lockToProfile) state.tab = 'profile';
   else if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
   const nav = document.getElementById('tabsNav');
+  document.body.classList.toggle('driver-view', !!inDriverView);
+  let lastGroup = '';
   nav.innerHTML = tabs.map(t=>{
     const disabled = lockToProfile && t.id!=='profile';
-    return `<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}" ${disabled?'disabled style="opacity:.4; cursor:not-allowed;"':''}>${t.label}</button>`;
+    const head = (t.group && t.group!==lastGroup) ? `<div class="nav-group">${t.group}</div>` : '';
+    if(t.group) lastGroup = t.group;
+    return head + `<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}" ${disabled?'disabled style="opacity:.4; cursor:not-allowed;"':''}><span class="ni">${t.icon||''}</span><span class="nl">${t.label}</span></button>`;
   }).join('');
   nav.querySelectorAll('button').forEach(b=>{
     b.onclick=()=>{
@@ -5427,11 +5474,13 @@ function renderTodayDetail(todays){
     const [aid, dpid] = btn.dataset.photo.split('|');
     const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
     async function goMany(dataUrls){
+      const up = toast(`📤 照片上傳中（${dataUrls.length} 張），請稍候…`, { type:'info', sticky:true });
       try{
         for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
+        up.dismiss();
         state._flashDp = dpid;
         renderContent();
-      }catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
+      }catch(err){ up.dismiss(); console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
     }
     btn.onclick = ()=>{
       const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
