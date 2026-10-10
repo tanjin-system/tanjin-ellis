@@ -5799,6 +5799,7 @@ function myOpenTasks(dId){
     .sort((a,b)=> a.date.localeCompare(b.date) || assignmentShiftKey(a)-assignmentShiftKey(b));
 }
 function renderToday(c){
+  thumbsPrune(); // 昨天以前的縮圖順手清掉
   const dId = state.activeDriverId;
   const today = todayStr();
   const todays = myOpenTasks(dId);
@@ -5921,7 +5922,7 @@ function showGreeting(){
 }
 // 今天全部完成的慶祝動畫：彩帶＋卡片彈出＋金額數字跳動，每位夥伴每天只播一次；之後同一天再進來就維持靜態完成畫面，隔天（午夜 12 點後）自動換新的一天。
 // 夥伴自己拍的照片縮圖：只存在這支手機的瀏覽器裡（約 4KB 的小圖，上傳當下就地縮出來），
-// 完全不用網路、不會向伺服器多要任何照片資料（不佔流量）。只保留最近 3 天，每個店點最多 3 張；換手機看不到縮圖，但「✓ 已上傳 N 張」仍在。
+// 完全不用網路、不會向伺服器多要任何照片資料（不佔流量）。只暫存當天（過了午夜就清掉），每個店點最多 3 張；歷史任務不顯示縮圖、維持原本的樣子；換手機看不到縮圖，但「✓ 已上傳 N 張」仍在。
 function makeThumb(dataUrl, size){
   size = size || 120;
   return new Promise(res=>{
@@ -5938,16 +5939,16 @@ function makeThumb(dataUrl, size){
 }
 function thumbsGet(dpId){
   try{
-    const min = ymd(addDays(todayStr(), -2));
-    return JSON.parse(localStorage.getItem('thumbs|'+dpId) || '[]').filter(x=>x && x.d>=min && x.u);
+    const today = todayStr(); // 只留當天的縮圖，過了午夜就不再顯示
+    return JSON.parse(localStorage.getItem('thumbs|'+dpId) || '[]').filter(x=>x && x.d===today && x.u);
   }catch(e){ return []; }
 }
 function thumbsPrune(){
   try{
-    const min = ymd(addDays(todayStr(), -2));
+    const today = todayStr();
     Object.keys(localStorage).filter(k=>k.startsWith('thumbs|')).forEach(k=>{
       let a = []; try{ a = JSON.parse(localStorage.getItem(k) || '[]'); }catch(e){}
-      a = a.filter(x=>x && x.d>=min);
+      a = a.filter(x=>x && x.d===today);
       if(a.length) localStorage.setItem(k, JSON.stringify(a)); else localStorage.removeItem(k);
     });
   }catch(e){}
