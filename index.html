@@ -5171,6 +5171,9 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     .bp .tot td{ font-size:16px; font-weight:700; background:#FFF3DC !important; }
     .bp .grand td{ font-size:20px; background:#FFE2A6 !important; }
     .bp .route{ font-size:13px; line-height:1.55; }
+    /* 全站樣式有 tr:last-child td{border-bottom:none}，會把每張表最後一列的底線吃掉（表格看起來沒收尾），這裡蓋回來 */
+    .bp table tr:last-child > td, .bp table tr:last-child > th{ border-bottom:1.5px solid #666 !important; }
+    .bp .remit tr:last-child td{ border-bottom:none !important; }
     .bp .remit{ break-inside:avoid; margin-top:22px; border:2px solid #E0902E; border-radius:6px; padding:12px 16px; background:#FFFBF1; }
     .bp .remit h3{ margin:0 0 8px; font-size:16px; }
     .bp .remit table{ margin:0; font-size:15px; } .bp .remit td{ border:none; padding:3px 8px 3px 0; background:transparent !important; }
