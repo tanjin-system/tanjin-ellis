@@ -842,9 +842,13 @@ function previewRouteChange(routeId, effDate, newIds) {
   };
 }
 
-async function deleteOrDeactivateDropPoint(dpId) {
-  const referenced = state.data.routes.some(r => r.versions.some(v => (v.dropPointIds || []).includes(dpId))) ||
+// 這家店有沒有被路線版本或（記憶體裡的）任務用過；用過就只能「停止配送」，不能刪除。
+function dropPointInUse(dpId) {
+  return state.data.routes.some(r => r.versions.some(v => (v.dropPointIds || []).includes(dpId))) ||
     state.data.assignments.some(a => a.dropPoints.some(dp => dp.sourceDpId === dpId));
+}
+async function deleteOrDeactivateDropPoint(dpId) {
+  const referenced = dropPointInUse(dpId);
   const supabase = getSupabase();
   if (referenced) {
     const { error } = await supabase.from('drop_points').update({ status: 'inactive' }).eq('id', dpId);
@@ -854,7 +858,17 @@ async function deleteOrDeactivateDropPoint(dpId) {
     return 'deactivated';
   }
   const { error } = await supabase.from('drop_points').delete().eq('id', dpId);
-  if (error) throw new Error('刪除店點失敗：' + error.message);
+  if (error) {
+    // 記憶體裡只有近期任務，更早的歷史任務可能還引用這家店：資料庫會擋下刪除（外鍵），改成停用保留歷史。
+    if (error.code === '23503' || /foreign key|violates/i.test(error.message || '')) {
+      const { error: e2 } = await supabase.from('drop_points').update({ status: 'inactive' }).eq('id', dpId);
+      if (e2) throw new Error('停用店點失敗：' + e2.message);
+      const dp = state.data.dropPoints.find(x => x.id === dpId);
+      if (dp) dp.status = 'inactive';
+      return 'deactivated';
+    }
+    throw new Error('刪除店點失敗：' + error.message);
+  }
   state.data.dropPoints = state.data.dropPoints.filter(x => x.id !== dpId);
   return 'deleted';
 }

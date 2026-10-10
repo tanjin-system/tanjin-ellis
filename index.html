@@ -2429,7 +2429,7 @@ function renderDpListBody(){
     }
     const inactive = dp.status==='inactive';
     return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
-    <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} <button class="btn danger" data-del="${dp.id}">刪除</button></td></tr>`;
+    <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} ${dropPointInUse(dp.id)?'':`<button class="btn danger" data-del="${dp.id}" title="這家店從來沒被路線或任務用過，可以直接刪除">刪除</button>`}</td></tr>`;
   };
   const head = '<thead><tr><th>代號</th><th>地址</th><th>目前排在哪些路線</th><th>狀態</th><th></th></tr></thead>';
   wrap.innerHTML = state.data.channels.map(ch=>{
@@ -2494,7 +2494,7 @@ function renderDpListBody(){
   wrap.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除店點「${dp?dpLabel(dp):''}」嗎？\n\n如果這個店點已被路線版本或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要永久刪除店點「${dp?dpLabel(dp):''}」嗎？\n\n這家店從來沒被路線或任務用過，刪除後無法復原。（店已經不配送請用「停止配送」，不要刪除）`)) return;
       try{
         const result = await deleteOrDeactivateDropPoint(btn.dataset.del);
         if(result==='deactivated') alert('這個店點已被路線版本或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
@@ -3350,14 +3350,34 @@ function advanceToNextEmpty(){
     if(el){ el.scrollIntoView({ behavior:'smooth', block:'center' }); el.classList.add('pulse'); }
   }, 250);
 }
-async function openPartnerPicker({ assignment, routeId, date }){
-  const sheet = document.getElementById('assignDetail'), backdrop = document.getElementById('mSheetBackdrop');
-  const a = assignment || null;
-  const rid = a ? a.routeId : routeId, dt = a ? a.date : date;
+// 全系統共用的「選夥伴」畫面：手機是底部彈出的清單、電腦是置中的小視窗。
+// 空格＝指派（新增任務）、已排的任務＝換人；排班模式、電腦版點空格、任務明細的「換夥伴」都走這一個。
+//   opts.assignment：有＝換人；沒有就用 routeId+date 新增
+//   opts.advanced：電腦版空格多一個「進階（調整金額）」連到舊表單
+//   opts.compact：從任務明細進來時不再放「看詳細／移除」（明細本來就有）
+async function openPartnerPicker(opts){
+  const a = opts.assignment || null;
+  const rid = a ? a.routeId : opts.routeId, dt = a ? a.date : opts.date;
   const route = state.data.routes.find(r=>r.id===rid);
   if(!route) return;
   if(!a && !getActiveVersion(route, dt)){ toast(`這條路線在 ${dt} 還沒有生效的店點版本，請先到「路線管理」建立版本再排班。`, { type:'error' }); return; }
-  const close = ()=>{ sheet.innerHTML = ''; backdrop.classList.remove('show'); };
+  const isMobile = window.matchMedia('(max-width:700px)').matches;
+  let host, close;
+  if(isMobile){
+    host = document.getElementById('assignDetail');
+    const backdrop = document.getElementById('mSheetBackdrop');
+    close = ()=>{ host.innerHTML = ''; backdrop.classList.remove('show'); };
+    backdrop.classList.add('show');
+  } else {
+    document.getElementById('partnerModal')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'partnerModal'; wrap.className = 'modal-backdrop';
+    wrap.innerHTML = '<div class="modal-box" style="max-width:420px;"></div>';
+    document.body.appendChild(wrap);
+    host = wrap.firstChild;
+    close = ()=> wrap.remove();
+    wrap.onclick = e=>{ if(e.target===wrap) close(); };
+  }
   let freq = new Map();
   try{ freq = (await loadDriverOriginStats()).get(route.originAddr) || new Map(); }catch(e){}
   const busy = new Map();
@@ -3369,21 +3389,22 @@ async function openPartnerPicker({ assignment, routeId, date }){
     const f = freq.get(d.id)||0, b = busy.get(d.id)||0;
     return `<div class="pp-row ${a&&a.driverId===d.id?'cur':''}" data-pp="${d.id}" data-name="${escapeHtml(d.name)}"><span class="pp-n">${escapeHtml(d.name)}</span>${a&&a.driverId===d.id?'<span class="pp-tag now">目前</span>':''}${f>=2?`<span class="pp-tag freq">常跑 ${f} 趟</span>`:''}${b?`<span class="pp-tag busy">當天已排 ${b} 趟</span>`:''}</div>`;
   };
-  sheet.innerHTML = `
+  host.innerHTML = `
     <div class="pp-head"><b style="font-size:15px;">${dt.slice(5).replace('-','/')}（${dow}）${escapeHtml(routeDisplayName(route.name))}</b><button class="btn ghost" id="ppClose" style="padding:4px 12px;">關閉 ✕</button></div>
     <div class="pp-cur">${a ? `目前是「${escapeHtml(driverName(a.driverId))}」，點下面的夥伴直接換人` : '點下面的夥伴就直接排進去'}（常跑這個任務起點的排前面）</div>
     <input id="ppSearch" placeholder="搜尋夥伴姓名" autocomplete="off">
     <div class="pp-list" id="ppList">${drivers.map(rowHtml).join('') || '<div class="empty">沒有在職的夥伴</div>'}</div>
-    ${a ? `<div style="display:flex; gap:8px;"><button class="btn ghost" id="ppDetail" style="flex:1;">看詳細／例外調整</button><button class="btn danger" id="ppRemove" style="flex:1;">移除這趟</button></div>` : ''}`;
-  backdrop.classList.add('show');
-  document.getElementById('ppClose').onclick = close;
-  const search = document.getElementById('ppSearch');
-  const filter = ()=>{ const q = search.value.trim().toLowerCase(); document.querySelectorAll('#ppList .pp-row').forEach(r=>{ r.style.display = !q || r.dataset.name.toLowerCase().includes(q) ? '' : 'none'; }); };
+    ${a && !opts.compact ? `<div style="display:flex; gap:8px;"><button class="btn ghost" id="ppDetail" style="flex:1;">看詳細／例外調整</button><button class="btn danger" id="ppRemove" style="flex:1;">移除這趟</button></div>` : ''}
+    ${!a && opts.advanced ? `<button class="btn ghost" id="ppAdvanced" style="width:100%;">進階：調整這趟夥伴費用…</button>` : ''}`;
+  host.querySelector('#ppClose').onclick = close;
+  const search = host.querySelector('#ppSearch');
+  const filter = ()=>{ const q = search.value.trim().toLowerCase(); host.querySelectorAll('#ppList .pp-row').forEach(r=>{ r.style.display = !q || r.dataset.name.toLowerCase().includes(q) ? '' : 'none'; }); };
   let composing = false;
   search.addEventListener('compositionstart', ()=>{ composing = true; });
   search.addEventListener('compositionend', ()=>{ composing = false; filter(); });
   search.addEventListener('input', ()=>{ if(!composing) filter(); });
-  document.querySelectorAll('#ppList .pp-row').forEach(row=>{
+  search.addEventListener('keydown', e=>{ if(e.key==='Enter'){ const first = [...host.querySelectorAll('#ppList .pp-row')].find(r=>r.style.display!=='none'); if(first) first.click(); } if(e.key==='Escape') close(); });
+  host.querySelectorAll('#ppList .pp-row').forEach(row=>{
     row.onclick = async ()=>{
       const driverId = row.dataset.pp;
       if(a && a.driverId===driverId){ close(); return; }
@@ -3394,23 +3415,27 @@ async function openPartnerPicker({ assignment, routeId, date }){
         toast(`${a?'已換成':'已排'}「${driverName(driverId)}」：${dt.slice(5).replace('-','/')} ${routeDisplayName(route.name)}`, { type:'ok' });
         close();
         renderContent();
-        if(!a) advanceToNextEmpty();
+        if(!a && isMobile) advanceToNextEmpty();
       }catch(err){ row.classList.remove('saving'); toast(err.message, { type:'error' }); }
     };
   });
-  const rm = document.getElementById('ppRemove');
+  const rm = host.querySelector('#ppRemove');
   if(rm) rm.onclick = async ()=>{
     if(!confirm(`確定要移除 ${dt.slice(5).replace('-','/')} ${routeDisplayName(route.name)}（${driverName(a.driverId)}）這趟嗎？無法復原。`)) return;
     try{ await deleteAssignment(a.id); close(); renderContent(); }catch(err){ toast(err.message, { type:'error' }); }
   };
-  const dtl = document.getElementById('ppDetail');
+  const dtl = host.querySelector('#ppDetail');
   if(dtl) dtl.onclick = ()=>{
-    sheet.innerHTML = '';
-    renderAssignmentDetail(a.id, sheet);
-    sheet.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
-    document.getElementById('mSheetClose').onclick = close;
+    if(isMobile){
+      host.innerHTML = '';
+      renderAssignmentDetail(a.id, host);
+      host.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
+      host.querySelector('#mSheetClose').onclick = close;
+    } else { close(); toast('點週期任務清單裡的那一格可以看詳細。', { type:'info' }); }
   };
-  if(!a) setTimeout(()=>{ try{ search.focus({preventScroll:true}); }catch(e){} }, 50);
+  const adv = host.querySelector('#ppAdvanced');
+  if(adv) adv.onclick = ()=>{ close(); renderQuickCreate(rid, dt); };
+  setTimeout(()=>{ try{ search.focus({preventScroll:true}); }catch(e){} }, 50);
 }
 function renderMobileSchedule(week){
   const host = document.getElementById('mSchedule');
@@ -3484,11 +3509,7 @@ function renderMobileSchedule(week){
     el.onclick = ()=>{
       if(bulkOn()){ bulkClick([el]); return; }
       const [routeId, date] = el.dataset.mquick.split('|');
-      if(editMode){ openPartnerPicker({ routeId, date }); return; }
-      backdrop.classList.add('show');
-      renderQuickCreate(routeId, date);
-      if(sheet.innerHTML.trim()) sheet.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
-      const cb = document.getElementById('mSheetClose'); if(cb) cb.onclick = closeSheet;
+      openPartnerPicker({ routeId, date, advanced:true });
     };
   });
   host.querySelectorAll('.m-route-title').forEach(t=>{ t.onclick = ()=>{ if(bulkOn()) bulkClick([t.parentElement]); }; });
@@ -3792,7 +3813,7 @@ function renderWeekGrid(containerId, dates){
     td.onclick = ()=>{
       if(bulkOn()){ bulkClick([td]); return; }
       const [routeId, date] = td.dataset.quickcreate.split('|');
-      renderQuickCreate(routeId, date);
+      openPartnerPicker({ routeId, date, advanced:true });
     };
   });
   // 批量修改模式：點日期標題＝選那一天全部、點車次名稱＝選那一車整週
@@ -4018,7 +4039,6 @@ function renderAssignmentDetail(id, box){
   const a = state.data.assignments.find(x=>x.id===id);
   if(!a){ box.innerHTML=''; return; }
   const canReassign = a.status!=='completed';
-  const otherDrivers = state.data.drivers.filter(d=>d.status==='active' && d.id!==a.driverId);
   // 請款總額要跟請款結算/路線管理看到的數字一致：優先用「星期一報價路線」
   // 當天生效版本手動輸入的拆賬金額，不是任務完成當下資料庫自動算出來的
   // a.billingSnapshot（那只是formula估算值，例如第七車/第八車平日是跑
@@ -4040,8 +4060,7 @@ function renderAssignmentDetail(id, box){
       ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>夥伴回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
       ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <span>臨時異動（例如夥伴請假換人）：</span>
-        <select id="afReassignDriver" style="width:auto; max-width:160px;"><option value="">選擇夥伴</option>${otherDrivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select>
-        <button class="btn ghost" id="afReassignBtn" style="padding:5px 10px; font-size:12px;">確認換夥伴</button>
+        <button class="btn ghost" id="afReassignBtn" style="padding:5px 12px; font-size:12px;">換夥伴…</button>
       </div>` : ''}
       <p class="note" style="margin:8px 0;">完成狀態由夥伴端自行操作，完成後會自動封存，主控端無需再次確認。</p>
       ${a.status==='in_progress' && a.published!==false ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-color:var(--amber);">
@@ -4061,16 +4080,8 @@ function renderAssignmentDetail(id, box){
     try{ await deleteAssignment(a.id); renderContent(); }
     catch(err){ alert(err.message); }
   };
-  if(canReassign){
-    const rt = state.data.routes.find(x=>x.id===a.routeId);
-    enhanceDriverSelect(box.querySelector('#afReassignDriver'), { getOrigin: ()=> rt ? rt.originAddr : null });
-  }
-  if(canReassign) box.querySelector('#afReassignBtn').onclick = async ()=>{
-    const newDriverId = box.querySelector('#afReassignDriver').value;
-    if(!newDriverId){ alert('請選擇夥伴'); return; }
-    try{ await reassignAssignmentDriver(a.id, newDriverId); renderContent(); }
-    catch(err){ alert(err.message); }
-  };
+  // 換夥伴改用全系統共用的選夥伴畫面（常跑排前面、顯示當天已排趟數）
+  if(canReassign) box.querySelector('#afReassignBtn').onclick = ()=> openPartnerPicker({ assignment: a, compact: true });
   const forceBtn = box.querySelector('#afForceComplete');
   if(forceBtn) forceBtn.onclick = async ()=>{
     if(!confirm(`確定要代 ${driverName(a.driverId)} 完成 ${a.date} ${routeName(a.routeId)} 嗎？\n完成後金額會依這趟目前的報酬與請款鎖定、自動封存，之後不能再改。`)) return;
