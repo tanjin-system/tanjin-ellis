@@ -82,6 +82,28 @@
     transform:scale(.97); filter:brightness(.92);
   }
   .tile:active{ border-color:var(--amber); }
+  /* 收合／展開的群組卡片（店點資料庫的通路、路線管理的地區、夥伴的任務起點…）統一樣式：
+     收合時整張卡片都能點；按下去有下沉內陷的回饋；展開後左邊有琥珀色細線，標題列釘在畫面上方，
+     清單很長時捲到下面也能直接收合。 */
+  .fold{ padding:0; cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out, background-color .1s ease-out; }
+  .fold-head{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; border-radius:var(--radius); }
+  .fold-title{ font-weight:700; font-size:15px; }
+  .fold-chev{ flex:none; border:1px solid var(--border); border-radius:999px; padding:3px 12px; font-size:12px; color:var(--ink-soft); background:#fff; box-shadow:0 1px 0 rgba(27,33,41,.14); }
+  .fold-body{ padding:4px 16px 16px; cursor:auto; user-select:text; -webkit-user-select:text; }
+  .fold:not(.open):hover{ background:#FAF2E3; }
+  .fold:not(.open):active{ transform:scale(.985); filter:brightness(.93); box-shadow:inset 0 3px 6px rgba(27,33,41,.25); }
+  .fold.open{ border-left:4px solid var(--amber); cursor:default; }
+  .fold.open > .fold-head{ cursor:pointer; position:sticky; top:0; z-index:8; background:var(--panel); border-bottom:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; }
+  .fold.open > .fold-head:hover{ background:#FAF2E3; }
+  .fold.open > .fold-head:active{ filter:brightness(.93); box-shadow:inset 0 3px 6px rgba(27,33,41,.25); }
+  .fold-row{ cursor:pointer; border:1px solid var(--border); background:#FAF9F7; }
+  .fold-row:hover{ background:#FAF2E3; }
+  .fold-row:active{ transform:scale(.985); filter:brightness(.93); box-shadow:inset 0 3px 6px rgba(27,33,41,.25); }
+  details.fold-d > summary{ cursor:pointer; padding:10px 14px; border:1px solid var(--border); border-radius:var(--radius); background:#FAF9F7; list-style:none; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  details.fold-d > summary::-webkit-details-marker{ display:none; }
+  details.fold-d > summary::after{ content:'展開 ▸'; flex:none; border:1px solid var(--border); border-radius:999px; padding:3px 12px; font-size:12px; color:var(--ink-soft); background:#fff; }
+  details.fold-d[open] > summary::after{ content:'收合 ▾'; }
+  details.fold-d > summary:hover{ background:#FAF2E3; }
   @media (prefers-reduced-motion: reduce){ .btn, .tile, .m-day, .m-slot{ transition:none; } }
   .badge{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
   .badge.pending{ background:#F2E4D0; color:#8A5A17; }
@@ -1535,6 +1557,10 @@ function renderDrivers(c){
       <button class="btn amber" id="addDriver">新增夥伴</button>
     </div>
     <div class="field" style="max-width:280px;"><label>搜尋夥伴姓名</label><input id="driverSearch" value="${driverListSearch}" placeholder="輸入夥伴姓名關鍵字篩選"></div>
+    <div style="display:flex; gap:10px; margin-bottom:10px;">
+      <button class="btn ghost" id="driverExpandAll" style="padding:5px 12px; font-size:12.5px;">全部展開</button>
+      <button class="btn ghost" id="driverCollapseAll" style="padding:5px 12px; font-size:12.5px;">全部收合</button>
+    </div>
     <div class="panel">
       <div id="driverCardList"></div>
       <p class="note" style="margin-top:10px;">登入代碼請私下告知夥伴本人（例如用LINE私訊），夥伴打開系統選「夥伴帳號」後輸入這組代碼即可看到自己的資料，不會看到其他夥伴。</p>
@@ -1642,15 +1668,16 @@ function renderDrivers(c){
     listEl.innerHTML = originKeys.map(origin=>{
       const drivers = byOrigin[origin];
       const collapsed = !driverGroupExpandedSet.has(origin) && !kw;
-      return `<div style="margin-bottom:10px;">
-        <h3 data-drivergrouptoggle="${escapeHtml(origin)}" style="margin:0 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:14px;">
-          <span>${escapeHtml(origin)}（${drivers.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
-        </h3>
-        <div style="${collapsed?'display:none;':''}">${drivers.map(driverCardHtml).join('')}</div>
+      return `<div class="panel fold ${collapsed?'':'open'}" data-drivergrouptoggle="${escapeHtml(origin)}">
+        <div class="fold-head">
+          <span class="fold-title">${escapeHtml(origin)}（${drivers.length}）</span><span class="fold-chev">${collapsed?'展開 ▸':'收合 ▾'}</span>
+        </div>
+        <div class="fold-body" style="${collapsed?'display:none;':''}">${drivers.map(driverCardHtml).join('')}</div>
       </div>`;
     }).join('');
     listEl.querySelectorAll('[data-drivergrouptoggle]').forEach(h=>{
-      h.onclick = ()=>{
+      h.onclick = (e)=>{
+        if(e.target.closest('.fold-body')) return;
         const key = h.dataset.drivergrouptoggle;
         if(driverGroupExpandedSet.has(key)) driverGroupExpandedSet.delete(key); else driverGroupExpandedSet.add(key);
         renderDriverCards();
@@ -1751,6 +1778,8 @@ function renderDrivers(c){
   }
   renderDriverCards();
   const driverSearchEl = document.getElementById('driverSearch');
+  document.getElementById('driverExpandAll').onclick = ()=>{ state.data.drivers.forEach(d=>driverGroupExpandedSet.add(driverOriginLabel(d.id) || '未分類')); renderDriverCards(); };
+  document.getElementById('driverCollapseAll').onclick = ()=>{ driverGroupExpandedSet.clear(); renderDriverCards(); };
   let driverSearchComposing = false;
   driverSearchEl.addEventListener('compositionstart', ()=>{ driverSearchComposing = true; });
   driverSearchEl.addEventListener('compositionend', (e)=>{ driverSearchComposing=false; driverListSearch = e.target.value; renderDriverCards(); });
@@ -2072,7 +2101,11 @@ function renderDropPoints(c){
       <button class="btn amber" id="addDp">新增店點</button>
     </div>
     <div class="field"><label>搜尋地址或代號</label><input id="dpSearch" placeholder="輸入關鍵字篩選（數量多時建議先搜尋）"></div>
-    <label style="display:flex; align-items:center; gap:6px; font-size:13px; margin-bottom:10px;"><input type="checkbox" id="dpOnlyMissing" ${dpOnlyMissing?'checked':''} style="width:auto;"> 只看「使用中但沒排入任何路線」的店</label>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" id="dpOnlyMissing" ${dpOnlyMissing?'checked':''} style="width:auto;"> 只看「使用中但沒排入任何路線」的店</label>
+      <button class="btn ghost" id="dpExpandAll" style="padding:5px 12px; font-size:12.5px;">全部展開</button>
+      <button class="btn ghost" id="dpCollapseAll" style="padding:5px 12px; font-size:12.5px;">全部收合</button>
+    </div>
     <div id="dpListBody"></div>
   `;
   document.getElementById('addDp').onclick = async ()=>{
@@ -2085,6 +2118,8 @@ function renderDropPoints(c){
   };
   document.getElementById('dpSearch').oninput = renderDpListBody;
   document.getElementById('dpOnlyMissing').onchange = e=>{ dpOnlyMissing = e.target.checked; renderDpListBody(); };
+  document.getElementById('dpExpandAll').onclick = ()=>{ state.data.channels.forEach(ch=>dpExpandedChannels.add(ch.id)); renderDpListBody(); };
+  document.getElementById('dpCollapseAll').onclick = ()=>{ dpExpandedChannels.clear(); renderDpListBody(); };
   renderCoveragePanel();
   renderDpListBody();
 }
@@ -2130,24 +2165,25 @@ function renderDpListBody(){
     const inactiveRows = rows.filter(dp=>dp.status==='inactive');
     if(dpOnlyMissing && !rows.length) return '';
     const collapsed = !dpExpandedChannels.has(ch.id) && !keyword && !dpOnlyMissing;
-    return `<div class="panel">
-      <h3 data-dptoggle="${ch.id}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-        <span>${ch.name}（使用中 ${activeRows.length}${inactiveRows.length?`　已停用 ${inactiveRows.length}`:''}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
-      </h3>
-      <div style="${collapsed?'display:none;':''}">
+    return `<div class="panel fold ${collapsed?'':'open'}" data-dptoggle="${ch.id}">
+      <div class="fold-head">
+        <span class="fold-title">${ch.name}（使用中 ${activeRows.length}${inactiveRows.length?`　已停用 ${inactiveRows.length}`:''}）</span><span class="fold-chev">${collapsed?'展開 ▸':'收合 ▾'}</span>
+      </div>
+      <div class="fold-body" style="${collapsed?'display:none;':''}">
       <table>
         ${head}
         <tbody>
           ${activeRows.map(rowHtml).join('') || `<tr><td colspan="5"><div class="empty">此通路目前沒有使用中的店點</div></td></tr>`}
         </tbody>
       </table>
-      ${inactiveRows.length ? `<details style="margin-top:8px;" ${keyword?'open':''}><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已停用的店點（${inactiveRows.length}）— 歷史紀錄保留，不列入涵蓋檢查</summary>
+      ${inactiveRows.length ? `<details class="fold-d" style="margin-top:8px;" ${keyword?'open':''}><summary style="font-size:12.5px; color:var(--ink-soft);"><span>已停用的店點（${inactiveRows.length}）— 歷史紀錄保留，不列入涵蓋檢查</span></summary>
         <table>${head}<tbody>${inactiveRows.map(rowHtml).join('')}</tbody></table></details>` : ''}
       </div>
     </div>`;
   }).join('') || (dpOnlyMissing ? '<div class="empty">🎉 沒有未排入路線的店點</div>' : '');
   wrap.querySelectorAll('[data-dptoggle]').forEach(h=>{
-    h.onclick = ()=>{
+    h.onclick = (e)=>{
+      if(e.target.closest('.fold-body')) return;
       const id = h.dataset.dptoggle;
       if(dpExpandedChannels.has(id)) dpExpandedChannels.delete(id); else dpExpandedChannels.add(id);
       renderDpListBody();
@@ -2328,9 +2364,15 @@ function renderRouteList(){
   const el = document.getElementById('routeList');
   el.innerHTML = `
     <div class="field" style="max-width:320px;"><label>搜尋路線（依名稱／任務起點／車次）</label><input id="routeSearch" value="${routeListSearch}" placeholder="輸入關鍵字篩選，路線多時建議先搜尋"></div>
+    <div style="display:flex; gap:10px; margin-bottom:10px;">
+      <button class="btn ghost" id="routeExpandAll" style="padding:5px 12px; font-size:12.5px;">全部展開</button>
+      <button class="btn ghost" id="routeCollapseAll" style="padding:5px 12px; font-size:12.5px;">全部收合</button>
+    </div>
     <div id="routeTableWrap"></div>
   `;
   renderRouteTable();
+  document.getElementById('routeExpandAll').onclick = ()=>{ state.data.routes.forEach(r=>regionExpandedSet.add(r.region || '未分類')); renderRouteTable(); };
+  document.getElementById('routeCollapseAll').onclick = ()=>{ regionExpandedSet.clear(); renderRouteTable(); };
   const searchEl = document.getElementById('routeSearch');
   let composing = false;
   searchEl.addEventListener('compositionstart', ()=>{ composing = true; });
@@ -2387,11 +2429,11 @@ function renderRouteTable(){
   wrap.innerHTML = regionKeys.map(region=>{
     const rows = byRegion[region];
     const collapsed = !regionExpandedSet.has(region) && !kw;
-    return `<div class="panel" style="overflow-x:auto;">
-      <h3 data-regiontoggle="${region}" style="margin-top:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-        <span>${region}（${rows.length}）</span><span style="color:var(--ink-soft); font-size:12px;">${collapsed?'展開 ▸':'收合 ▾'}</span>
-      </h3>
-      <div style="${collapsed?'display:none;':''}">
+    return `<div class="panel fold ${collapsed?'':'open'}" data-regiontoggle="${region}">
+      <div class="fold-head">
+        <span class="fold-title">${region}（${rows.length}）</span><span class="fold-chev">${collapsed?'展開 ▸':'收合 ▾'}</span>
+      </div>
+      <div class="fold-body" style="overflow-x:auto; ${collapsed?'display:none;':''}">
         <table>
           <thead><tr><th>路線</th><th>夥伴費用</th><th>請款費用</th><th>毛利（請款-夥伴）</th><th></th></tr></thead>
           <tbody>${rows.map(routeRowHtml).join('')}</tbody>
@@ -2399,7 +2441,7 @@ function renderRouteTable(){
       </div>
     </div>`;
   }).join('') + (inactiveRoutes.length ? `<div class="panel" style="overflow-x:auto;">
-      <details ${kw || inactiveRoutes.some(r=>r.id===expandedRouteId) ? 'open' : ''}><summary style="cursor:pointer; font-weight:700;">已停用的路線（${inactiveRoutes.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— 不出現在週期任務清單，歷史紀錄保留，可隨時恢復</span></summary>
+      <details class="fold-d" ${kw || inactiveRoutes.some(r=>r.id===expandedRouteId) ? 'open' : ''}><summary style="font-weight:700;"><span>已停用的路線（${inactiveRoutes.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— 不出現在週期任務清單，歷史紀錄保留，可隨時恢復</span></span></summary>
         <table style="margin-top:8px;">
           <thead><tr><th>路線</th><th>夥伴費用</th><th>請款費用</th><th>毛利（請款-夥伴）</th><th></th></tr></thead>
           <tbody>${inactiveRoutes.map(routeRowHtml).join('')}</tbody>
@@ -2407,7 +2449,8 @@ function renderRouteTable(){
       </details>
     </div>` : '');
   wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
-    h.onclick = ()=>{
+    h.onclick = (e)=>{
+      if(e.target.closest('.fold-body')) return;
       const key = h.dataset.regiontoggle;
       if(regionExpandedSet.has(key)) regionExpandedSet.delete(key); else regionExpandedSet.add(key);
       renderRouteTable();
@@ -4310,9 +4353,9 @@ function renderPayrollPage(c, mode){
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
         ${statementDriftNote(record, live)}
         ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放夥伴回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放夥伴簽名。'}</div>` : ''}
-        <h4 data-tripstoggle style="margin:14px 0 8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; font-size:13.5px;">
+        <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
-          <span style="color:var(--ink-soft); font-size:12px;">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
+          <span class="fold-chev">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
         </h4>
         <div style="${payrollTripsExpanded?'':'display:none;'}">
           <table>
