@@ -2442,6 +2442,25 @@ function renderRouteTable(){
     }
   }
 }
+// 路線費用自動計算：里程 × 每公里單價 ＋ 店數 × 每店單價。主控在路線版本打完里程（或增減店點）後
+// 自動填入夥伴費用與請款總額，隨時可以手動改；手動改過之後就不再自動覆蓋，要重算按「套用計算值」。
+const ROUTE_FEE_RATES = { driverPerKm:25, driverPerStore:30, billingPerKm:35, billingPerStore:50 };
+function calcRouteFees(km, stores){
+  const k = Number(km)||0, n = Number(stores)||0;
+  return {
+    driverFare: Math.round(k*ROUTE_FEE_RATES.driverPerKm + n*ROUTE_FEE_RATES.driverPerStore),
+    billingTotal: Math.round(k*ROUTE_FEE_RATES.billingPerKm + n*ROUTE_FEE_RATES.billingPerStore)
+  };
+}
+// 里程有填、且主控沒有手動改過費用時，依目前里程與店數重算草稿的夥伴費用／請款總額。回傳是否有套用。
+function applyAutoFees(draft, force){
+  if(draft.distanceKm==='' || draft.distanceKm==null || isNaN(Number(draft.distanceKm))) return false;
+  if(draft.feeManual && !force) return false;
+  const f = calcRouteFees(draft.distanceKm, draft.order.length);
+  draft.driverFare = f.driverFare; draft.billingTotal = f.billingTotal;
+  if(force) draft.feeManual = false;
+  return true;
+}
 function renderRouteDetail(rid){
   const detailEl = expandedRouteBox;
   if(!detailEl) return;
@@ -2518,6 +2537,7 @@ function renderRouteDetail(rid){
         <div class="field"><label>夥伴費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
         <div class="field"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
+      <div id="rvFeeHint" style="font-size:12px; color:var(--ink-soft); margin:2px 0 6px;"></div>
       <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與夥伴結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
       <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
@@ -2544,7 +2564,9 @@ function renderRouteDetail(rid){
     resultsEl.querySelectorAll('[data-dpaddbtn]').forEach(btn=>{
       btn.onclick = ()=>{
         const [routeId, dpId] = btn.dataset.dpaddbtn.split('|');
-        ensureDraft(state.data.routes.find(x=>x.id===routeId)).order.push(dpId);
+        const dr = ensureDraft(state.data.routes.find(x=>x.id===routeId));
+        dr.order.push(dpId);
+        applyAutoFees(dr);
         renderRouteDetail(routeId);
       };
     });
@@ -2615,6 +2637,7 @@ function renderRouteDetail(rid){
     btn.onclick = ()=>{
       const [rid2, idx] = btn.dataset.remove.split('|').map((v,i)=> i===1?Number(v):v);
       routeDraft[rid2].order.splice(idx,1);
+      applyAutoFees(routeDraft[rid2]);
       renderRouteDetail(rid2);
     };
   });
@@ -2670,16 +2693,43 @@ function renderRouteDetail(rid){
     sumEl.style.color = sum!==billingTotal ? '#B5493A' : 'var(--ink-soft)';
     sumEl.textContent = `拆賬合計 $${money(sum)}${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}`;
   }
+  function renderFeeHint(){
+    const el = document.getElementById('rvFeeHint');
+    if(!el) return;
+    if(draft.distanceKm==='' || draft.distanceKm==null || isNaN(Number(draft.distanceKm))){
+      el.textContent = `填入里程後會自動計算：夥伴費用＝里程×${ROUTE_FEE_RATES.driverPerKm}＋店數×${ROUTE_FEE_RATES.driverPerStore}；請款總額＝里程×${ROUTE_FEE_RATES.billingPerKm}＋店數×${ROUTE_FEE_RATES.billingPerStore}（算好後仍可手動修改）。`;
+      return;
+    }
+    const f = calcRouteFees(draft.distanceKm, draft.order.length);
+    const same = Number(draft.driverFare)===f.driverFare && Number(draft.billingTotal)===f.billingTotal;
+    el.innerHTML = `計算值：夥伴費用 ${draft.distanceKm}km×${ROUTE_FEE_RATES.driverPerKm}＋${draft.order.length}店×${ROUTE_FEE_RATES.driverPerStore}＝<b>$${money(f.driverFare)}</b>；請款總額 ${draft.distanceKm}km×${ROUTE_FEE_RATES.billingPerKm}＋${draft.order.length}店×${ROUTE_FEE_RATES.billingPerStore}＝<b>$${money(f.billingTotal)}</b>。`
+      + (same ? ' ✅ 目前就是計算值。' : ` 目前填的數字跟計算值不同${draft.feeManual?'（你手動改過，里程或店數變動時不會自動覆蓋）':''}。 <button class="btn ghost" id="rvApplyFee" style="padding:2px 8px; font-size:11.5px;">套用計算值</button>`);
+    const b = el.querySelector('#rvApplyFee');
+    if(b) b.onclick = ()=>{
+      applyAutoFees(draft, true);
+      document.getElementById('rvFare').value = draft.driverFare;
+      document.getElementById('rvBilling').value = draft.billingTotal;
+      renderSplitInputs(); renderFeeHint();
+    };
+  }
   ['rvDistance','rvFare','rvBilling'].forEach(id=>{
     const el = document.getElementById(id);
     el.oninput = ()=>{
+      if(id!=='rvDistance') draft.feeManual = true; // 手動改過夥伴費用／請款總額：之後里程、店數變動不再自動覆蓋
       draft.distanceKm = document.getElementById('rvDistance').value;
-      draft.driverFare = document.getElementById('rvFare').value;
-      draft.billingTotal = document.getElementById('rvBilling').value;
+      if(id==='rvDistance' && applyAutoFees(draft)){
+        document.getElementById('rvFare').value = draft.driverFare;
+        document.getElementById('rvBilling').value = draft.billingTotal;
+      } else {
+        draft.driverFare = document.getElementById('rvFare').value;
+        draft.billingTotal = document.getElementById('rvBilling').value;
+      }
       renderSplitInputs();
+      renderFeeHint();
     };
   });
   renderSplitInputs();
+  renderFeeHint();
   detailEl.querySelectorAll('[data-savever]').forEach(btn=>{
     btn.onclick = async ()=>{
       const rid2 = btn.dataset.savever;
