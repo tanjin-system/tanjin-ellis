@@ -108,6 +108,14 @@
   .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
   @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} .nav-group{ display:none; } nav.tabs button{ width:auto; flex:none; } }
+  /* 手機：輸入框一律 16px——iOS 在輸入框字小於 16px 時，點進去會自動把整個畫面放大（很難操作）；16px 就不會。 */
+  @media (max-width:640px){
+    input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea{ font-size:16px !important; }
+  }
+  /* 夥伴端：鎖定反白／長按選字與選單（輸入框內仍可正常輸入），也關掉雙擊放大 */
+  body.driver-lock, body.driver-lock *{ -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; touch-action:manipulation; }
+  body.driver-lock input, body.driver-lock textarea{ -webkit-user-select:text; user-select:text; }
+  body.driver-lock img{ -webkit-user-drag:none; }
   /* 夥伴端手機：分頁列置頂（圖示在上、文字在下），往下捲動時也固定在畫面最上方 */
   @media (max-width:640px){
     body.driver-view nav.tabs{ position:sticky; top:0; z-index:70; width:100%; padding:0; background:var(--panel); border-bottom:1px solid var(--border); border-right:none; display:flex; overflow:visible; box-shadow:0 3px 12px rgba(27,33,41,.10); }
@@ -1356,6 +1364,9 @@ function gsGo(key){
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && document.getElementById('gsWrap').style.display!=='none'){ e.preventDefault(); input.focus(); input.select(); }
   });
 })();
+// iOS Safari 不理 user-scalable=no，雙指放大要另外擋（只擋夥伴本人）。
+document.addEventListener('gesturestart', e=>{ if(document.body.classList.contains('driver-lock')) e.preventDefault(); });
+document.addEventListener('contextmenu', e=>{ if(document.body.classList.contains('driver-lock') && !/^(INPUT|TEXTAREA)$/.test((e.target||{}).tagName)) e.preventDefault(); });
 function renderNav(){
   const inDriverView = state.adminViewDriver || state.role==='driver';
   const tabs = inDriverView ? DRIVER_TABS : ADMIN_TABS;
@@ -1365,6 +1376,11 @@ function renderNav(){
   else if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
   const nav = document.getElementById('tabsNav');
   document.body.classList.toggle('driver-view', !!inDriverView);
+  // 夥伴本人：鎖定縮放與反白（畫面不會自己放大、也不能雙指放大或長按選字）；主控維持可以雙指放大。
+  const ownDriver = state.role==='driver' && !state.adminViewDriver;
+  document.body.classList.toggle('driver-lock', ownDriver);
+  const vp = document.querySelector('meta[name="viewport"]');
+  if(vp) vp.setAttribute('content', ownDriver ? 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no' : 'width=device-width, initial-scale=1');
   const gs = document.getElementById('gsWrap'); if(gs) gs.style.display = (state.role==='admin' && !inDriverView) ? 'block' : 'none';
   let lastGroup = '';
   nav.innerHTML = tabs.map(t=>{
