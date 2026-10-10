@@ -823,6 +823,64 @@ function computeCoverage(asOf, override) {
   });
   return { byDp, missing, dups, inactiveIn, activeCount };
 }
+// ---------- 修正歷史版本（不動店點、不動其他版本的內容） ----------
+// 這條路線在某段日期內「已完成」的任務日期（每趟一筆，用來顯示影響幾趟）。
+async function completedTripDatesInRange(routeId, from, to) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('assignments').select('trip_date')
+    .eq('route_id', routeId).eq('status', 'completed').gte('trip_date', from).lte('trip_date', to).order('trip_date').limit(500);
+  if (error) return [];
+  return (data || []).map(r => r.trip_date);
+}
+// 預覽「把某版本的生效日改成 newStart」會讓哪幾天換用另一個版本、請款金額差多少。
+async function versionDateImpact(route, v, newStart) {
+  const sorted = [...route.versions].sort((x, y) => x.start.localeCompare(y.start));
+  const idx = sorted.findIndex(x => x.id === v.id);
+  const prev = sorted[idx - 1] || null;
+  if (!prev) return { range: null, dates: [], delta: 0, src: null, dst: null };
+  let range, src, dst;
+  if (newStart > v.start) { range = [v.start, ymd(addDays(newStart, -1))]; src = v; dst = prev; }
+  else { range = [newStart, ymd(addDays(v.start, -1))]; src = prev; dst = v; }
+  const dates = await completedTripDatesInRange(route.id, range[0], range[1]);
+  const delta = dates.length * ((Number(dst.billingTotal) || 0) - (Number(src.billingTotal) || 0));
+  return { range, dates, delta, src, dst };
+}
+// 修改某個版本的生效開始日：前一個版本的結束日自動跟著變（版本之間不留空、不重疊）。
+async function updateVersionStart(routeId, versionId, newStart) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newStart || '')) throw new Error('請選擇正確的日期');
+  const route = state.data.routes.find(r => r.id === routeId);
+  if (!route) throw new Error('找不到路線');
+  const sorted = [...route.versions].sort((x, y) => x.start.localeCompare(y.start));
+  const idx = sorted.findIndex(x => x.id === versionId);
+  if (idx < 0) throw new Error('找不到這個版本');
+  const v = sorted[idx], prev = sorted[idx - 1] || null, next = sorted[idx + 1] || null;
+  if (newStart === v.start) throw new Error('日期沒有變');
+  if (!prev) throw new Error('這是這條路線的第一個版本，不能改開始日（前面會變成沒有版本）。');
+  if (newStart <= prev.start) throw new Error(`開始日要晚於上一個版本的開始日（${prev.start}）。`);
+  if (next && newStart >= next.start) throw new Error(`開始日要早於下一個版本的開始日（${next.start}）。`);
+  const supabase = getSupabase();
+  const prevEnd = ymd(addDays(newStart, -1));
+  const setStart = async () => { const { error } = await supabase.from('route_versions').update({ start_date: newStart }).eq('id', v.id); if (error) throw new Error('更新開始日失敗：' + error.message); };
+  const setPrevEnd = async () => { const { error } = await supabase.from('route_versions').update({ end_date: prevEnd }).eq('id', prev.id); if (error) throw new Error('更新上一版結束日失敗：' + error.message); };
+  // 往後延：先動這個版本再延長上一版；往前提：先縮短上一版再動這個版本——任何時刻都不會讓兩個版本重疊
+  if (newStart > v.start) { await setStart(); await setPrevEnd(); } else { await setPrevEnd(); await setStart(); }
+  v.start = newStart; prev.end = prevEnd;
+  route.versions = [...route.versions].sort((x, y) => x.start.localeCompare(y.start));
+}
+// 只修正某個版本的各通路拆賬金額（請款總額自動＝加總）；店點、里程、夥伴費用都不動。
+async function updateVersionSplit(routeId, versionId, byChannel) {
+  const route = state.data.routes.find(r => r.id === routeId);
+  const v = route && route.versions.find(x => x.id === versionId);
+  if (!v) throw new Error('找不到這個版本');
+  const clean = {};
+  Object.entries(byChannel || {}).forEach(([cid, amt]) => { const n = Number(amt); if (!isFinite(n) || n < 0) throw new Error('拆賬金額要是 0 以上的數字'); clean[cid] = n; });
+  const total = Object.values(clean).reduce((sum, n) => sum + n, 0);
+  const supabase = getSupabase();
+  const { error } = await supabase.from('route_versions').update({ billing_by_channel: clean, billing_total: total }).eq('id', v.id);
+  if (error) throw new Error('儲存拆賬失敗：' + error.message);
+  v.billingByChannel = clean; v.billingTotal = total;
+}
+
 // 儲存新路線版本前：這條路線從生效日起有哪些「已完成」的任務。這些任務是用舊內容跑完的，
 // 但請款金額會改套新版本，生效日設早了就會把金額灌錯（回傳最多 60 筆日期）。
 async function completedTripDatesFrom(routeId, fromDate) {

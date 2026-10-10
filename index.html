@@ -2863,6 +2863,74 @@ function applyAutoFees(draft){
   draft.driverFare = f.driverFare; draft.billingTotal = f.billingTotal;
   return true;
 }
+// 修正歷史版本：只改「生效開始日」或「各通路拆賬金額」，不動店點／里程／夥伴費用，也不用重建版本。
+function bindVersionFix(container, route){
+  container.querySelectorAll('[data-verfix]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const v = route.versions.find(x=>x.id===btn.dataset.verfix); if(!v) return;
+      const box = container.querySelector(`[data-verfixbox="${v.id}"]`);
+      if(box.innerHTML){ box.innerHTML = ''; return; }
+      const sorted = [...route.versions].sort((x,y)=>x.start.localeCompare(y.start));
+      const isFirst = sorted[0].id === v.id;
+      const cids = [...new Set([...Object.keys(v.billingByChannel||{}), ...(v.dropPointIds||[]).map(id=>(state.data.dropPoints.find(d=>d.id===id)||{}).channelId).filter(Boolean)])];
+      const quote = findMondayQuoteRoute(route);
+      const quoteNote = (quote && quote.id!==route.id) ? `<div class="note" style="margin:6px 0;">這條路線的請款金額是依「${escapeHtml(routeDisplayName(quote.name))}」那條的版本計算，要修正金額請到那一條改拆賬；日期則兩條要一起對齊。</div>` : '';
+      box.innerHTML = `<div class="note" style="margin-top:8px;">
+        <b>修正這個版本（${v.start} 起）</b>
+        ${quoteNote}
+        <div style="margin:8px 0 4px; font-weight:600;">① 生效開始日</div>
+        ${isFirst ? '<div style="font-size:12px; color:var(--ink-soft);">這是第一個版本，不能改開始日。</div>' : `<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;"><input type="date" class="vfDate" value="${v.start}" style="width:auto;"><button class="btn amber vfSaveDate" style="padding:5px 12px; font-size:12px;">儲存日期</button></div>
+        <div class="vfDateImpact" style="font-size:12px; color:var(--ink-soft); margin-top:4px;">改日期時，上一個版本的結束日會自動跟著調整。</div>`}
+        <div style="margin:12px 0 4px; font-weight:600;">② 各通路拆賬金額（請款總額＝加總）</div>
+        ${cids.length ? `<div style="display:flex; gap:10px; flex-wrap:wrap;">${cids.map(cid=>`<div class="field" style="margin:0; max-width:150px;"><label>${escapeHtml(channelName(cid))}</label><input type="number" class="vfSplit" data-cid="${cid}" value="${v.billingByChannel?.[cid] ?? 0}"></div>`).join('')}</div>
+        <div class="vfSum" style="font-size:12px; margin:4px 0;"></div>
+        <button class="btn amber vfSaveSplit" style="padding:5px 12px; font-size:12px;">儲存拆賬</button>` : '<div style="font-size:12px; color:var(--ink-soft);">這個版本沒有可拆的通路。</div>'}
+      </div>`;
+      // 日期：選了新日期就即時顯示影響
+      const dateEl = box.querySelector('.vfDate');
+      if(dateEl){
+        let seq = 0;
+        dateEl.onchange = async ()=>{
+          const my = ++seq, nd = dateEl.value, out = box.querySelector('.vfDateImpact');
+          if(!nd || nd===v.start){ out.textContent = '改日期時，上一個版本的結束日會自動跟著調整。'; return; }
+          out.textContent = '計算影響…';
+          try{
+            const im = await versionDateImpact(route, v, nd);
+            if(my!==seq || !im.range) return;
+            out.innerHTML = `${im.range[0]}${im.range[0]===im.range[1]?'':'～'+im.range[1]} 這段會改用「${im.dst.start} 起」的版本（原本是「${im.src.start} 起」），這段有 <b>${im.dates.length}</b> 趟已完成的任務，請款金額約 ${im.delta>=0?'增加':'減少'} <b>$${money(Math.abs(im.delta))}</b>（夥伴薪資不變）。`;
+          }catch(e){ out.textContent = e.message; }
+        };
+        box.querySelector('.vfSaveDate').onclick = async ()=>{
+          const nd = dateEl.value;
+          try{
+            const im = await versionDateImpact(route, v, nd);
+            const msg = im.range ? `把這個版本的開始日從 ${v.start} 改成 ${nd}？\n\n${im.range[0]}${im.range[0]===im.range[1]?'':'～'+im.range[1]} 這段會改用「${im.dst.start} 起」的版本，有 ${im.dates.length} 趟已完成的任務，請款金額約${im.delta>=0?'增加':'減少'} $${money(Math.abs(im.delta))}。\n夥伴薪資不變；上一個版本的結束日會自動調整。` : '確定要改嗎？';
+            if(!confirm(msg)) return;
+            await updateVersionStart(route.id, v.id, nd);
+            toast('已更新版本開始日，請款結算會自動重算。', { type:'ok' });
+            renderContent();
+          }catch(e){ toast(e.message, { type:'error' }); }
+        };
+      }
+      // 拆賬
+      const sumEl = box.querySelector('.vfSum');
+      const upd = ()=>{ if(!sumEl) return; const tot = [...box.querySelectorAll('.vfSplit')].reduce((sum,i)=>sum+(Number(i.value)||0),0); const old = Number(v.billingTotal)||0; sumEl.innerHTML = `請款總額 <b>$${money(tot)}</b>（原本 $${money(old)}${tot!==old?`，${tot>old?'增加':'減少'} $${money(Math.abs(tot-old))}／趟`:''}）`; };
+      box.querySelectorAll('.vfSplit').forEach(i=> i.oninput = upd); upd();
+      const saveSplit = box.querySelector('.vfSaveSplit');
+      if(saveSplit) saveSplit.onclick = async ()=>{
+        const map = {}; box.querySelectorAll('.vfSplit').forEach(i=>{ map[i.dataset.cid] = i.value===''?0:i.value; });
+        try{
+          const nTrips = (await completedTripDatesInRange(route.id, v.start, v.end || '9999-12-31')).length;
+          const tot = Object.values(map).reduce((sum,n)=>sum+(Number(n)||0),0), old = Number(v.billingTotal)||0;
+          if(!confirm(`修正「${v.start} 起」這個版本的拆賬？\n\n請款總額 $${money(old)} → $${money(tot)}（每趟${tot>=old?'增加':'減少'} $${money(Math.abs(tot-old))}）。\n這個版本期間有 ${nTrips} 趟已完成的任務，請款合計約${tot>=old?'增加':'減少'} $${money(Math.abs(tot-old)*nTrips)}。\n夥伴薪資不變；請款結算與首頁利潤會自動重算。\n\n如果這段期間的請款單已經開給客戶，建議改用請款結算的「調整項」補差額。`)) return;
+          await updateVersionSplit(route.id, v.id, map);
+          toast('已更新拆賬金額，請款結算會自動重算。', { type:'ok' });
+          renderContent();
+        }catch(e){ toast(e.message, { type:'error' }); }
+      };
+    };
+  });
+}
 function renderRouteDetail(rid){
   const detailEl = expandedRouteBox;
   if(!detailEl) return;
@@ -2882,6 +2950,8 @@ function renderRouteDetail(rid){
         ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
         <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
         ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
+        <button class="btn ghost" data-verfix="${v.id}" style="margin-top:8px; padding:4px 12px; font-size:12px;">修正這個版本的日期／拆賬…</button>
+        <div data-verfixbox="${v.id}"></div>
       </div>`;
   const draft = ensureDraft(r);
   detailEl.innerHTML = `
@@ -2945,11 +3015,13 @@ function renderRouteDetail(rid){
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
   `;
+  bindVersionFix(detailEl, r);
   const verHistorySelect = document.getElementById('verHistorySelect');
   if(verHistorySelect){
     verHistorySelect.onchange = ()=>{
       const v = closedVersions.find(x=>x.id===verHistorySelect.value);
       document.getElementById('verHistoryDetail').innerHTML = v ? renderVer(v) : '';
+      bindVersionFix(document.getElementById('verHistoryDetail'), r);
     };
   }
   function renderDpSearchResults(){
