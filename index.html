@@ -190,6 +190,14 @@
   .drop-point-driver.flash{ animation:dvflash 1.2s ease-out; }
   @keyframes dvflash{ 0%{ background:#C9E6D2; transform:scale(1.02);} 100%{ background:transparent; transform:none;} }
   .dv-done{ text-align:center; border:2px solid #2C6B44; background:var(--tint-ok); border-radius:12px; padding:22px 14px; margin-bottom:14px; }
+  .dv-done.anim{ animation:dvpop .6s cubic-bezier(.2,1.4,.4,1); }
+  .dv-done.anim .big{ display:inline-block; animation:dvbounce 1s ease-out .2s 2; }
+  @keyframes dvpop{ 0%{ transform:scale(.6); opacity:0; } 100%{ transform:scale(1); opacity:1; } }
+  @keyframes dvbounce{ 0%,100%{ transform:translateY(0) rotate(0); } 30%{ transform:translateY(-18px) rotate(-12deg); } 60%{ transform:translateY(0) rotate(8deg); } }
+  #confettiHost{ position:fixed; inset:0; pointer-events:none; z-index:260; overflow:hidden; }
+  #confettiHost i{ position:absolute; top:-14px; width:9px; height:14px; border-radius:2px; opacity:.95; animation:confall linear forwards; }
+  @keyframes confall{ to{ transform:translate(var(--dx), 108vh) rotate(var(--rot)); } }
+  @media (prefers-reduced-motion: reduce){ .dv-done.anim, .dv-done.anim .big{ animation:none; } }
   .dv-done .big{ font-size:40px; } .dv-done h3{ margin:6px 0 4px; } .dv-done .amt{ font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:700; color:#2C6B44; }
   /* 週期任務清單（手機）：瀏覽／排班模式切換；排班模式點格子直接選夥伴 */
   .m-modebar{ display:flex; background:var(--chip); border-radius:99px; padding:3px; margin-bottom:10px; }
@@ -5766,6 +5774,34 @@ function openWeekTripPreview(assignmentId){
 }
 // 夥伴自己的店點：交給支援夥伴的店點不再出現在原夥伴的畫面（任務明細、導航、LINE 提醒、完成判斷都不含）。
 function ownDropPoints(a){ return (a.dropPoints||[]).filter(dp=>!dp.helperId); }
+// 今天全部完成的慶祝動畫：彩帶＋卡片彈出＋金額數字跳動，每位夥伴每天只播一次；之後同一天再進來就維持靜態完成畫面，隔天（午夜 12 點後）自動換新的一天。
+function playCelebration(card, earn){
+  if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){ const a = card.querySelector('.amt'); if(a) a.textContent = '今日報酬 $'+money(earn); return; }
+  const host = document.createElement('div'); host.id = 'confettiHost';
+  const colors = ['#E0902E','#2C6B44','#2C5F8A','#B5493A','#D4AF37','#7B5EA7'];
+  for(let i=0;i<70;i++){
+    const c = document.createElement('i');
+    c.style.left = Math.random()*100 + 'vw';
+    c.style.background = colors[i%colors.length];
+    c.style.setProperty('--dx', (Math.random()*160-80) + 'px');
+    c.style.setProperty('--rot', (Math.random()*900-450) + 'deg');
+    c.style.animationDuration = (2.2 + Math.random()*1.8) + 's';
+    c.style.animationDelay = (Math.random()*0.8) + 's';
+    host.appendChild(c);
+  }
+  document.body.appendChild(host);
+  setTimeout(()=>host.remove(), 5200);
+  const amt = card.querySelector('.amt');
+  if(amt){
+    const t0 = performance.now(), dur = 1300;
+    const step = now=>{
+      const k = Math.min(1, (now - t0)/dur), eased = 1 - Math.pow(1-k, 3);
+      amt.textContent = '今日報酬 $' + money(Math.round(earn*eased));
+      if(k<1 && amt.isConnected) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+}
 function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
   // 「交給我支援」的店點（資料庫只讓我看到被交給我的那幾個）：另外一張卡片，沒有開始／完成按鈕、不顯示報酬。
@@ -5775,7 +5811,21 @@ function renderTodayDetail(todays){
     const doneToday = state.data.assignments.filter(a=>a.driverId===state.activeDriverId && !a.isSupport && a.published!==false && a.date===todayStr() && a.status==='completed');
     if(doneToday.length){
       const earn = doneToday.reduce((n,a)=>n+tripPay(a),0);
-      box.innerHTML = `<div class="dv-done"><div class="big">🎉</div><h3>今天的任務全部完成了</h3><div style="font-size:13px; color:var(--ink-soft);">共 ${doneToday.length} 趟，辛苦了！</div><div class="amt">今日報酬 $${money(earn)}</div></div>`;
+      // 只有夥伴本人（不是主控檢視）、而且今天第一次看到完成畫面才播動畫
+      const own = state.role==='driver' && !state.adminViewDriver;
+      const key = `celebrated|${state.activeDriverId}|${todayStr()}`;
+      let first = false;
+      if(own){
+        try{
+          first = !localStorage.getItem(key);
+          if(first){
+            Object.keys(localStorage).filter(k=>k.startsWith('celebrated|') && k!==key).forEach(k=>localStorage.removeItem(k));
+            localStorage.setItem(key, '1');
+          }
+        }catch(e){}
+      }
+      box.innerHTML = `<div class="dv-done ${first?'anim':''}"><div class="big">🎉</div><h3>今天的任務全部完成了</h3><div style="font-size:13px; color:var(--ink-soft);">共 ${doneToday.length} 趟，辛苦了！</div><div class="amt">今日報酬 $${first?'0':money(earn)}</div></div>`;
+      if(first) playCelebration(box.querySelector('.dv-done'), earn);
     } else box.innerHTML = '<div class="empty">今天沒有排定任務</div>';
     return;
   }
@@ -6777,6 +6827,14 @@ function tryLiveRender(){
   try{ renderNav(); renderContent(); }catch(e){ console.error('即時更新畫面失敗', e); }
 }
 setInterval(()=>{ if(livePendingTabs && !liveRenderBlocked()) tryLiveRender(); }, 2500);
+// 過了午夜 12 點：畫面開著沒關的話，自動換成新的一天（完成畫面、今日任務、今日總覽都重新算）。
+(function scheduleMidnightRefresh(){
+  const now = new Date(), next = new Date(now); next.setHours(24, 0, 5, 0);
+  setTimeout(()=>{ try{ if(state.data) tryLiveRender(); }catch(e){} scheduleMidnightRefresh(); }, next - now);
+  // 手機把網頁放背景、計時器被暫停的情況：回到前景時如果日期已經變了，也立刻換成新的一天
+  let day = todayStr();
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && todayStr()!==day){ day = todayStr(); try{ if(state.data) tryLiveRender(); }catch(e){} } });
+})();
 
 async function refreshHomeDataIfIdle(){
   if(!state.data || state.tab!=='home' || document.hidden) return;
