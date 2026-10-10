@@ -3327,6 +3327,7 @@ async function renderScheduleAdmin(c){
           ${WEEKDAY_ZH.map((l,i)=>`<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="wdcheck" value="${i}" checked style="width:auto;">${l}</label>`).join('')}
         </div>
       </div>
+      <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:2px 0 10px; color:var(--ink);"><input type="checkbox" id="sOverwrite" style="width:auto;"> 覆蓋已排的：這段期間如果那個車次已經排了別人，直接換成這位夥伴（只換還沒出發的；已出發、已完成的不動）</label>
       <button class="btn amber" id="addAssign">批次建立指派</button>
     </div>
     <div class="sched-top">
@@ -3339,7 +3340,6 @@ async function renderScheduleAdmin(c){
       <div style="display:flex; gap:8px;">
         <select id="originFilter" style="max-width:200px;">${originFilterOpts}</select>
         <button class="btn ghost m-only" id="mBatchBtn">批次建立</button>
-        <button class="btn ghost" id="swapWeekBtn" title="把某位夥伴這段期間所有還沒出發的任務，一次換成另一位">整週換人</button>
         <button class="btn ${bulkOn()?'amber':'ghost'}" id="bulkToggle">${bulkOn()?'結束批量修改':'批量修改'}</button>
         <button class="btn ghost" id="printWeek">另存PDF（本週）</button>
       </div>
@@ -3379,7 +3379,6 @@ async function renderScheduleAdmin(c){
   `;
   document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
-  document.getElementById('swapWeekBtn').onclick = ()=> openSwapWeekModal(week1);
   document.getElementById('bulkToggle').onclick = ()=>{ state._bulk = bulkOn() ? null : { on:true, sel:new Set() }; renderContent(); };
   document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); renderMobileSchedule(week1); if(bulkOn()) renderBulkBar(week1); };
   document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週期任務清單_${week1[0]}_${week1[6]}`);
@@ -3412,31 +3411,38 @@ async function renderScheduleAdmin(c){
     const driverId = document.getElementById('sDriver').value;
     const start = document.getElementById('sStart').value;
     const end = document.getElementById('sEnd').value || start;
+    const overwrite = document.getElementById('sOverwrite').checked;
     const weekdays = Array.from(document.querySelectorAll('.wdcheck:checked')).map(cb=>Number(cb.value));
     if(!routeId || !driverId || !start){ alert('請選擇路線、夥伴與日期'); return; }
     const route = state.data.routes.find(r=>r.id===routeId);
-    let created=0, skippedNoVersion=0, skippedExisting=0;
-    let cursor = start;
-    try{
-      while(cursor <= end){
-        const jsWeekday = new Date(cursor+'T00:00:00').getDay();
-        const isoWeekday = jsWeekday===0 ? 6 : jsWeekday-1;
-        if(weekdays.includes(isoWeekday)){
-          const already = state.data.assignments.some(a=>a.date===cursor && a.routeId===routeId);
-          if(already){ skippedExisting++; }
-          else {
-            const version = getActiveVersion(route, cursor);
-            if(!version){ skippedNoVersion++; }
-            else {
-              await createAssignment({ date:cursor, routeId, driverId });
-              created++;
-            }
-          }
-        }
-        cursor = ymd(addDays(cursor,1));
+    try{ await ensureAssignmentsRange(start); }catch(e){ alert(e.message); return; }
+    // 先算出要做什麼：沒排的日期新建；已經排了的，勾「覆蓋」就換成這位夥伴（只換還沒出發的），沒勾就略過。
+    const toCreate = [], toReassign = [];
+    let skippedNoVersion=0, skippedExisting=0, skippedLocked=0, alreadySame=0;
+    for(let cursor = start; cursor <= end; cursor = ymd(addDays(cursor,1))){
+      const jsWeekday = new Date(cursor+'T00:00:00').getDay();
+      const isoWeekday = jsWeekday===0 ? 6 : jsWeekday-1;
+      if(!weekdays.includes(isoWeekday)) continue;
+      const existing = state.data.assignments.filter(a=>a.date===cursor && a.routeId===routeId && a.status!=='cancelled' && !a.isSupport);
+      if(existing.length){
+        if(!overwrite){ skippedExisting++; continue; }
+        existing.forEach(a=>{
+          if(a.status!=='scheduled') skippedLocked++;
+          else if(a.driverId===driverId) alreadySame++;
+          else toReassign.push(a);
+        });
+        continue;
       }
+      if(!getActiveVersion(route, cursor)){ skippedNoVersion++; continue; }
+      toCreate.push(cursor);
+    }
+    if(toReassign.length && !confirm(`這段期間有 ${toReassign.length} 趟已經排好的任務（${[...new Set(toReassign.map(a=>driverName(a.driverId)))].join('、')}），會被覆蓋成「${driverName(driverId)}」。\n已出發、已完成的不會動。確定要覆蓋嗎？`)) return;
+    let created=0, replaced=0;
+    try{
+      if(toReassign.length){ await reassignAssignmentsBulk(toReassign.map(a=>a.id), driverId); replaced = toReassign.length; }
+      for(const d of toCreate){ await createAssignment({ date:d, routeId, driverId }); created++; }
     }catch(err){ alert(err.message); }
-    alert(`已建立 ${created} 筆任務。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過。`:''}`);
+    alert(`已建立 ${created} 筆任務${overwrite?`、覆蓋 ${replaced} 筆`:''}。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過（要換掉的話，勾選「覆蓋已排的」）。`:''}${alreadySame? `\n${alreadySame} 天本來就是這位夥伴，不變。`:''}${skippedLocked? `\n${skippedLocked} 趟已出發／已完成，不能覆蓋。`:''}`);
     renderContent();
   };
   renderWeekGrid('gridWeek1', week1);
@@ -3682,68 +3688,6 @@ function renderMobileSchedule(week){
   document.getElementById('mCopyLastWeek').onclick = ()=> copyDayAssignments(ymd(addDays(day,-7)), day);
   const mb = document.getElementById('mBatchBtn');
   if(mb) mb.onclick = ()=>{ const bp = document.getElementById('batchPanel'); bp.classList.toggle('open'); if(bp.classList.contains('open')) bp.scrollIntoView({behavior:'smooth', block:'start'}); };
-}
-// ---------- 整週換人：把 A 這段期間「還沒出發」的任務，一次全部換成 B ----------
-// 可以選任何日期區間（本週、下週、或自己挑）、也可以只換某個任務起點；已出發／已完成的自動略過。
-async function openSwapWeekModal(week){
-  document.getElementById('swapModal')?.remove();
-  const wrap = document.createElement('div');
-  wrap.id = 'swapModal'; wrap.className = 'modal-backdrop';
-  const activeDrivers = state.data.drivers.filter(d=>d.status==='active');
-  const driverOpts = (ph)=> `<option value="">${ph}</option>` + state.data.drivers.slice().sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant')).map(d=>`<option value="${d.id}">${escapeHtml(d.name)}${d.status==='active'?'':'（已停用）'}</option>`).join('');
-  const nextWeek = getWeekDates(state.weekOffset+1), thisWeek = getWeekDates(state.weekOffset);
-  wrap.innerHTML = `<div class="modal-box" style="max-width:460px;">
-    <div class="toolbar"><h3 style="margin:0;">整週換人</h3><button class="btn ghost" id="swClose" style="padding:4px 12px;">關閉 ✕</button></div>
-    <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 10px;">把「原夥伴」在這段期間<b>還沒出發</b>的任務，一次全部換成「新夥伴」。已出發、已完成的不會動。</p>
-    <div class="field"><label>原夥伴</label><select id="swFrom">${driverOpts('選擇原夥伴')}</select></div>
-    <div class="field"><label>換成</label><select id="swTo">${driverOpts('選擇新夥伴').replace(/<option value="[^"]+">[^<]*（已停用）<\/option>/g,'')}</select></div>
-    <div class="field"><label>日期區間</label>
-      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;"><input id="swStart" type="date" value="${thisWeek[0]}" style="width:auto;"><span>～</span><input id="swEnd" type="date" value="${thisWeek[6]}" style="width:auto;">
-        <button class="btn ghost" id="swThis" style="padding:4px 10px; font-size:12px;">這週</button><button class="btn ghost" id="swNext" style="padding:4px 10px; font-size:12px;">下週</button></div></div>
-    <div class="field"><label>範圍</label><select id="swOrigin"><option value="">全部任務起點</option>${state.data.origins.map(og=>`<option value="${escapeHtml(og.address)}">${escapeHtml(og.label||og.address)}</option>`).join('')}</select></div>
-    <div id="swPreview" class="note" style="margin:8px 0;">請先選擇原夥伴與新夥伴。</div>
-    <button class="btn amber" id="swGo" disabled style="width:100%;">確認換人</button>
-  </div>`;
-  document.body.appendChild(wrap);
-  const $ = id=> wrap.querySelector('#'+id);
-  const close = ()=> wrap.remove();
-  $('swClose').onclick = close;
-  wrap.onclick = e=>{ if(e.target===wrap) close(); };
-  enhanceDriverSelect($('swFrom'), {}); enhanceDriverSelect($('swTo'), {});
-  $('swThis').onclick = ()=>{ $('swStart').value = thisWeek[0]; $('swEnd').value = thisWeek[6]; refresh(); };
-  $('swNext').onclick = ()=>{ $('swStart').value = nextWeek[0]; $('swEnd').value = nextWeek[6]; refresh(); };
-  let plan = null;
-  async function refresh(){
-    const from = $('swFrom').value, to = $('swTo').value, start = $('swStart').value, end = $('swEnd').value, origin = $('swOrigin').value;
-    plan = null; $('swGo').disabled = true;
-    if(!from || !to){ $('swPreview').textContent = '請先選擇原夥伴與新夥伴。'; return; }
-    if(from===to){ $('swPreview').textContent = '原夥伴和新夥伴是同一位。'; return; }
-    if(!start || !end || end<start){ $('swPreview').textContent = '請選擇正確的日期區間。'; return; }
-    try{ await ensureAssignmentsRange(start); }catch(e){ $('swPreview').textContent = e.message; return; }
-    const routeOrigin = id=> (state.data.routes.find(r=>r.id===id)||{}).originAddr;
-    const mine = state.data.assignments.filter(a=> a.driverId===from && !a.isSupport && a.status!=='cancelled' && a.date>=start && a.date<=end && (!origin || routeOrigin(a.routeId)===origin));
-    const todo = mine.filter(a=>a.status==='scheduled'), locked = mine.filter(a=>a.status!=='scheduled');
-    const shiftOf = a=>{ const r = state.data.routes.find(x=>x.id===a.routeId); return r ? r.shift : ''; };
-    const taken = new Set(state.data.assignments.filter(a=>a.driverId===to && a.status!=='cancelled' && a.date>=start && a.date<=end).map(a=>a.date+'|'+shiftOf(a)));
-    const clash = todo.filter(a=>taken.has(a.date+'|'+shiftOf(a))).length;
-    const drafts = todo.filter(a=>a.published===false).length;
-    plan = { ids: todo.map(a=>a.id), from, to };
-    if(!todo.length){ $('swPreview').innerHTML = `${escapeHtml(driverName(from))} 在 ${start}～${end} 沒有還沒出發的任務可以換${locked.length?`（有 ${locked.length} 趟已出發／已完成，不能換）`:''}。`; return; }
-    $('swPreview').innerHTML = `將把 <b>${escapeHtml(driverName(from))}</b> 的 <b>${todo.length}</b> 趟任務換成 <b>${escapeHtml(driverName(to))}</b>（${start}～${end}）。`
-      + (drafts ? `<br>其中 ${drafts} 趟是草稿（夥伴還看不到）。` : '')
-      + (locked.length ? `<br>另有 ${locked.length} 趟已出發／已完成，不會動。` : '')
-      + (clash ? `<br><span style="color:var(--danger);">⚠️ 有 ${clash} 趟會讓「${escapeHtml(driverName(to))}」同一天同一班次有 2 趟以上，請確認。</span>` : '');
-    $('swGo').disabled = false;
-  }
-  ['swFrom','swTo'].forEach(id=> $(id).addEventListener('change', refresh));
-  ['swStart','swEnd','swOrigin'].forEach(id=> $(id).addEventListener('change', refresh));
-  $('swGo').onclick = async ()=>{
-    if(!plan || !plan.ids.length) return;
-    if(!confirm(`確定要把 ${driverName(plan.from)} 的 ${plan.ids.length} 趟任務換成 ${driverName(plan.to)} 嗎？`)) return;
-    $('swGo').disabled = true;
-    try{ await reassignAssignmentsBulk(plan.ids, plan.to); toast(`已把 ${plan.ids.length} 趟任務換成「${driverName(plan.to)}」。`, { type:'ok' }); close(); renderContent(); }
-    catch(err){ toast(err.message, { type:'error' }); $('swGo').disabled = false; }
-  };
 }
 // ---------- 批量修改（週期任務清單）----------
 // 開啟後，點格子不再開明細，而是「選取」：已排任務和空格都能選。選好之後一次：
