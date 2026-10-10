@@ -191,6 +191,24 @@
   @keyframes dvflash{ 0%{ background:#C9E6D2; transform:scale(1.02);} 100%{ background:transparent; transform:none;} }
   .dv-done{ text-align:center; border:2px solid #2C6B44; background:var(--tint-ok); border-radius:12px; padding:22px 14px; margin-bottom:14px; }
   .dv-done .big{ font-size:40px; } .dv-done h3{ margin:6px 0 4px; } .dv-done .amt{ font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:700; color:#2C6B44; }
+  /* 週期任務清單（手機）：瀏覽／排班模式切換；排班模式點格子直接選夥伴 */
+  .m-modebar{ display:flex; background:var(--chip); border-radius:99px; padding:3px; margin-bottom:10px; }
+  .m-modebar button{ flex:1; border:none; background:none; padding:9px 6px; border-radius:99px; font-family:inherit; font-size:14px; font-weight:600; color:var(--ink-soft); cursor:pointer; }
+  .m-modebar button.on{ background:var(--amber); color:#1B2129; box-shadow:0 1px 4px rgba(27,33,41,.25); }
+  .m-editbanner{ background:var(--tint-warn); border:1px solid var(--amber); border-radius:8px; padding:8px 12px; font-size:12.5px; margin-bottom:10px; }
+  .m-slot.edit .go{ color:var(--teal); font-weight:700; }
+  .m-slot.pulse{ animation:slotpulse 1.4s ease-out 2; }
+  @keyframes slotpulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(224,144,46,0); } 50%{ box-shadow:0 0 0 4px rgba(224,144,46,.7); } }
+  .pp-head{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px; }
+  .pp-cur{ font-size:12.5px; color:var(--ink-soft); margin-bottom:8px; }
+  .pp-list{ max-height:46vh; overflow:auto; margin:8px 0; border:1px solid var(--border); border-radius:8px; background:var(--panel); }
+  .pp-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:13px 12px; min-height:48px; border-top:1px solid var(--border); font-size:15px; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .pp-row:first-child{ border-top:none; } .pp-row:active{ background:var(--bg-hover); transform:scale(.99); }
+  .pp-row.cur{ background:var(--tint-ok); }
+  .pp-row .pp-n{ font-weight:700; flex:1; min-width:80px; }
+  .pp-tag{ font-size:11px; padding:1px 8px; border-radius:99px; background:var(--chip); color:var(--ink-soft); }
+  .pp-tag.busy{ background:var(--tint-warn); color:#8A5A17; } .pp-tag.freq{ background:var(--tint-info); color:#3F6E6C; } .pp-tag.now{ background:#2C6B44; color:#fff; }
+  .pp-row.saving{ opacity:.5; pointer-events:none; }
   .fold{ padding:0; cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out, background-color .1s ease-out; }
   .fold-head{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; border-radius:var(--radius); }
   .fold-title{ font-weight:700; font-size:15px; }
@@ -3318,6 +3336,82 @@ async function copyDayAssignments(sourceDate, targetDate){
   alert(`已複製 ${ok} 個任務${fail?`，${fail} 個失敗`:''}。`);
   renderContent();
 }
+// ---------- 排班模式（手機）：點格子 → 直接選夥伴，兩下搞定 ----------
+function getSchedMode(){
+  if(!state._schedMode){ let m = 'browse'; try{ m = localStorage.getItem('schedMode')==='edit' ? 'edit' : 'browse'; }catch(e){} state._schedMode = m; }
+  return state._schedMode;
+}
+function setSchedMode(m){ state._schedMode = m; try{ localStorage.setItem('schedMode', m); }catch(e){} renderContent(); }
+// 排好一格之後，自動捲到下一個還沒排的空格並閃一下，連續排班不用自己找。
+function advanceToNextEmpty(){
+  setTimeout(()=>{
+    const host = document.getElementById('mSchedule'); if(!host) return;
+    const el = host.querySelector('.m-slot.empty');
+    if(el){ el.scrollIntoView({ behavior:'smooth', block:'center' }); el.classList.add('pulse'); }
+  }, 250);
+}
+async function openPartnerPicker({ assignment, routeId, date }){
+  const sheet = document.getElementById('assignDetail'), backdrop = document.getElementById('mSheetBackdrop');
+  const a = assignment || null;
+  const rid = a ? a.routeId : routeId, dt = a ? a.date : date;
+  const route = state.data.routes.find(r=>r.id===rid);
+  if(!route) return;
+  if(!a && !getActiveVersion(route, dt)){ toast(`這條路線在 ${dt} 還沒有生效的店點版本，請先到「路線管理」建立版本再排班。`, { type:'error' }); return; }
+  const close = ()=>{ sheet.innerHTML = ''; backdrop.classList.remove('show'); };
+  let freq = new Map();
+  try{ freq = (await loadDriverOriginStats()).get(route.originAddr) || new Map(); }catch(e){}
+  const busy = new Map();
+  state.data.assignments.forEach(x=>{ if(x.date===dt && x.status!=='cancelled' && !x.isSupport && (!a || x.id!==a.id)) busy.set(x.driverId, (busy.get(x.driverId)||0)+1); });
+  const drivers = state.data.drivers.filter(d=>d.status==='active').slice()
+    .sort((x,y)=> (a&&x.id===a.driverId?-1:0)-(a&&y.id===a.driverId?-1:0) || (freq.get(y.id)||0)-(freq.get(x.id)||0) || x.name.localeCompare(y.name,'zh-Hant'));
+  const dow = '日一二三四五六'[new Date(dt+'T00:00:00').getDay()];
+  const rowHtml = d=>{
+    const f = freq.get(d.id)||0, b = busy.get(d.id)||0;
+    return `<div class="pp-row ${a&&a.driverId===d.id?'cur':''}" data-pp="${d.id}" data-name="${escapeHtml(d.name)}"><span class="pp-n">${escapeHtml(d.name)}</span>${a&&a.driverId===d.id?'<span class="pp-tag now">目前</span>':''}${f>=2?`<span class="pp-tag freq">常跑 ${f} 趟</span>`:''}${b?`<span class="pp-tag busy">當天已排 ${b} 趟</span>`:''}</div>`;
+  };
+  sheet.innerHTML = `
+    <div class="pp-head"><b style="font-size:15px;">${dt.slice(5).replace('-','/')}（${dow}）${escapeHtml(routeDisplayName(route.name))}</b><button class="btn ghost" id="ppClose" style="padding:4px 12px;">關閉 ✕</button></div>
+    <div class="pp-cur">${a ? `目前是「${escapeHtml(driverName(a.driverId))}」，點下面的夥伴直接換人` : '點下面的夥伴就直接排進去'}（常跑這個任務起點的排前面）</div>
+    <input id="ppSearch" placeholder="搜尋夥伴姓名" autocomplete="off">
+    <div class="pp-list" id="ppList">${drivers.map(rowHtml).join('') || '<div class="empty">沒有在職的夥伴</div>'}</div>
+    ${a ? `<div style="display:flex; gap:8px;"><button class="btn ghost" id="ppDetail" style="flex:1;">看詳細／例外調整</button><button class="btn danger" id="ppRemove" style="flex:1;">移除這趟</button></div>` : ''}`;
+  backdrop.classList.add('show');
+  document.getElementById('ppClose').onclick = close;
+  const search = document.getElementById('ppSearch');
+  const filter = ()=>{ const q = search.value.trim().toLowerCase(); document.querySelectorAll('#ppList .pp-row').forEach(r=>{ r.style.display = !q || r.dataset.name.toLowerCase().includes(q) ? '' : 'none'; }); };
+  let composing = false;
+  search.addEventListener('compositionstart', ()=>{ composing = true; });
+  search.addEventListener('compositionend', ()=>{ composing = false; filter(); });
+  search.addEventListener('input', ()=>{ if(!composing) filter(); });
+  document.querySelectorAll('#ppList .pp-row').forEach(row=>{
+    row.onclick = async ()=>{
+      const driverId = row.dataset.pp;
+      if(a && a.driverId===driverId){ close(); return; }
+      row.classList.add('saving');
+      try{
+        if(a) await reassignAssignmentDriver(a.id, driverId);
+        else await createAssignment({ date:dt, routeId:rid, driverId });
+        toast(`${a?'已換成':'已排'}「${driverName(driverId)}」：${dt.slice(5).replace('-','/')} ${routeDisplayName(route.name)}`, { type:'ok' });
+        close();
+        renderContent();
+        if(!a) advanceToNextEmpty();
+      }catch(err){ row.classList.remove('saving'); toast(err.message, { type:'error' }); }
+    };
+  });
+  const rm = document.getElementById('ppRemove');
+  if(rm) rm.onclick = async ()=>{
+    if(!confirm(`確定要移除 ${dt.slice(5).replace('-','/')} ${routeDisplayName(route.name)}（${driverName(a.driverId)}）這趟嗎？無法復原。`)) return;
+    try{ await deleteAssignment(a.id); close(); renderContent(); }catch(err){ toast(err.message, { type:'error' }); }
+  };
+  const dtl = document.getElementById('ppDetail');
+  if(dtl) dtl.onclick = ()=>{
+    sheet.innerHTML = '';
+    renderAssignmentDetail(a.id, sheet);
+    sheet.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
+    document.getElementById('mSheetClose').onclick = close;
+  };
+  if(!a) setTimeout(()=>{ try{ search.focus({preventScroll:true}); }catch(e){} }, 50);
+}
 function renderMobileSchedule(week){
   const host = document.getElementById('mSchedule');
   if(!host) return;
@@ -3333,13 +3427,14 @@ function renderMobileSchedule(week){
     return `<div class="m-day ${d===day?'sel':''} ${d===today?'today':''} ${lack?'lack':''}" data-mday="${d}"><small>${DOW[i]}</small><b>${d.slice(8)}</b><small>${filled}/${slots.length}</small></div>`;
   }).join('');
   const origins = mobileSlotsFor(day, originFilter);
+  const editMode = getSchedMode()==='edit';
   const slotHtml = sl=>{
     const sh = sl.shift==='AM' ? '上午' : '下午';
-    if(!sl.items.length) return `<div class="m-slot empty" data-mquick="${sl.route.id}|${day}"><span class="sh">${sh}</span><span class="nm">（未排）</span><span class="go">＋ 指派</span></div>`;
+    if(!sl.items.length) return `<div class="m-slot empty ${editMode?'edit':''}" data-mquick="${sl.route.id}|${day}"><span class="sh">${sh}</span><span class="nm">（未排）</span><span class="go">${editMode?'選夥伴 ›':'＋ 指派'}</span></div>`;
     return sl.items.map(a=>{
       const issue = (a.hasIssue || (a.dropPoints||[]).some(dp=>dp.status!=='completed')) ? ' ⚠️' : '';
       const icons = (a.status==='completed'?'🔒':a.status==='in_progress'?'▶':'') + issue + (a.published===false?' 📝草稿':'') + ((Number(a.extraPay)||0)?` ${a.extraPay>0?'+':'−'}${money(Math.abs(a.extraPay))}`:'') + ((Number(a.paidAmount)||0)>0?' ✅':'');
-      return `<div class="m-slot ${a.published===false?'draft':''} ${taskStateClass(a)}" data-mview="${a.id}"><span class="sh">${sh}</span><span class="nm">${escapeHtml(driverName(a.driverId))}</span><span class="ic">${icons}</span><span class="go">›</span></div>`;
+      return `<div class="m-slot ${a.published===false?'draft':''} ${taskStateClass(a)} ${editMode&&a.status==='scheduled'?'edit':''}" data-mview="${a.id}"><span class="sh">${sh}</span><span class="nm">${escapeHtml(driverName(a.driverId))}</span><span class="ic">${icons}</span><span class="go">›</span></div>`;
     }).join('');
   };
   const prevOpen = state._mOpenOrigins;
@@ -3349,7 +3444,10 @@ function renderMobileSchedule(week){
       ${o.routes.map(r=>`<div class="m-route"><div class="m-route-title">${escapeHtml(seqToR(r.baseSeq))}</div>${r.slots.map(slotHtml).join('')}</div>`).join('')}
     </details>`;
   }).join('') : '<div class="empty">這天沒有可排的路線</div>';
+  const weekEmpty = editMode ? bulkWeekInfo().empties.length : 0;
   host.innerHTML = `
+    <div class="m-modebar no-print"><button data-smode="browse" class="${editMode?'':'on'}">👀 瀏覽</button><button data-smode="edit" class="${editMode?'on':''}">✏️ 排班</button></div>
+    ${editMode ? `<div class="m-editbanner no-print">排班模式：點<b>空格</b>直接選夥伴、點<b>已排的格子</b>換人；排完會自動跳到下一個空格。本週還有 <b>${weekEmpty}</b> 個空格沒排。</div>` : ''}
     <div class="m-strip">${strip}</div>
     <div class="m-actions no-print">
       <button class="btn ghost" id="mCopyYesterday">複製昨天</button>
@@ -3357,6 +3455,7 @@ function renderMobileSchedule(week){
     </div>
     <h3 style="margin:0 0 8px;">${day.slice(5).replace('-','/')}（星期${DOW[week.indexOf(day)]}）${day===today?'・今天':''}</h3>
     ${body}`;
+  host.querySelectorAll('[data-smode]').forEach(b=>{ b.onclick = ()=>{ if(b.dataset.smode!==getSchedMode()) setSchedMode(b.dataset.smode); }; });
   host.querySelectorAll('[data-mday]').forEach(el=>{ el.onclick = ()=>{ state._mDay = el.dataset.mday; renderMobileSchedule(week); }; });
   host.querySelectorAll('[data-morigin]').forEach(el=>{
     el.addEventListener('toggle', ()=>{ state._mOpenOrigins = [...host.querySelectorAll('[data-morigin]')].filter(d=>d.open).map(d=>d.dataset.morigin); });
@@ -3370,6 +3469,10 @@ function renderMobileSchedule(week){
   host.querySelectorAll('[data-mview]').forEach(el=>{
     el.onclick = ()=>{
       if(bulkOn()){ bulkClick([el]); return; }
+      if(editMode){
+        const ax = state.data.assignments.find(x=>x.id===el.dataset.mview);
+        if(ax && ax.status==='scheduled'){ openPartnerPicker({ assignment: ax }); return; }
+      }
       sheet.innerHTML = '';
       backdrop.classList.add('show');
       renderAssignmentDetail(el.dataset.mview, sheet);
@@ -3381,6 +3484,7 @@ function renderMobileSchedule(week){
     el.onclick = ()=>{
       if(bulkOn()){ bulkClick([el]); return; }
       const [routeId, date] = el.dataset.mquick.split('|');
+      if(editMode){ openPartnerPicker({ routeId, date }); return; }
       backdrop.classList.add('show');
       renderQuickCreate(routeId, date);
       if(sheet.innerHTML.trim()) sheet.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
