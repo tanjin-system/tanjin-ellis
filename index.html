@@ -1652,20 +1652,6 @@ async function loadDepotOverview(driverId, date){
   return rows;
 }
 async function renderHomeAdmin(c){
-  const tiles = [
-    {id:'announcements', label:'公告管理', sub:'發布訊息給全體夥伴'},
-    {id:'schedule', label:'週期任務清單', sub:'指派夥伴與路線'},
-    {id:'drivers', label:'夥伴資料', sub:'含車輛與銀行資訊'},
-    {id:'channels', label:'通路管理', sub:'請款週期設定'},
-    {id:'dropPoints', label:'店點資料庫', sub:'依通路分類'},
-    {id:'origins', label:'任務起點資料庫', sub:'常用出發地'},
-    {id:'routes', label:'路線管理', sub:'版本化店點順序'},
-    {id:'payroll', label:'報酬結算', sub:'調整項與可領淨額'},
-    {id:'slips', label:'勞報單', sub:'月結、區間開單與簽名'},
-    {id:'billing', label:'請款結算', sub:'通路請款拆分'},
-    {id:'export', label:'資料匯出', sub:'區間匯出並封存'},
-    {id:'settings', label:'系統設定', sub:'管理PIN碼'}
-  ];
   // 即時利潤的支出/請款都是算「本月至今」，登入當下記憶體裡預設只有近14天
   // （見 ASSIGNMENTS_WINDOW_DAYS），月中之後（超過14號）本月初那幾天會被
   // 漏算，不只是慢、是金額會算錯，所以這裡渲染前一定要先確保整個月都補齊。
@@ -1735,7 +1721,7 @@ async function renderHomeAdmin(c){
       <div class="ov-card" data-lv="${ovIssue?'danger':'ok'}" data-goto-today="1"><div class="ov-n">${ovIssue}</div><div class="ov-l">有異常</div></div>
     </div>
     <div class="ov-bar" title="今日完成進度"><i style="width:${ovTasks.length?Math.round(ovDone*100/ovTasks.length):0}%"></i></div>
-    <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
+    <p class="section-sub">主控帳號${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
       <h3>⏰ 待辦提醒 <span class="rem-count">${[covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
       ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
@@ -1772,7 +1758,6 @@ async function renderHomeAdmin(c){
       </div>
       ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);">${g.started?'<span style="color:var(--teal);" title="已出發">✅</span> ':''}<strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
     </div>` : ''}
-    <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
   { // 點「利潤總額」展開／收合每日明細（資料更新重畫後維持展開狀態）
     const row = document.getElementById('profitRow'), box = document.getElementById('profitDaily'), chev = document.getElementById('profitChevron');
