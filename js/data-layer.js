@@ -839,8 +839,10 @@ function assignmentVersionMismatch(a) {
   const v = getActiveVersion(route, a.date);
   if (!v) return null;
   const taskN = (a.dropPoints || []).length, verN = (v.dropPointIds || []).length;
+  const doneN = (a.dropPoints || []).filter(dp => dp.status === 'completed').length;
   const kmDiff = v.distanceKm != null && a.distanceKm != null && Number(v.distanceKm) !== Number(a.distanceKm);
-  if (taskN === verN && !kmDiff) return null;
+  // 任務原本排的店數比版本多，但夥伴實際完成的店數剛好等於版本的店數（多的那幾站是被拿掉、沒去的）→ 實際跑的就是新版，不警示。
+  if ((taskN === verN || doneN === verN) && !kmDiff) return null;
   return `任務存的是 ${taskN} 站／${a.distanceKm ?? '—'} 公里，當天生效的版本（${v.start} 起）是 ${verN} 站／${v.distanceKm ?? '—'} 公里`;
 }
 
