@@ -5437,11 +5437,35 @@ function renderBilling(c){
           ${mergedRunDetailTableHtml(channelIds, merged)}
         </div>
       </div>
+      ${(()=>{
+        // 請款單 PDF 要顯示哪些出發點：金額合計是 $0 的預設不顯示（勾選框可以自己改），只影響 PDF，不影響畫面與 Excel。
+        const addrs = Object.keys(merged);
+        if(!addrs.length) return '';
+        const ov = state._billingOriginOverride || {};
+        return `<div class="panel no-print" style="margin-top:10px;"><div style="font-size:13px; font-weight:600; margin-bottom:6px;">請款單 PDF 要顯示的出發點</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px 16px;">${addrs.map(addr=>{
+            const total = merged[addr].reduce((sum,r)=> sum + r.dailyTotal*r.dayCount, 0);
+            const on = addr in ov ? ov[addr] : Math.round(total) > 0;
+            return `<label style="display:flex; align-items:center; gap:6px; font-size:13px; margin:0; color:var(--ink);"><input type="checkbox" class="pdfOrigin" value="${escapeHtml(addr)}" data-total="${Math.round(total)}" ${on?'checked':''} style="width:auto;"> ${escapeHtml(originLabel(addr))}（$${money(Math.round(total))}）${Math.round(total)===0?'<span style="color:var(--ink-soft); font-size:11.5px;">金額 $0，預設不顯示</span>':''}</label>`;
+          }).join('')}</div></div>`;
+      })()}
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
         <button class="btn amber" id="printBilling">產生請款單（列印/另存PDF）</button>
         <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
       </div>`;
-    document.getElementById('printBilling').onclick = ()=> exportPrintable(`請款單_${start}_${end}`, billingPrintHtml(reports, merged, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
+    document.querySelectorAll('.pdfOrigin').forEach(cb=>{
+      cb.onchange = ()=>{ state._billingOriginOverride = state._billingOriginOverride || {}; state._billingOriginOverride[cb.value] = cb.checked; };
+    });
+    document.getElementById('printBilling').onclick = ()=>{
+      const boxes = [...document.querySelectorAll('.pdfOrigin')];
+      const picked = new Set(boxes.filter(b=>b.checked).map(b=>b.value));
+      const hiddenWithMoney = boxes.filter(b=>!b.checked && Number(b.dataset.total)>0).map(b=>originLabel(b.value));
+      if(boxes.length && !picked.size){ alert('請至少勾選一個要顯示的出發點'); return; }
+      if(hiddenWithMoney.length && !confirm(`「${hiddenWithMoney.join('、')}」有請款金額，不顯示的話，PDF 上的明細加總會跟請款總額對不起來。\n\n確定要隱藏嗎？`)) return;
+      const mergedPick = {}; Object.keys(merged).forEach(a=>{ if(!boxes.length || picked.has(a)) mergedPick[a] = merged[a]; });
+      const reportsPick = reports.map(rp=> ({ ...rp, originWithTax: rp.originWithTax.filter(o=> !boxes.length || picked.has(o.originAddr)) }));
+      exportPrintable(`請款單_${start}_${end}`, billingPrintHtml(reportsPick, mergedPick, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
+    };
     document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end, billingAssignments);
   }
   document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
