@@ -823,6 +823,27 @@ function computeCoverage(asOf, override) {
   });
   return { byDp, missing, dups, inactiveIn, activeCount };
 }
+// 儲存新路線版本前：這條路線從生效日起有哪些「已完成」的任務。這些任務是用舊內容跑完的，
+// 但請款金額會改套新版本，生效日設早了就會把金額灌錯（回傳最多 60 筆日期）。
+async function completedTripDatesFrom(routeId, fromDate) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('assignments').select('trip_date')
+    .eq('route_id', routeId).eq('status', 'completed').gte('trip_date', fromDate).order('trip_date').limit(60);
+  if (error) return [];
+  return [...new Set((data || []).map(r => r.trip_date))];
+}
+// 任務實際存的內容（店數、公里）跟「當天生效的版本」對不上 → 回傳說明文字，否則 null。
+function assignmentVersionMismatch(a) {
+  const route = state.data.routes.find(r => r.id === a.routeId);
+  if (!route) return null;
+  const v = getActiveVersion(route, a.date);
+  if (!v) return null;
+  const taskN = (a.dropPoints || []).length, verN = (v.dropPointIds || []).length;
+  const kmDiff = v.distanceKm != null && a.distanceKm != null && Number(v.distanceKm) !== Number(a.distanceKm);
+  if (taskN === verN && !kmDiff) return null;
+  return `任務存的是 ${taskN} 站／${a.distanceKm ?? '—'} 公里，當天生效的版本（${v.start} 起）是 ${verN} 站／${v.distanceKm ?? '—'} 公里`;
+}
+
 // 儲存路線版本前預覽：這次調整會讓哪些店「變成」遺漏／重複／停用店被加進來。
 function previewRouteChange(routeId, effDate, newIds) {
   const route = state.data.routes.find(r => r.id === routeId);

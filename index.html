@@ -219,6 +219,7 @@
   .bill-card .bc-top{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .bill-card .bc-top b{ font-size:16px; }
   .bill-card .bc-days{ background:var(--chip); border-radius:99px; font-size:12px; padding:1px 10px; color:var(--ink-soft); }
+  .bill-card .bc-warn{ background:var(--tint-danger); color:var(--danger); border-radius:6px; padding:6px 10px; font-size:12px; margin-bottom:8px; }
   .bill-card .bc-period{ font-size:12px; color:var(--ink-soft); margin:2px 0 8px; font-family:'IBM Plex Mono',monospace; }
   .bill-card .bc-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; background:var(--bg-soft); border-radius:8px; padding:8px; }
   .bill-card .bc-grid div{ text-align:center; } .bill-card .bc-grid small{ display:block; font-size:11px; color:var(--ink-soft); } .bill-card .bc-grid b{ font-size:15px; font-family:'IBM Plex Mono',monospace; }
@@ -3083,6 +3084,11 @@ function renderRouteDetail(rid){
         if(pv.inactiveAdded.length) warn.push(`⚠️ 加進了已停用的店（${pv.inactiveAdded.length} 家）：${names(pv.inactiveAdded)}`);
         if(warn.length && !confirm(`這次調整：新增 ${pv.added.length} 家、移出 ${pv.removed.length} 家（${effDate} 起）。\n\n${warn.join('\n')}\n\n確定要儲存嗎？`)) return;
       }
+      // 生效日（含）以後如果已經有「已完成」的任務，那些是用舊內容跑完的，請款卻會改套新版本金額：先確認日期沒設早。
+      {
+        const done = await completedTripDatesFrom(rid2, effDate);
+        if(done.length && !confirm(`⚠️ 生效日期 ${effDate} 起，這條路線已經有 ${done.length} 趟「已完成」的任務（${done.slice(0,6).map(d=>d.slice(5).replace('-','/')).join('、')}${done.length>6?'…':''}）。\n\n這幾天夥伴是照舊內容跑的，新版本一生效，這幾天的請款金額會改用新版本，夥伴薪資不變。\n\n如果新內容其實是之後才開始，請取消，把生效日期改成實際開始的那天。\n\n確定生效日期沒設早嗎？`)) return;
+      }
       try{
         // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
         // 目前打的數字，避免兩者不小心存成不一致（實際請款/夥伴結算只認拆賬金額，
@@ -5029,7 +5035,7 @@ function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assi
     if(!byOriginRoute[addr]) byOriginRoute[addr] = {};
     if(!byOriginRoute[addr][displayRoute.id]) byOriginRoute[addr][displayRoute.id] = { route: displayRoute, items: [] };
     const dropLabel = (displayDropPoints||[]).filter(dp=>channelIds.includes(dp.channelId)).map(dpLabel).join('➔')||'—';
-    byOriginRoute[addr][displayRoute.id].items.push({ date:a.date, dropLabel, km:displayKm, storeCounts, byChannel, dailyTotal });
+    byOriginRoute[addr][displayRoute.id].items.push({ date:a.date, dropLabel, km:displayKm, storeCounts, byChannel, dailyTotal, warn: assignmentVersionMismatch(a) });
   });
   const byOrigin = {};
   Object.keys(byOriginRoute).forEach(addr=>{
@@ -5041,9 +5047,9 @@ function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assi
       let run = null;
       const flush = ()=>{ if(run) collapsedRows.push(run); run = null; };
       items.forEach(item=>{
-        const sig = JSON.stringify([item.dropLabel, item.km, channelIds.map(cid=>[item.storeCounts[cid]||0, item.byChannel[cid]||0])]);
+        const sig = JSON.stringify([item.dropLabel, item.km, channelIds.map(cid=>[item.storeCounts[cid]||0, item.byChannel[cid]||0]), !!item.warn]);
         if(run && run.sig===sig){ run.dateEnd = item.date; run.dayCount += 1; }
-        else { flush(); run = { route, sig, dateStart:item.date, dateEnd:item.date, dayCount:1, dropLabel:item.dropLabel, km:item.km, storeCounts:item.storeCounts, byChannel:item.byChannel, dailyTotal:item.dailyTotal }; }
+        else { flush(); run = { route, sig, dateStart:item.date, dateEnd:item.date, dayCount:1, dropLabel:item.dropLabel, km:item.km, storeCounts:item.storeCounts, byChannel:item.byChannel, dailyTotal:item.dailyTotal, warn:item.warn }; }
       });
       flush();
     });
@@ -5063,7 +5069,7 @@ function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
       const periodAmtCells = channelIds.map(cid=>`<td class="amount">$${money(Math.round((r.byChannel[cid]||0)*r.dayCount))}</td>`).join('');
       const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
       return `<tr>
-        <td>${period}</td><td>${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td>
+        <td>${r.warn?`<span class="no-print" title="${escapeHtml(r.warn)}" style="cursor:help;">⚠️ </span>`:''}${period}</td><td>${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td>
         <td>${r.dropLabel}</td>
         ${storeCells}<td>${totalStores}</td><td>${r.km??'—'}</td><td class="amount">$${money(Math.round(r.dailyTotal))}</td>
         ${pctCells}<td class="amount">$${money(Math.round(r.dailyTotal*r.dayCount))}</td>${periodAmtCells}
@@ -5082,13 +5088,16 @@ function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
       return `<div class="bill-card">
         <div class="bc-top"><b>${seqToR(stripWeekdayLabel(r.route.seq))} ${r.route.shift==='AM'?'上午':'下午'}</b><span class="bc-days">${r.dayCount} 天</span></div>
         <div class="bc-period">${period}</div>
+        ${r.warn ? `<div class="bc-warn">⚠️ ${escapeHtml(r.warn)}。請款依版本金額算，請確認版本生效日期是否設早或設晚。</div>` : ''}
         <div class="bc-grid"><div><small>店數</small><b>${totalStores}</b></div><div><small>公里</small><b>${r.km??'—'}</b></div><div><small>單日金額</small><b>$${money(Math.round(r.dailyTotal))}</b></div></div>
         <div class="bc-sum"><span>期間合計</span><b>$${money(Math.round(r.dailyTotal*r.dayCount))}</b></div>
         ${multiCh ? chRows : ''}
         ${stops.length ? `<details><summary>配送路線（${stops.length} 站）▸</summary><ol>${stops.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ol></details>` : ''}
       </div>`;
     }).join('');
+    const anyWarn = list.some(r=>r.warn);
     return `<h4 style="margin:14px 0 6px;">${originLabel(addr)}｜配送明細</h4>
+      ${anyWarn ? `<div class="note no-print" style="border-color:var(--danger); color:var(--danger);">⚠️ 標有警示的那幾筆，任務實際存的店數／公里，跟當天生效的路線版本不一樣。請款是依「版本」的金額算，請確認新版本的生效日期有沒有設早或設晚（滑鼠移到 ⚠️ 看細節）。</div>` : ''}
       <div class="bill-cards no-print">${cards}</div>
       <div class="bill-tbl" style="overflow-x:auto;">
       <table>
