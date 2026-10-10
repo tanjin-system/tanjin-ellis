@@ -1797,13 +1797,6 @@ async function renderHomeAdmin(c){
 function renderHomeDriver(c){
   const dId = state.activeDriverId;
   const todays = myOpenTasks(dId);
-  const tiles = [
-    {id:'today', label:'今日任務', sub: todays.length? `今天有 ${todays.length} 趟` : '今天無任務'},
-    {id:'history', label:'歷史任務', sub:'已完成紀錄'},
-    {id:'my-earnings', label:'我的報酬', sub:'本月即時金額'},
-    {id:'my-statement', label:'對帳單', sub:'月結與回簽'},
-    {id:'profile', label:'我的資料', sub:'車輛/銀行資訊'}
-  ];
   // 主控在「主控檢視中」模式下也是叫這支函式，這時 state.data.announcements
   // 是用admin身份撈的（含已下架、含所有對象的公告），這裡一律再篩一次
   // active跟發送對象，確保跟真的夥伴登入看到的內容完全一樣：全體公告
@@ -1812,7 +1805,7 @@ function renderHomeDriver(c){
     a.active && (a.audience!=='selected' || a.driverIds.includes(dId)));
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
-    <p class="section-sub">${driverName(dId)}，點選功能方塊快速前往。</p>
+    <p class="section-sub">${driverName(dId)}，您好。${todays.length ? `今天有 ${todays.length} 趟任務，請從選單的「今日任務」開始。` : '今天沒有待完成的任務。'}</p>
     ${todayHolidayGreeting(dId) ? `<div class="panel" style="border-color:var(--amber); border-width:2px;">
       <p style="margin:0; font-size:13px;">${todayHolidayGreeting(dId)} 辛苦了，感謝您的配送服務。</p>
     </div>` : ''}
@@ -1832,9 +1825,7 @@ function renderHomeDriver(c){
       </div>
       <div id="depotOverviewBox"><div class="empty">載入中…</div></div>
     </div>` : ''}
-    <div class="tile-grid">${tiles.map(t=>`<div class="tile" data-goto="${t.id}">${t.label}<span class="tile-sub">${t.sub}</span></div>`).join('')}</div>
   `;
-  c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
   const manualRefreshBtn = document.getElementById('manualRefreshBtn');
   if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
     manualRefreshBtn.disabled = true; manualRefreshBtn.textContent = '更新中…';
