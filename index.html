@@ -1993,7 +1993,7 @@ function renderCoveragePanel(){
     const rows = cov.missing.slice(0, 300);
     detail = `<div class="note" style="margin-top:10px;">
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-        <select id="covRoute" style="width:auto; max-width:260px;"><option value="">選擇要加入的路線</option>${sortedRoutes().map(r=>`<option value="${r.id}">${escapeHtml(routeDisplayName(r.name))}</option>`).join('')}</select>
+        <select id="covRoute" style="width:auto; max-width:260px;"><option value="">選擇要加入的路線</option>${sortedRoutes().filter(r=>r.status!=='inactive').map(r=>`<option value="${r.id}">${escapeHtml(routeDisplayName(r.name))}</option>`).join('')}</select>
         <button class="btn amber" id="covAddDraft">把勾選的店加到這條路線的草稿</button>
         <button class="btn danger" id="covStopSel">勾選的店 → 停止配送</button>
       </div>
@@ -2359,7 +2359,7 @@ function routeRowHtml(r){
   const hasBoth = openVersion && openVersion.driverFare != null && billingVersion && billingVersion.billingTotal != null;
   const marginText = hasBoth ? `$${money(billingVersion.billingTotal - openVersion.driverFare)}` : '—';
   return `<tr>
-    <td>${routeDisplayName(r.name)}</td>
+    <td>${routeDisplayName(r.name)}${r.status==='inactive'?' <span class="badge pending">已停用</span>':''}</td>
     <td class="amount">${fareText}</td>
     <td class="amount">${billingText}</td>
     <td class="amount">${marginText}</td>
@@ -2379,8 +2379,9 @@ function renderRouteTable(){
     wrap.innerHTML = `<div class="panel"><div class="empty">${kw?'找不到符合的路線':'尚未建立任何路線'}</div></div>`;
     return;
   }
+  const inactiveRoutes = filtered.filter(r=>r.status==='inactive');
   const byRegion = {};
-  filtered.forEach(r=>{ const key = r.region || '未分類'; if(!byRegion[key]) byRegion[key] = []; byRegion[key].push(r); });
+  filtered.filter(r=>r.status!=='inactive').forEach(r=>{ const key = r.region || '未分類'; if(!byRegion[key]) byRegion[key] = []; byRegion[key].push(r); });
   const regionKeys = Object.keys(byRegion).filter(k=>k!=='未分類').sort();
   if(byRegion['未分類']) regionKeys.push('未分類');
   wrap.innerHTML = regionKeys.map(region=>{
@@ -2397,7 +2398,14 @@ function renderRouteTable(){
         </table>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + (inactiveRoutes.length ? `<div class="panel" style="overflow-x:auto;">
+      <details ${kw || inactiveRoutes.some(r=>r.id===expandedRouteId) ? 'open' : ''}><summary style="cursor:pointer; font-weight:700;">已停用的路線（${inactiveRoutes.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— 不出現在週期任務清單，歷史紀錄保留，可隨時恢復</span></summary>
+        <table style="margin-top:8px;">
+          <thead><tr><th>路線</th><th>夥伴費用</th><th>請款費用</th><th>毛利（請款-夥伴）</th><th></th></tr></thead>
+          <tbody>${inactiveRoutes.map(routeRowHtml).join('')}</tbody>
+        </table>
+      </details>
+    </div>` : '');
   wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
     h.onclick = ()=>{
       const key = h.dataset.regiontoggle;
@@ -2458,7 +2466,10 @@ function renderRouteDetail(rid){
   detailEl.innerHTML = `
     <div class="panel">
       <div class="toolbar"><strong>${routeDisplayName(r.name)}</strong>
-        ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
+        <span>
+          ${r.status==='inactive' ? `<span class="badge pending">已停用</span> <button class="btn amber" data-routestatus="active">恢復使用</button>` : `<button class="btn ghost" data-routestatus="inactive">停用路線</button>`}
+          ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
+        </span>
       </div>
       <p style="font-size:12.5px; color:var(--ink-soft);">任務起點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改任務起點請新增一條路線）</p>
       <div class="field" style="max-width:260px;"><label>地區（選填，用於路線列表收合分組）</label>
@@ -2547,6 +2558,24 @@ function renderRouteDetail(rid){
     if(composing) return;
     draft.dpSearch = e.target.value;
     renderDpSearchResults();
+  });
+  detailEl.querySelectorAll('[data-routestatus]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const target = btn.dataset.routestatus;
+      let msg;
+      if(target==='inactive'){
+        const future = state.data.assignments.filter(a=>a.routeId===r.id && a.date>=todayStr() && (a.status==='scheduled'||a.status==='in_progress')).length;
+        const pv = previewRouteChange(r.id, todayStr(), []);
+        const names = pv.newlyMissing.slice(0,8).map(dp=>dpLabel(dp)).join('、') + (pv.newlyMissing.length>8?` …等 ${pv.newlyMissing.length} 家`:'');
+        msg = `確定要停用「${routeDisplayName(r.name)}」嗎？\n\n停用後：週期任務清單、批次建立、下週自動延續都不再使用這條路線；歷史版本、已完成的任務與請款報酬紀錄全部保留，可隨時恢復。`
+          + (future ? `\n\n⚠️ 這條路線還有 ${future} 趟未完成的任務（今天起），不會被刪除；不需要的話到週期任務清單用「批量修改」刪除。` : '')
+          + (pv.newlyMissing.length ? `\n\n🔴 只在這條路線的店（${pv.newlyMissing.length} 家）停用後會變成「未排入任何路線」：${names}` : '');
+      } else {
+        msg = `確定要恢復使用「${routeDisplayName(r.name)}」嗎？恢復後會重新出現在週期任務清單，也會再算進店點涵蓋檢查。`;
+      }
+      if(!confirm(msg)) return;
+      try{ await setRouteStatus(r.id, target); renderContent(); }catch(err){ alert(err.message); }
+    };
   });
   detailEl.querySelectorAll('[data-delroute]').forEach(btn=>{
     btn.onclick = async ()=>{
@@ -2745,7 +2774,7 @@ async function renderScheduleAdmin(c){
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
   // 路線依「任務起點」分組（optgroup），任務起點順序跟任務起點資料庫一致，組內維持原本的車次排序。
   const routeOpts = (()=>{
-    const all = sortedRoutes();
+    const all = sortedRoutes().filter(r=>r.status!=='inactive');
     const groups = state.data.origins.map(og=>({ label: og.label||og.address, list: all.filter(r=>r.originAddr===og.address) }));
     const known = new Set(state.data.origins.map(og=>og.address));
     const rest = all.filter(r=>!known.has(r.originAddr));
@@ -2886,7 +2915,8 @@ async function renderScheduleAdmin(c){
 function mobileSlotsFor(date, originFilter){
   const origins = originFilter ? state.data.origins.filter(og=>og.address===originFilter) : state.data.origins;
   return origins.map(og=>{
-    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
+    // 已停用的路線不出現在排班畫面；但那天如果已經有任務，還是要看得到，才不會有任務憑空消失。
+    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address && (r.status!=='inactive' || state.data.assignments.some(a=>a.routeId===r.id && a.date===date)));
     const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
     const routes = baseSeqs.map(baseSeq=>{
       const family = routesHere.filter(r=>stripWeekdayLabel(r.seq)===baseSeq);
@@ -3235,8 +3265,9 @@ function renderWeekGrid(containerId, dates){
     }).join('');
     return `<thead><tr><th></th>${dateRow}</tr><tr><th>車次</th>${shiftRow}</tr></thead>`;
   }
+  const weekRouteIds = new Set(state.data.assignments.filter(a=>dates.includes(a.date)).map(a=>a.routeId));
   const blocks = origins.map(og=>{
-    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address);
+    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address && (r.status!=='inactive' || weekRouteIds.has(r.id)));
     if(!routesHere.length) return '';
     // 第七車/第八車這種「星期一報價」跟「週二到五」分成兩條路線的車次，週期任務清單
     // 這裡只是顯示合併成一列，依每個日期欄位實際的星期幾去挑對應的那條路線——

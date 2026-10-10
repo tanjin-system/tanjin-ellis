@@ -61,7 +61,7 @@ function mapRoute(row) {
         .slice().sort((a, b) => a.sequence_no - b.sequence_no)
         .map(p => p.drop_point_id)
     }));
-  return { id: row.id, name: row.name, originAddr, seq: row.seq, shift: row.shift, region: row.region || '', versions };
+  return { id: row.id, name: row.name, originAddr, seq: row.seq, shift: row.shift, region: row.region || '', status: row.status || 'active', versions };
 }
 
 function mapAssignment(row) {
@@ -750,6 +750,7 @@ function computeCoverage(asOf, override) {
   const byDp = new Map();
   const dupWithin = new Set();
   state.data.routes.forEach(r => {
+    if (r.status === 'inactive') return; // 已停用的路線不算涵蓋
     let ids;
     if (override && override.routeId === r.id) ids = override.ids;
     else { const v = getActiveVersion(r, asOf); if (!v) return; ids = v.dropPointIds || []; }
@@ -828,6 +829,17 @@ async function createRoute(input) {
   const route = mapRoute(data);
   state.data.routes.push(route);
   return route;
+}
+
+// 停用／恢復路線：停用後週期任務清單、批次建立、下週自動延續、涵蓋檢查都不再用它；
+// 已經建立的任務、歷史版本、請款報酬紀錄全部保留，隨時可以恢復。
+async function setRouteStatus(routeId, status) {
+  if (!['active', 'inactive'].includes(status)) throw new Error('狀態不正確');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('routes').update({ status }).eq('id', routeId);
+  if (error) throw new Error((status === 'inactive' ? '停用' : '恢復') + '路線失敗：' + error.message);
+  const route = state.data.routes.find(r => r.id === routeId);
+  if (route) route.status = status;
 }
 
 async function updateRouteRegion(routeId, region) {
@@ -1082,7 +1094,7 @@ async function rolloverNextWeekIfNeeded() {
     const route = state.data.routes.find(r => r.id === x.route_id);
     const date = ymd(addDays(x.trip_date, 7));
     const key = x.route_id + '|' + date;
-    if (!route || !activeDrivers.has(x.driver_id) || seen.has(key)) { skipped++; return; }
+    if (!route || route.status === 'inactive' || !activeDrivers.has(x.driver_id) || seen.has(key)) { skipped++; return; }
     seen.add(key);
     const version = route.versions.find(v => date >= v.start && (!v.end || date <= v.end));
     rows.push({

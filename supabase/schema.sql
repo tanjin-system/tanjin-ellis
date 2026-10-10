@@ -1109,3 +1109,6 @@ create trigger trg_dp_completed_by before update on assignment_drop_points for e
 -- 其餘（遺漏／重複／已停用卻還在路線）全部由程式依現有路線版本即時計算，不另存資料。
 -- ============================================================
 alter table drop_points add column if not exists allow_duplicate boolean not null default false;
+
+-- PART 23：路線停用（status）。停用的路線不出現在週期任務清單／批次建立／下週自動延續／涵蓋檢查，歷史資料全部保留。
+alter table routes add column if not exists status text not null default 'active' check (status in ('active','inactive'));
