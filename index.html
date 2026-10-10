@@ -108,15 +108,13 @@
   .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
   @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} .nav-group{ display:none; } nav.tabs button{ width:auto; flex:none; } }
-  /* 夥伴端手機：底部固定分頁列（圖示在上、文字在下），單手拇指就按得到 */
+  /* 夥伴端手機：分頁列置頂（圖示在上、文字在下），往下捲動時也固定在畫面最上方 */
   @media (max-width:640px){
-    body.driver-view nav.tabs{ position:fixed; left:0; right:0; bottom:0; z-index:70; width:100%; padding:0 0 env(safe-area-inset-bottom); background:var(--panel); border-top:1px solid var(--border); border-right:none; display:flex; overflow:visible; box-shadow:0 -3px 12px rgba(27,33,41,.10); }
-    body.driver-view nav.tabs button{ flex:1; flex-direction:column; justify-content:center; gap:1px; padding:6px 2px 7px; min-width:0; border-bottom:none; border-top:3px solid transparent; text-align:center; font-size:10.5px; white-space:nowrap; }
+    body.driver-view nav.tabs{ position:sticky; top:0; z-index:70; width:100%; padding:0; background:var(--panel); border-bottom:1px solid var(--border); border-right:none; display:flex; overflow:visible; box-shadow:0 3px 12px rgba(27,33,41,.10); }
+    body.driver-view nav.tabs button{ flex:1; flex-direction:column; justify-content:center; gap:1px; padding:7px 2px 6px; min-width:0; border-top:none; border-bottom:3px solid transparent; text-align:center; font-size:10.5px; white-space:nowrap; }
     body.driver-view nav.tabs button .ni{ width:auto; font-size:21px; line-height:1.2; }
-    body.driver-view nav.tabs button.active{ border-top-color:var(--amber); border-bottom:none; background:var(--tint-warn); }
-    body.driver-view main{ padding-bottom:92px; }
-  }
-  .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
+    body.driver-view nav.tabs button.active{ border-bottom-color:var(--amber); border-top:none; background:var(--tint-warn); }
+  }  .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
   .btn.amber{ background:var(--amber); color:#1B2129; }
   .btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
   .btn.danger{ background:none; border:1px solid var(--danger); color:var(--danger); }
