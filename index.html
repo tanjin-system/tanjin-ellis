@@ -85,6 +85,54 @@
   /* 收合／展開的群組卡片（店點資料庫的通路、路線管理的地區、夥伴的任務起點…）統一樣式：
      收合時整張卡片都能點；按下去有下沉內陷的回饋；展開後左邊有琥珀色細線，標題列釘在畫面上方，
      清單很長時捲到下面也能直接收合。 */
+  /* ---- 第一批美化：首頁總覽卡、提醒分級、排班狀態色條、夥伴端下一站 ---- */
+  .ov-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-bottom:14px; }
+  .ov-card{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px; cursor:pointer; border-top:4px solid var(--ov, #C9CED6); transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  .ov-card:hover{ background:#FAF2E3; }
+  .ov-card:active{ transform:scale(.97); filter:brightness(.93); box-shadow:inset 0 3px 6px rgba(27,33,41,.2); }
+  .ov-card .ov-n{ font-family:'IBM Plex Mono',monospace; font-size:28px; font-weight:700; line-height:1.1; }
+  .ov-card .ov-l{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
+  .ov-card[data-lv=ok]{ --ov:#2C6B44; } .ov-card[data-lv=run]{ --ov:#2C5F8A; } .ov-card[data-lv=warn]{ --ov:#E0902E; } .ov-card[data-lv=danger]{ --ov:#B5493A; }
+  .ov-card[data-lv=danger] .ov-n{ color:var(--danger); }
+  .ov-bar{ height:8px; background:#E7E9EC; border-radius:99px; overflow:hidden; margin:2px 0 14px; }
+  .ov-bar > i{ display:block; height:100%; background:#2C6B44; border-radius:99px; transition:width .3s; }
+  .rem-box{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:16px; }
+  .rem-box h3{ margin:0 0 6px; font-size:15px; display:flex; align-items:center; gap:8px; }
+  .rem-count{ background:var(--danger); color:#fff; border-radius:99px; font-size:12px; padding:0 8px; font-weight:700; }
+  .rem{ display:flex; align-items:center; gap:10px; padding:9px 12px; margin:6px 0; border-radius:6px; border-left:4px solid var(--lv); background:var(--bg-lv); font-size:13px; }
+  .rem .rem-t{ flex:1; min-width:0; }
+  .rem .btn{ flex:none; margin:0; }
+  .rem[data-lv=danger]{ --lv:#B5493A; --bg-lv:#FBEAE6; } .rem[data-lv=warn]{ --lv:#E0902E; --bg-lv:#FDF3E1; } .rem[data-lv=info]{ --lv:#3F6E6C; --bg-lv:#EAF2F1; }
+  /* 週期任務清單：依狀態在格子左側加色條＋淡底色，今天那一欄加亮 */
+  .sched-legend{ display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11.5px; color:var(--ink-soft); margin:0 0 8px; }
+  .sched-legend i{ display:inline-block; width:14px; height:14px; border-radius:3px; vertical-align:-3px; margin-right:4px; border:1px solid var(--border); box-shadow:inset 4px 0 0 var(--c); background:var(--bg,#fff); }
+  table.route-grid td.grid-cell.st-sched, table.route-grid .grid-sub.st-sched{ box-shadow:inset 4px 0 0 #9AA3AF; }
+  table.route-grid td.grid-cell.st-prog, table.route-grid .grid-sub.st-prog{ box-shadow:inset 4px 0 0 #2C5F8A; background:#EEF4FB; }
+  table.route-grid td.grid-cell.st-done, table.route-grid .grid-sub.st-done{ box-shadow:inset 4px 0 0 #2C6B44; background:#F1F8F3; }
+  table.route-grid td.grid-cell.st-issue, table.route-grid .grid-sub.st-issue{ box-shadow:inset 4px 0 0 #B5493A; background:#FBEAE6; }
+  table.route-grid td.grid-cell.st-draft, table.route-grid .grid-sub.st-draft{ box-shadow:inset 4px 0 0 #E0902E; background:#FFF8EA; }
+  table.route-grid td.grid-cell.st-empty{ background:#FBEAE6; color:#C98E84; font-weight:400; }
+  table.route-grid td.grid-cell.st-empty::after{ content:'＋'; font-size:12px; }
+  table.route-grid th.today-col{ background:#FFE9BF; color:var(--ink); }
+    table.route-grid td.today-col{ border-left:2px solid var(--amber); border-right:2px solid var(--amber); }
+  .m-slot.st-sched{ box-shadow:inset 4px 0 0 #9AA3AF; } .m-slot.st-prog{ box-shadow:inset 4px 0 0 #2C5F8A; background:#EEF4FB; }
+  .m-slot.st-done{ box-shadow:inset 4px 0 0 #2C6B44; background:#F1F8F3; } .m-slot.st-issue{ box-shadow:inset 4px 0 0 #B5493A; background:#FBEAE6; }
+  .m-slot.st-draft{ box-shadow:inset 4px 0 0 #E0902E; background:#FFF8EA; }
+  /* 夥伴端：進度條＋下一站 */
+  .dv-prog{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .dv-prog .dv-top{ display:flex; justify-content:space-between; align-items:baseline; font-weight:700; }
+  .dv-prog .dv-top b{ font-family:'IBM Plex Mono',monospace; font-size:22px; }
+  .dv-next{ border:2px solid var(--amber); background:#FFF8EA; border-radius:12px; padding:14px; margin-bottom:14px; }
+  .dv-next .dv-tag{ display:inline-block; background:var(--amber); color:#1B2129; font-size:11.5px; font-weight:700; border-radius:99px; padding:1px 10px; }
+  .dv-next .dv-name{ font-size:20px; font-weight:800; margin:6px 0 2px; line-height:1.3; }
+  .dv-next .dv-addr{ font-size:13px; color:var(--ink-soft); }
+  .dv-next .dv-actions{ display:flex; gap:8px; margin-top:12px; }
+  .dv-next .dv-actions .btn{ flex:1; padding:13px 10px; font-size:15px; text-decoration:none; }
+  .drop-point-driver.next-stop{ border-left:5px solid var(--amber); background:#FFFCF3; }
+  .drop-point-driver.flash{ animation:dvflash 1.2s ease-out; }
+  @keyframes dvflash{ 0%{ background:#C9E6D2; transform:scale(1.02);} 100%{ background:transparent; transform:none;} }
+  .dv-done{ text-align:center; border:2px solid #2C6B44; background:#F1F8F3; border-radius:12px; padding:22px 14px; margin-bottom:14px; }
+  .dv-done .big{ font-size:40px; } .dv-done h3{ margin:6px 0 4px; } .dv-done .amt{ font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:700; color:#2C6B44; }
   .fold{ padding:0; cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out, background-color .1s ease-out; }
   .fold-head{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; border-radius:var(--radius); }
   .fold-title{ font-weight:700; font-size:15px; }
@@ -1374,22 +1422,38 @@ async function renderHomeAdmin(c){
       unsettledNames = unsettledRows(prevMonthStr, lite).map(r=>r.d.name);
     }catch(e){ console.error('讀取月結名單失敗', e); }
   }
+  // 今日總覽卡：任務數、已完成、進行中、沒人排的空格、有異常的
+  const ovToday = todayStr();
+  const ovTasks = state.data.assignments.filter(a=>a.date===ovToday && a.status!=='cancelled' && !a.isSupport);
+  const ovDone = ovTasks.filter(a=>a.status==='completed').length;
+  const ovRun = ovTasks.filter(a=>a.status==='in_progress').length;
+  const ovWait = ovTasks.filter(a=>a.status==='scheduled').length;
+  const ovEmpty = mobileSlotsFor(ovToday, '').reduce((n,o)=> n + o.routes.reduce((m,r)=> m + r.slots.filter(sl=>!sl.items.length).length, 0), 0);
+  const ovIssue = ovTasks.filter(a=> a.hasIssue || (a.dropPoints||[]).some(dp=>dp.status!=='completed' && dp.issueReason)).length;
   const covNow = computeCoverage(todayStr());
   const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length;
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
+    <div class="ov-grid">
+      <div class="ov-card" data-lv="ok" data-goto-today="1"><div class="ov-n">${ovDone}<span style="font-size:15px; color:var(--ink-soft);"> / ${ovTasks.length}</span></div><div class="ov-l">今日已完成</div></div>
+      <div class="ov-card" data-lv="run" data-goto-today="1"><div class="ov-n">${ovRun}</div><div class="ov-l">進行中</div></div>
+      <div class="ov-card" data-lv="${ovWait?'warn':'ok'}" data-goto-today="1"><div class="ov-n">${ovWait}</div><div class="ov-l">待出發</div></div>
+      <div class="ov-card" data-lv="${ovEmpty?'danger':'ok'}" data-goto-today="1"><div class="ov-n">${ovEmpty}</div><div class="ov-l">沒人排的空格</div></div>
+      <div class="ov-card" data-lv="${ovIssue?'danger':'ok'}" data-goto-today="1"><div class="ov-n">${ovIssue}</div><div class="ov-l">有異常</div></div>
+    </div>
+    <div class="ov-bar" title="今日完成進度"><i style="width:${ovTasks.length?Math.round(ovDone*100/ovTasks.length):0}%"></i></div>
     <p class="section-sub">主控帳號 — 點選功能方塊快速前往。${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <h3 style="margin-top:0;">⏰ 提醒</h3>
-      ${covBad ? `<div style="font-size:13px; padding:4px 0;">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:''].filter(Boolean).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="routes">前往路線管理</button></div>` : ''}
-      ${unsignedStmts.length ? `<div style="font-size:13px; padding:4px 0;">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="slips">前往勞報單</button></div>` : ''}
-      ${stuckTasks.length ? `<div style="font-size:13px; padding:4px 0;">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
-      ${draftWeekCount ? `<div style="font-size:13px; padding:4px 0;">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
-      ${deferredDue.length ? `<div style="font-size:13px; padding:4px 0;">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gopay="${deferredDue[0].driverId}">前往報酬結算</button></div>` : ''}
-      ${unsettledNames.length ? `<div style="font-size:13px; padding:4px 0;">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
-      ${pendingFuelCount ? `<div style="font-size:13px; padding:4px 0;">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
-      ${backupReminder ? `<div style="font-size:13px; padding:4px 0;">📦 ${backupReminder}，建議去「系統設定」做一次備份。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="settings">前往系統設定</button></div>` : ''}
-      ${periodReminders.map(r=>`<div style="font-size:13px; padding:4px 0;">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。<button class="btn ghost" style="margin-left:8px; padding:2px 8px; font-size:11.5px;" data-goto="billing">前往請款結算</button></div>`).join('')}
+    ${covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
+      <h3>⏰ 待辦提醒 <span class="rem-count">${[covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
+      ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
+      ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${stuckTasks.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
+      ${draftWeekCount ? `<div class="rem" data-lv="info"><div class="rem-t">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
+      ${deferredDue.length ? `<div class="rem" data-lv="danger"><div class="rem-t">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gopay="${deferredDue[0].driverId}">前往報酬結算</button></div>` : ''}
+      ${unsettledNames.length ? `<div class="rem" data-lv="warn"><div class="rem-t">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
+      ${pendingFuelCount ? `<div class="rem" data-lv="warn"><div class="rem-t">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
+      ${backupReminder ? `<div class="rem" data-lv="info"><div class="rem-t">📦 ${backupReminder}，建議去「系統設定」做一次備份。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="settings">前往系統設定</button></div>` : ''}
+      ${periodReminders.map(r=>`<div class="rem" data-lv="warn"><div class="rem-t">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="billing">前往請款結算</button></div>`).join('')}
     </div>` : ''}
     <div class="panel" style="border-color:var(--amber); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">請款－薪資即時利潤（${p.monthStr} 至今）</h3><button class="btn ghost" data-goto="billing">查看請款明細</button></div>
@@ -1426,6 +1490,7 @@ async function renderHomeAdmin(c){
     }
   }
   c.querySelectorAll('[data-gostuck]').forEach(el=>{ el.onclick = ()=>{ const d = el.dataset.gostuck; for(let off=-8; off<=8; off++){ if(getWeekDates(off).includes(d)){ state.weekOffset = off; break; } } state._mDay = d; goTab('schedule'); }; });
+  c.querySelectorAll('[data-goto-today]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 0; state._mDay = todayStr(); goTab('schedule'); }; });
   c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
   c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
   c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
@@ -2929,6 +2994,9 @@ async function renderScheduleAdmin(c){
     })()}
     </div>
     <h3 class="sched-grid-title">${week1[0]} ~ ${week1[6]}</h3>
+    <div class="sched-legend no-print">
+      <span><i style="--c:#9AA3AF"></i>已排定</span><span><i style="--c:#2C5F8A; --bg:#EEF4FB"></i>進行中</span><span><i style="--c:#2C6B44; --bg:#F1F8F3"></i>已完成</span><span><i style="--c:#B5493A; --bg:#FBEAE6"></i>有異常</span><span><i style="--c:#E0902E; --bg:#FFF8EA"></i>草稿（夥伴看不到）</span><span><i style="--c:transparent; --bg:#FBEAE6"></i>未排</span>
+    </div>
     <div class="m-sched ${bulkOn()?'bulk-on':''}" id="mSchedule"></div>
     <div id="mSheetBackdrop"></div>
     <div id="gridWeek1" class="${bulkOn()?'bulk-on':''}"></div>
@@ -3078,7 +3146,7 @@ function renderMobileSchedule(week){
     return sl.items.map(a=>{
       const issue = (a.hasIssue || (a.dropPoints||[]).some(dp=>dp.status!=='completed')) ? ' ⚠️' : '';
       const icons = (a.status==='completed'?'🔒':a.status==='in_progress'?'▶':'') + issue + (a.published===false?' 📝草稿':'') + ((Number(a.extraPay)||0)?` ${a.extraPay>0?'+':'−'}${money(Math.abs(a.extraPay))}`:'') + ((Number(a.paidAmount)||0)>0?' ✅':'');
-      return `<div class="m-slot ${a.published===false?'draft':''}" data-mview="${a.id}"><span class="sh">${sh}</span><span class="nm">${escapeHtml(driverName(a.driverId))}</span><span class="ic">${icons}</span><span class="go">›</span></div>`;
+      return `<div class="m-slot ${a.published===false?'draft':''} ${taskStateClass(a)}" data-mview="${a.id}"><span class="sh">${sh}</span><span class="nm">${escapeHtml(driverName(a.driverId))}</span><span class="ic">${icons}</span><span class="go">›</span></div>`;
     }).join('');
   };
   const prevOpen = state._mOpenOrigins;
@@ -3294,22 +3362,33 @@ async function bulkDelete(){
   state._bulk.sel.clear();
   renderContent();
 }
+// 任務在週期任務清單的狀態分類（決定格子左邊的色條）：
+// 草稿＝琥珀、有異常（夥伴回報異常，或已完成但有店點沒送達）＝紅、進行中＝藍、已完成＝綠、已排定＝灰。
+function taskStateClass(a){
+  if(a.published===false) return 'st-draft';
+  if(a.hasIssue || (a.status==='completed' && (a.dropPoints||[]).some(dp=>dp.status!=='completed'))) return 'st-issue';
+  if(a.status==='in_progress') return 'st-prog';
+  if(a.status==='completed') return 'st-done';
+  return 'st-sched';
+}
 function renderWeekGrid(containerId, dates){
   const wrap = document.getElementById(containerId);
   const originFilterVal = document.getElementById('originFilter').value;
   const origins = originFilterVal ? state.data.origins.filter(og=>og.address===originFilterVal) : state.data.origins;
 
+  const todayD = todayStr();
+  const colCls = d=> d===todayD ? 'today-col' : '';
   function cellHtml(route, date){
     if(!route) return `<td class="grid-black"></td>`;
     const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
-    if(!a) return `<td class="grid-cell" data-bdate="${date}" data-quickcreate="${route.id}|${date}">　</td>`;
+    if(!a) return `<td class="grid-cell st-empty ${colCls(date)}" data-bdate="${date}" data-quickcreate="${route.id}|${date}">　</td>`;
     // 驚嘆號的判斷改成「這趟只要有任何一個店點沒有status=completed」就顯示，
     // 不管是還沒處理、還是夥伴已經填了未完成原因（通路未下單/央廚未出貨等）——
     // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
     // 會漏掉「夥伴把每個店點都填了原因、allHandled視為true、結案時沒觸發
     // has_issue」的情況（詳細是哪個店點、什麼原因，只在點進去的任務明細顯示，
     // 這裡週期任務清單格子維持簡單，不重複塞理由文字）。
-    return `<td class="grid-cell" data-bdate="${date}" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
+    return `<td class="grid-cell ${taskStateClass(a)} ${colCls(date)}" data-bdate="${date}" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
   }
   function assignmentInner(a){
     const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
@@ -3336,9 +3415,9 @@ function renderWeekGrid(containerId, dates){
       .sort((x,y)=> rank(x)-rank(y) || (byId.get(x.routeId).seq||'').localeCompare(byId.get(y.routeId).seq||'', 'zh-Hant') || x.id.localeCompare(y.id));
     if(list.length===0) return cellHtml(preferred, date);
     if(list.length===1) return cellHtml(byId.get(list[0].routeId), date);
-    return `<td class="grid-cell grid-multi" data-bdate="${date}">${list.map(a=>{
+    return `<td class="grid-cell grid-multi ${colCls(date)}" data-bdate="${date}">${list.map(a=>{
       const label = (byId.get(a.routeId).seq.match(/[（(]([^）)]*)[）)]/)||[])[1] || '';
-      return `<div class="grid-sub" data-viewassign="${a.id}">${label?`<span class="grid-sub-label">${escapeHtml(label)}</span><br>`:''}${assignmentInner(a)}</div>`;
+      return `<div class="grid-sub ${taskStateClass(a)}" data-viewassign="${a.id}">${label?`<span class="grid-sub-label">${escapeHtml(label)}</span><br>`:''}${assignmentInner(a)}</div>`;
     }).join('')}</td>`;
   }
   function headerHtml(){
@@ -3346,12 +3425,12 @@ function renderWeekGrid(containerId, dates){
       const wd = new Date(d+'T00:00:00').getDay();
       const isWeekend = wd===0||wd===6;
       const holiday = holidayForDate(d);
-      return `<th colspan="2" data-bdate="${d}" class="${isWeekend?'weekend':''}">${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）${holiday?`<br><span style="font-weight:400; font-size:10.5px; color:var(--amber);">${escapeHtml(holiday.name)}</span>`:''}</th>`;
+      return `<th colspan="2" data-bdate="${d}" class="${isWeekend?'weekend':''} ${d===todayD?'today-col':''}">${d===todayD?'今天 ':''}${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）${holiday?`<br><span style="font-weight:400; font-size:10.5px; color:var(--amber);">${escapeHtml(holiday.name)}</span>`:''}</th>`;
     }).join('');
     const shiftRow = dates.map(d=>{
       const wd = new Date(d+'T00:00:00').getDay();
       const isWeekend = wd===0||wd===6;
-      return `<th class="${isWeekend?'weekend':''}">上午</th><th class="${isWeekend?'weekend':''}">下午</th>`;
+      return `<th class="${isWeekend?'weekend':''} ${d===todayD?'today-col':''}">上午</th><th class="${isWeekend?'weekend':''} ${d===todayD?'today-col':''}">下午</th>`;
     }).join('');
     return `<thead><tr><th></th>${dateRow}</tr><tr><th>車次</th>${shiftRow}</tr></thead>`;
   }
@@ -5194,7 +5273,38 @@ function renderTodayDetail(todays){
   const box = document.getElementById('todayDetail');
   // 「交給我支援」的店點（資料庫只讓我看到被交給我的那幾個）：另外一張卡片，沒有開始／完成按鈕、不顯示報酬。
   const supportToday = state.data.assignments.filter(a=>a.isSupport && a.date===todayStr());
-  if(!todays.length && !supportToday.length){ box.innerHTML = '<div class="empty">今天沒有排定任務</div>'; return; }
+  if(!todays.length && !supportToday.length){
+    // 今天有任務、而且全部都完成了：給一個完成畫面和今日報酬（沒任務才顯示「今天沒有排定任務」）。
+    const doneToday = state.data.assignments.filter(a=>a.driverId===state.activeDriverId && !a.isSupport && a.published!==false && a.date===todayStr() && a.status==='completed');
+    if(doneToday.length){
+      const earn = doneToday.reduce((n,a)=>n+tripPay(a),0);
+      box.innerHTML = `<div class="dv-done"><div class="big">🎉</div><h3>今天的任務全部完成了</h3><div style="font-size:13px; color:var(--ink-soft);">共 ${doneToday.length} 趟，辛苦了！</div><div class="amt">今日報酬 $${money(earn)}</div></div>`;
+    } else box.innerHTML = '<div class="empty">今天沒有排定任務</div>';
+    return;
+  }
+  // 進度與「下一站」：只統計今天的任務；下一站＝進行中的任務裡第一個還沒完成、也沒填未完成原因的店點，
+  // 沒有進行中的任務時就是今天第一個任務的第一站。
+  const todayMine = todays.filter(a=>a.date===todayStr());
+  const pending = dp=> dp.status!=='completed' && !dp.issueReason;
+  const allDps = todayMine.flatMap(a=>ownDropPoints(a));
+  const doneN = allDps.filter(dp=>dp.status==='completed').length;
+  let nextA = todayMine.find(a=>a.status==='in_progress' && ownDropPoints(a).some(pending)) || todayMine.find(a=>a.status==='scheduled');
+  const nextDp = nextA ? ownDropPoints(nextA).find(pending) : null;
+  const nextDpId = nextA && nextA.status==='in_progress' && nextDp ? nextDp.id : null;
+  const flashId = state._flashDp; state._flashDp = null;
+  const progHtml = allDps.length ? `<div class="dv-prog">
+      <div class="dv-top"><span>今日進度</span><span><b>${doneN}</b> / ${allDps.length} 站</span></div>
+      <div class="ov-bar" style="margin:8px 0 0;"><i style="width:${Math.round(doneN*100/allDps.length)}%"></i></div>
+    </div>` : '';
+  const nextHtml = (nextA && nextDp) ? `<div class="dv-next">
+      <span class="dv-tag">${nextA.status==='in_progress'?'下一站':'今天第一站'}</span>
+      <div class="dv-name">${escapeHtml(dpLabel(nextDp))}</div>
+      <div class="dv-addr">${escapeHtml(nextDp.address||'')}（${escapeHtml(channelName(nextDp.channelId))}）・${escapeHtml(routeName(nextA.routeId))}</div>
+      <div class="dv-actions">
+        <a class="btn amber" href="${mapLink(nextDp.address)}" target="_blank" rel="noopener">🧭 導航</a>
+        ${nextA.status==='in_progress' ? `<button class="btn ghost" data-gonext="${nextDp.id}">📷 拍照上傳</button>` : `<button class="btn ghost" data-gostart="${nextA.id}">開始任務</button>`}
+      </div>
+    </div>` : '';
   // 一個店點一列（狀態、拍照／上傳／導航按鈕、未完成原因）；readonly＝已交給支援夥伴，原夥伴只看狀態不能再動。
   const dpRow = (a, dp, readonly)=>{
     const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
@@ -5203,7 +5313,7 @@ function renderTodayDetail(todays){
       ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
       : '<span class="badge pending">待完成</span>';
     return `
-          <div class="drop-point-driver" data-dpid="${dp.id}">
+          <div class="drop-point-driver ${dp.id===nextDpId?'next-stop':''} ${dp.id===flashId?'flash':''}" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
             ${statusBadge}
             ${readonly ? `<span class="badge" style="background:#E3EEF7; color:#2F6EA5;">由${escapeHtml(dp.helperName||'支援夥伴')}支援</span>` : ''}
@@ -5237,7 +5347,7 @@ function renderTodayDetail(todays){
       <p style="font-size:12.5px; color:var(--ink-soft);">這是臨時交給您支援的店點（${a.dropPoints.length} 個），到店後直接拍照上傳即可，不需要再傳給原夥伴。完成後原夥伴會自動看到。</p>
       ${a.dropPoints.map(dp=>dpRow(a, dp, false)).join('')}
     </div>`).join('');
-  box.innerHTML = todays.map(a=>{
+  box.innerHTML = progHtml + nextHtml + todays.map(a=>{
     const mine = ownDropPoints(a);
     const allHandled = mine.length>0 && mine.every(dp=>dp.status==='completed' || dp.issueReason);
     const isPast = a.date < todayStr();
@@ -5267,6 +5377,12 @@ function renderTodayDetail(todays){
     const dp = dpById[el.dataset.dpid];
     const urls = dp ? dpPhotoUrls(dp) : [];
     if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
+  });
+  box.querySelectorAll('[data-gonext]').forEach(btn=>{
+    btn.onclick = ()=>{ const el = box.querySelector(`[data-dpid="${btn.dataset.gonext}"]`); if(el) el.scrollIntoView({behavior:'smooth', block:'center'}); };
+  });
+  box.querySelectorAll('[data-gostart]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await markAssignmentDeparted(btn.dataset.gostart); renderContent(); } catch(err){ alert(err.message); } };
   });
   box.querySelectorAll('[data-start]').forEach(btn=>{
     btn.onclick = async ()=>{
@@ -5313,6 +5429,7 @@ function renderTodayDetail(todays){
     async function goMany(dataUrls){
       try{
         for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
+        state._flashDp = dpid;
         renderContent();
       }catch(err){ console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
     }
@@ -5366,6 +5483,7 @@ function renderTodayDetail(todays){
           const dataUrls = [];
           for(const f of acceptFiles) dataUrls.push(await compressImageFile(f));
           for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
+          state._flashDp = dpid;
           if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
           renderContent();
         }catch(err){
