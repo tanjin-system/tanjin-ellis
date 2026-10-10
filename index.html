@@ -5140,6 +5140,8 @@ function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
 }
 // 請款單（PDF）專用版面：字放大、欄位精簡、金額醒目、摘要與明細分頁、依任務起點分頁、跨頁表頭重複。
 // 螢幕上的表格（電腦版／手機卡片）不受影響。
+// 請款單 PDF 的收款帳戶（只印在 PDF 上，主控畫面不顯示）。
+const BILLING_REMIT = { bank:'永豐銀行（807）', branch:'台北分行', holder:'信興行銷有限公司', account:'021-018-0008161-2' };
 function billingPrintHtml(reports, merged, channelIds, start, end){
   const multi = channelIds.length > 1;
   const chNames = reports.map(r=>escapeHtml(r.channel.name)).join('、');
@@ -5157,6 +5159,11 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     .bp .tot td{ font-size:16px; font-weight:700; background:#FFF3DC !important; }
     .bp .grand td{ font-size:20px; background:#FFE2A6 !important; }
     .bp .route{ font-size:13px; line-height:1.55; }
+    .bp .remit{ margin-top:22px; border:2px solid #E0902E; border-radius:6px; padding:12px 16px; background:#FFFBF1; }
+    .bp .remit h3{ margin:0 0 8px; font-size:16px; }
+    .bp .remit table{ margin:0; font-size:15px; } .bp .remit td{ border:none; padding:3px 8px 3px 0; background:transparent !important; }
+    .bp .remit td:first-child{ width:90px; color:#555; white-space:nowrap; }
+    .bp .remit .acct{ font-family:monospace; font-size:20px; font-weight:700; letter-spacing:.04em; }
     .bp td:nth-child(3), .bp td:nth-child(4), .bp th:nth-child(3), .bp th:nth-child(4){ white-space:nowrap; }
   </style>`;
   const fmt = n=> '$' + money(Math.round(n));
@@ -5190,6 +5197,14 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     <h1>信興行銷有限公司</h1>
     <div class="sub">物流費用請款單　｜　通路：${chNames}　｜　請款區間：${start} ~ ${end}　｜　製表日期：${todayStr()}</div>
     ${summary}
+    <div class="remit">
+      <h3>匯款資訊</h3>
+      <table><tbody>
+        <tr><td>銀　　行</td><td>${escapeHtml(BILLING_REMIT.bank)}　${escapeHtml(BILLING_REMIT.branch)}</td></tr>
+        <tr><td>戶　　名</td><td>${escapeHtml(BILLING_REMIT.holder)}</td></tr>
+        <tr><td>帳　　號</td><td class="acct">${escapeHtml(BILLING_REMIT.account)}</td></tr>
+      </tbody></table>
+    </div>
     ${details}
   </div>`;
 }
