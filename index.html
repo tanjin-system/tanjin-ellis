@@ -704,11 +704,20 @@ function exportPrintable(title, bodyHtml, heading, opts){
     const r = el.getBoundingClientRect();
     return { top: r.top - wrapTop, bottom: r.bottom - wrapTop };
   }).filter(z=> z.bottom > z.top);
+  // 請款單：標題不能孤零零留在頁底（跟後面表格的表頭＋第一列綁在一起），匯款資訊方塊也不能被切開
+  if(opts.repeatHeader){
+    wrap.querySelectorAll('h2').forEach(h=>{
+      const t = h.nextElementSibling;
+      const firstRow = t && t.tagName==='TABLE' && t.tBodies[0] && t.tBodies[0].rows[0];
+      if(firstRow){ const a = h.getBoundingClientRect(), b = firstRow.getBoundingClientRect(); avoidZones.push({ top:a.top-wrapTop, bottom:b.bottom-wrapTop }); }
+    });
+    wrap.querySelectorAll('.remit').forEach(el=>{ const r = el.getBoundingClientRect(); avoidZones.push({ top:r.top-wrapTop, bottom:r.bottom-wrapTop }); });
+  }
   // 強制換頁位置、跨頁表格的表頭位置（都是相對 wrap 頂端的 CSS px）
   const forcedCss = Array.from(wrap.querySelectorAll('.pdf-break')).map(el=> el.getBoundingClientRect().top - wrapTop);
   const tablesCss = opts.repeatHeader ? Array.from(wrap.querySelectorAll('table')).filter(t=>t.tHead).map(t=>{
     const tr = t.getBoundingClientRect(), hr = t.tHead.getBoundingClientRect();
-    return { top: tr.top - wrapTop, bottom: tr.bottom - wrapTop, headTop: hr.top - wrapTop, headBottom: hr.bottom - wrapTop };
+    return { top: tr.top - wrapTop, bottom: tr.bottom - wrapTop, headTop: hr.top - wrapTop, headBottom: hr.bottom - wrapTop, left: tr.left - wrapRect.left, right: tr.right - wrapRect.left };
   }) : [];
   html2canvas(wrap, { scale: 2, useCORS: true, scrollX: -scrollX, scrollY: -scrollY, windowWidth: document.documentElement.scrollWidth, windowHeight: document.documentElement.scrollHeight }).then(canvas=>{
     document.body.removeChild(wrap);
@@ -737,7 +746,7 @@ function exportPrintable(title, bodyHtml, heading, opts){
     }
     const totalHeightPx = canvas.height;
     const forcedPx = forcedCss.map(y=>y*canvasScale).sort((a,b)=>a-b);
-    const tablesPx = tablesCss.map(t=>({ top:t.top*canvasScale, bottom:t.bottom*canvasScale, headTop:t.headTop*canvasScale, headBottom:t.headBottom*canvasScale }));
+    const tablesPx = tablesCss.map(t=>({ top:t.top*canvasScale, bottom:t.bottom*canvasScale, headTop:t.headTop*canvasScale, headBottom:t.headBottom*canvasScale, left:t.left*canvasScale, right:t.right*canvasScale }));
     let cursorPx = 0, pageIndex = 0;
     while(cursorPx < totalHeightPx - 1){
       // 這一頁是不是從某張表格的中間開始：是的話，先在頁首補上那張表的表頭
@@ -754,6 +763,9 @@ function exportPrintable(title, bodyHtml, heading, opts){
       pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
       if(hdr) pctx.drawImage(canvas, 0, Math.round(hdr.headTop), canvas.width, hdrPx, 0, 0, canvas.width, hdrPx);
       pctx.drawImage(canvas, 0, Math.round(cursorPx), canvas.width, sliceHeightPx, 0, hdrPx, canvas.width, sliceHeightPx);
+      // 這一頁的結尾如果落在某張表格中間，表格底部補一條實線收尾（不然表格像被切斷、沒有底線）
+      const cutTable = tablesPx.find(t=> t.top < breakPx - 4 && t.bottom > breakPx + 4);
+      if(cutTable){ pctx.fillStyle = '#777'; pctx.fillRect(Math.round(cutTable.left), pageCanvas.height - 3, Math.round(cutTable.right - cutTable.left), 3); }
       const imgData = pageCanvas.toDataURL('image/jpeg', 0.95);
       if(pageIndex>0) pdf.addPage();
       pdf.addImage(imgData, 'JPEG', marginMm, marginMm, pageWmm, (sliceHeightPx + hdrPx) / pxPerMm);
@@ -5159,7 +5171,7 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     .bp .tot td{ font-size:16px; font-weight:700; background:#FFF3DC !important; }
     .bp .grand td{ font-size:20px; background:#FFE2A6 !important; }
     .bp .route{ font-size:13px; line-height:1.55; }
-    .bp .remit{ margin-top:22px; border:2px solid #E0902E; border-radius:6px; padding:12px 16px; background:#FFFBF1; }
+    .bp .remit{ break-inside:avoid; margin-top:22px; border:2px solid #E0902E; border-radius:6px; padding:12px 16px; background:#FFFBF1; }
     .bp .remit h3{ margin:0 0 8px; font-size:16px; }
     .bp .remit table{ margin:0; font-size:15px; } .bp .remit td{ border:none; padding:3px 8px 3px 0; background:transparent !important; }
     .bp .remit td:first-child{ width:90px; color:#555; white-space:nowrap; }
@@ -5190,13 +5202,14 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
         <td class="num">${r.km??'—'}</td><td class="num">${fmt(r.dailyTotal)}</td><td class="num">${fmt(r.dailyTotal*r.dayCount)}</td>
         ${multi ? channelIds.map(cid=>`<td class="num">${fmt((r.byChannel[cid]||0)*r.dayCount)}</td>`).join('') : ''}</tr>`;
     }).join('');
-    return `<div class="pdf-break" style="padding-top:1px;"><h2>${escapeHtml(originLabel(addr))}｜配送明細（已選通路：${chNames}）</h2>
+    return `<div><h2>${escapeHtml(originLabel(addr))}｜配送明細（已選通路：${chNames}）</h2>
       <table><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
-  }).join('') || '<div class="pdf-break"><h2>配送明細</h2><p>此區間無相關任務</p></div>';
+  }).join('') || '<div><h2>配送明細</h2><p>此區間無相關任務</p></div>';
   return `${css}<div class="bp">
     <h1>信興行銷有限公司</h1>
     <div class="sub">物流費用請款單　｜　通路：${chNames}　｜　請款區間：${start} ~ ${end}　｜　製表日期：${todayStr()}</div>
     ${summary}
+    ${details}
     <div class="remit">
       <h3>匯款資訊</h3>
       <table><tbody>
@@ -5205,7 +5218,6 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
         <tr><td>帳　　號</td><td class="acct">${escapeHtml(BILLING_REMIT.account)}</td></tr>
       </tbody></table>
     </div>
-    ${details}
   </div>`;
 }
 function channelSummaryPanelHtml(report){
