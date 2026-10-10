@@ -575,19 +575,35 @@ async function updateChannel(channelId, input) {
   if (idx >= 0) state.data.channels[idx] = mapChannel(data);
 }
 
-async function deleteOrDeactivateChannel(channelId) {
-  const referenced = state.data.dropPoints.some(dp => dp.channelId === channelId) ||
+// 這個通路有沒有被店點或（記憶體裡的）任務用過；用過就只能「停用」，不能刪除。
+function channelInUse(channelId) {
+  return state.data.dropPoints.some(dp => dp.channelId === channelId) ||
     state.data.assignments.some(a => a.dropPoints.some(dp => dp.channelId === channelId));
+}
+// 停用／恢復使用：歷史店點、任務、請款紀錄全部保留；停用後新增店點不能再選這個通路、首頁不再提醒它的請款週期。
+async function setChannelStatus(channelId, status) {
+  if (!['active', 'inactive'].includes(status)) throw new Error('狀態不正確');
   const supabase = getSupabase();
-  if (referenced) {
-    const { error } = await supabase.from('channels').update({ status: 'inactive' }).eq('id', channelId);
-    if (error) throw new Error('停用通路失敗：' + error.message);
-    const ch = state.data.channels.find(c => c.id === channelId);
-    if (ch) ch.status = 'inactive';
+  const { error } = await supabase.from('channels').update({ status }).eq('id', channelId);
+  if (error) throw new Error((status === 'inactive' ? '停用' : '恢復') + '通路失敗：' + error.message);
+  const ch = state.data.channels.find(c => c.id === channelId);
+  if (ch) ch.status = status;
+}
+async function deleteOrDeactivateChannel(channelId) {
+  const supabase = getSupabase();
+  if (channelInUse(channelId)) {
+    await setChannelStatus(channelId, 'inactive');
     return 'deactivated';
   }
   const { error } = await supabase.from('channels').delete().eq('id', channelId);
-  if (error) throw new Error('刪除通路失敗：' + error.message);
+  if (error) {
+    // 記憶體裡只有近期任務，更早的歷史任務可能還引用這個通路：資料庫會擋下刪除（外鍵），改成停用保留歷史。
+    if (error.code === '23503' || /foreign key|violates/i.test(error.message || '')) {
+      await setChannelStatus(channelId, 'inactive');
+      return 'deactivated';
+    }
+    throw new Error('刪除通路失敗：' + error.message);
+  }
   state.data.channels = state.data.channels.filter(c => c.id !== channelId);
   return 'deleted';
 }

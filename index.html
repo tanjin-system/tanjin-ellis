@@ -2268,7 +2268,7 @@ function renderChannelList(){
               <td>${ch.periodType==='calendar_month'?'自然月 1~月底':'每月'+ch.startDay+'日 至 次月'+ch.endDay+'日'}</td>
               <td><span class="badge ${ch.status==='inactive'?'pending':'completed'}">${ch.status==='inactive'?'已停用':'使用中'}</span></td>
               <td>${clientUrl ? `<input class="mono" readonly value="${clientUrl}" style="font-size:11px; padding:4px 6px;" onclick="this.select()"> <button class="btn ghost" data-regentoken="${ch.id}" style="padding:2px 8px; font-size:11px; margin-top:4px;">重新產生</button>` : `<button class="btn ghost" data-gentoken="${ch.id}" style="padding:4px 8px; font-size:12px;">產生連結</button>`}</td>
-              <td><button class="btn ghost" data-editch="${ch.id}">編輯</button> ${ch.status!=='inactive'?`<button class="btn danger" data-del="${ch.id}">刪除</button>`:''}</td>
+              <td><button class="btn ghost" data-editch="${ch.id}">編輯</button> ${ch.status==='inactive'?`<button class="btn ghost" data-resumech="${ch.id}">恢復使用</button>`:`<button class="btn ghost" data-stopch="${ch.id}">停用</button>`} ${channelInUse(ch.id)?'':`<button class="btn danger" data-del="${ch.id}" title="這個通路從來沒被店點或任務用過，可以直接刪除">刪除</button>`}</td>
             </tr>`;
           }).join('') || `<tr><td colspan="6"><div class="empty">尚無通路</div></td></tr>`}
         </tbody>
@@ -2311,10 +2311,21 @@ function renderChannelList(){
       }catch(err){ alert(err.message); }
     };
   });
+  el.querySelectorAll('[data-stopch]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = state.data.channels.find(x=>x.id===btn.dataset.stopch);
+      const nStores = state.data.dropPoints.filter(dp=>dp.channelId===btn.dataset.stopch && dp.status!=='inactive').length;
+      if(!confirm(`確定要停用通路「${ch?.name||''}」嗎？\n\n停用後：新增店點時不能再選這個通路、首頁不再提醒它的請款週期。\n歷史店點、任務、請款紀錄全部保留，請款結算仍可查到；隨時可以按「恢復使用」。${nStores?`\n\n注意：這個通路底下還有 ${nStores} 家使用中的店點，不會被自動停用。`:''}`)) return;
+      try{ await setChannelStatus(btn.dataset.stopch, 'inactive'); toast('已停用，隨時可以恢復使用。', { type:'ok' }); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-resumech]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await setChannelStatus(btn.dataset.resumech, 'active'); toast('已恢復使用。', { type:'ok' }); renderContent(); }catch(err){ alert(err.message); } };
+  });
   el.querySelectorAll('[data-del]').forEach(btn=>{
     btn.onclick = async ()=>{
       const ch = state.data.channels.find(x=>x.id===btn.dataset.del);
-      if(!confirm(`確定要刪除通路「${ch?.name||''}」嗎？\n\n如果這個通路已有店點或歷史任務關聯，系統會改為「已停用」保留歷史分類；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      if(!confirm(`確定要永久刪除通路「${ch?.name||''}」嗎？\n\n這個通路從來沒被店點或任務用過，刪除後無法復原。（通路只是暫時不用，請用「停用」，隨時可以恢復）`)) return;
       try{
         const result = await deleteOrDeactivateChannel(btn.dataset.del);
         if(result==='deactivated') alert('這個通路已有店點或歷史任務關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
@@ -5386,7 +5397,7 @@ function renderBilling(c){
   // 這個畫面查出來的任務資料只存在這個變數（畫面本身的區域狀態），不寫回
   // state.data.assignments，離開畫面後自然被丟棄，不需要額外清理。
   let billingAssignments = [];
-  const chChecks = state.data.channels.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" ${(state._billingChannelIds||[]).includes(ch.id)?'checked':''} style="width:auto;">${ch.name}</label>`).join('');
+  const chChecks = state.data.channels.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" ${(state._billingChannelIds||[]).includes(ch.id)?'checked':''} style="width:auto;">${ch.name}${ch.status==='inactive'?'<span style="color:var(--ink-soft); font-size:11px;">（已停用）</span>':''}</label>`).join('');
   const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
