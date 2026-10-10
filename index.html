@@ -15,7 +15,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon-180.png">
 <link rel="manifest" href="site.webmanifest">
 <meta name="theme-color" content="#F3E7CF">
-<script>try{ if(localStorage.getItem('theme')==='dark') document.documentElement.setAttribute('data-theme','dark'); }catch(e){}</script>
+<script>try{ if(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.setAttribute('data-theme','dark'); }catch(e){}</script>
 <meta name="apple-mobile-web-app-title" content="信興｜碳金 Hub">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -403,7 +403,6 @@
     <div id="globalSearchList" style="display:none;"></div>
   </div>
   <div class="role-switch">
-    <button class="btn ghost" id="themeBtn" title="切換夜間模式" style="padding:5px 10px; font-size:13px; color:#fff; border-color:#445067;">🌙</button>
     <span id="whoAmI" style="font-size:12.5px;"></span>
     <button class="btn ghost" id="logoutBtn" style="display:none; padding:5px 10px; font-size:12px;">登出／切換身份</button>
   </div>
@@ -1236,21 +1235,19 @@ function toast(msg, opts){
 }
 window.alert = msg=>{ toast(msg); };
 
-// ---------- 夜間模式 ----------
-function applyTheme(t){
-  const dark = t==='dark';
+// ---------- 夜間模式：跟著裝置的日間／夜間設定自動切換（不用手動） ----------
+// 手機／電腦的系統外觀切到夜間（或排程自動切換）時，畫面即時跟著變，不需要重新整理。
+function applyTheme(dark){
   if(dark) document.documentElement.setAttribute('data-theme','dark'); else document.documentElement.removeAttribute('data-theme');
-  const b = document.getElementById('themeBtn'); if(b){ b.textContent = dark ? '☀️' : '🌙'; b.title = dark ? '切換為日間模式' : '切換為夜間模式'; }
   const meta = document.querySelector('meta[name="theme-color"]'); if(meta) meta.setAttribute('content', dark ? '#12161C' : '#F3E7CF');
 }
 (function initTheme(){
-  let t = 'light'; try{ t = localStorage.getItem('theme')==='dark' ? 'dark' : 'light'; }catch(e){}
-  applyTheme(t);
-  const b = document.getElementById('themeBtn');
-  if(b) b.onclick = ()=>{
-    const next = document.documentElement.getAttribute('data-theme')==='dark' ? 'light' : 'dark';
-    applyTheme(next); try{ localStorage.setItem('theme', next); }catch(e){}
-  };
+  try{ localStorage.removeItem('theme'); }catch(e){} // 舊版的手動選擇不再使用
+  if(!window.matchMedia) return;
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  applyTheme(mq.matches);
+  const onChange = e=> applyTheme(e.matches);
+  if(mq.addEventListener) mq.addEventListener('change', onChange); else if(mq.addListener) mq.addListener(onChange);
 })();
 
 // ---------- 表格優化：金額欄標題靠右、扣款紅／加項綠、長表格表頭釘住 ----------
