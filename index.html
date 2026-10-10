@@ -192,7 +192,7 @@
   .dv-next .dv-addr{ font-size:13px; color:var(--ink-soft); }
   .dv-next .dv-actions{ display:flex; gap:8px; margin-top:12px; }
   .dv-next .dv-actions .btn{ flex:1; padding:13px 10px; font-size:15px; text-decoration:none; }
-  .drop-point-driver.next-stop{ border-left:5px solid var(--amber); background:var(--tint-warn); }
+  .drop-point-driver.next-stop, .drop-point-driver.next-stop:nth-child(even){ border-left:5px solid var(--amber); background:var(--tint-warn); }
   .drop-point-driver.flash{ animation:dvflash 1.2s ease-out; }
   @keyframes dvflash{ 0%{ background:#C9E6D2; transform:scale(1.02);} 100%{ background:transparent; transform:none;} }
   .dv-done{ text-align:center; border:2px solid #2C6B44; background:var(--tint-ok); border-radius:12px; padding:22px 14px; margin-bottom:14px; }
@@ -211,6 +211,13 @@
   @keyframes sunrise{ 0%{ transform:translateY(140px) scale(.5); opacity:0; } 70%{ opacity:1; } 100%{ transform:none; opacity:1; } }
   @keyframes greetup{ from{ opacity:0; transform:translateY(16px); } to{ opacity:1; transform:none; } }
   @media (prefers-reduced-motion: reduce){ .greet, .greet .gicon, .greet h1, .greet .gsub, .greet .gtap{ animation:none; } }
+  /* 照片上傳／拍照成功的打勾回饋：畫面中央大勾勾一閃＋店點上常駐「✓ 已上傳 N 張」 */
+  .upok{ display:inline-flex; align-items:center; gap:6px; background:#DCEBE0; color:#2C6B44; border-radius:99px; padding:2px 10px 2px 3px; font-weight:700; font-size:13px; }
+  .upok b{ background:#2C6B44; color:#fff; border-radius:50%; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; font-size:13px; }
+  html[data-theme=dark] .upok{ background:#1F3A2A; color:#8FD2A5; }
+  #checkOverlay{ position:fixed; inset:0; z-index:340; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+  #checkOverlay div{ width:110px; height:110px; border-radius:50%; background:#2C6B44; color:#fff; font-size:70px; line-height:110px; text-align:center; box-shadow:0 8px 30px rgba(0,0,0,.35); animation:checkpop 1.3s ease-out forwards; }
+  @keyframes checkpop{ 0%{ transform:scale(.3); opacity:0; } 25%{ transform:scale(1.15); opacity:1; } 40%{ transform:scale(1); } 80%{ opacity:1; } 100%{ transform:scale(1); opacity:0; } }
   .dv-done.anim{ animation:dvpop .6s cubic-bezier(.2,1.4,.4,1); }
   .dv-done.anim .big{ display:inline-block; animation:dvbounce 1s ease-out .2s 2; }
   @keyframes dvpop{ 0%{ transform:scale(.6); opacity:0; } 100%{ transform:scale(1); opacity:1; } }
@@ -300,7 +307,7 @@
   .drop-point{ border:1px dashed var(--border); border-radius:var(--radius); padding:9px; margin-top:7px; font-size:12.5px; }
   .drop-point img{ max-width:70px; border-radius:2px; margin-top:6px; }
   .drop-point-driver{ border:none; padding:10px 9px; margin:0; font-size:12.5px; background:var(--panel); }
-  .drop-point-driver:nth-child(even){ background:#E9EAEC; }
+  .drop-point-driver:nth-child(even){ background:var(--chip); }
   .drop-point-driver img{ max-width:70px; border-radius:2px; margin-top:6px; }
   .store-name{ font-size:16px; font-weight:700; color:var(--danger); }
   .week-nav{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
@@ -5911,6 +5918,15 @@ function showGreeting(){
   el.onclick = close;
 }
 // 今天全部完成的慶祝動畫：彩帶＋卡片彈出＋金額數字跳動，每位夥伴每天只播一次；之後同一天再進來就維持靜態完成畫面，隔天（午夜 12 點後）自動換新的一天。
+// 照片上傳成功：畫面中央大勾勾一閃（約 1.3 秒）＋通知，讓夥伴確定「有傳成功」。
+function showCheckOverlay(n){
+  document.getElementById('checkOverlay')?.remove();
+  const el = document.createElement('div'); el.id = 'checkOverlay'; el.innerHTML = '<div>✓</div>';
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), 1400);
+  toast(`照片上傳成功${n?`（${n} 張）`:''}`, { type:'ok' });
+  try{ if(navigator.vibrate) navigator.vibrate(60); }catch(e){}
+}
 function playCelebration(card, earn){
   if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){ const a = card.querySelector('.amt'); if(a) a.textContent = '今日報酬 $'+money(earn); return; }
   const host = document.createElement('div'); host.id = 'confettiHost';
@@ -5999,6 +6015,7 @@ function renderTodayDetail(todays){
           <div class="drop-point-driver ${dp.id===nextDpId?'next-stop':''} ${dp.id===flashId?'flash':''}" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
             ${statusBadge}
+            ${photoCount ? `<span class="upok"><b>✓</b>已上傳 ${photoCount} 張</span>` : ''}
             ${readonly ? `<span class="badge" style="background:#E3EEF7; color:#2F6EA5;">由${escapeHtml(dp.helperName||'支援夥伴')}支援</span>` : ''}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未完成：${dp.issueReason}</span>` : ''}
             ${readonly ? '' : `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
@@ -6116,6 +6133,7 @@ function renderTodayDetail(todays){
         up.dismiss();
         state._flashDp = dpid;
         renderContent();
+        showCheckOverlay(dataUrls.length);
       }catch(err){ up.dismiss(); console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
     }
     btn.onclick = ()=>{
@@ -6169,6 +6187,7 @@ function renderTodayDetail(todays){
           for(const f of acceptFiles) dataUrls.push(await compressImageFile(f));
           for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
           state._flashDp = dpid;
+          showCheckOverlay(acceptFiles.length);
           if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
           renderContent();
         }catch(err){
