@@ -5171,6 +5171,7 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     .bp .tot td{ font-size:16px; font-weight:700; background:#FFF3DC !important; }
     .bp .grand td{ font-size:20px; background:#FFE2A6 !important; }
     .bp .route{ font-size:13px; line-height:1.55; }
+    .bp .pct{ font-family:inherit; font-weight:400; font-size:12px; color:#666; }
     /* 全站樣式有 tr:last-child td{border-bottom:none}，會把每張表最後一列的底線吃掉（表格看起來沒收尾），這裡蓋回來 */
     .bp table tr:last-child > td, .bp table tr:last-child > th{ border-bottom:1.5px solid #666 !important; }
     .bp .remit tr:last-child td{ border-bottom:none !important; }
@@ -5201,7 +5202,7 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
       const stops = (r.dropLabel||'—').split('➔').map(escapeHtml).join(' → ');
       const total = channelIds.reduce((sum,cid)=> sum+(r.storeCounts[cid]||0), 0);
       return `<tr><td style="white-space:nowrap;">${period}</td><td class="num">${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td><td class="route">${stops}</td>
-        ${multi ? channelIds.map(cid=>`<td class="num">${r.storeCounts[cid]||0}</td>`).join('') : `<td class="num">${total}</td>`}
+        ${multi ? channelIds.map(cid=>`<td class="num">${r.storeCounts[cid]||0}<br><span class="pct">${r.dailyTotal ? ((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1) : '0.0'}%</span></td>`).join('') : `<td class="num">${total}</td>`}
         <td class="num">${r.km??'—'}</td><td class="num">${fmt(r.dailyTotal)}</td><td class="num">${fmt(r.dailyTotal*r.dayCount)}</td>
         ${multi ? channelIds.map(cid=>`<td class="num">${fmt((r.byChannel[cid]||0)*r.dayCount)}</td>`).join('') : ''}</tr>`;
     }).join('');
