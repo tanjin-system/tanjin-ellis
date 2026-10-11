@@ -96,8 +96,8 @@ async function pushRenderBox(el) {
   let prefs = await pushLoadPrefs(sub.endpoint);
   const on = k => prefs[k] !== false;
   el.innerHTML = '<p class="section-sub" style="margin:0 0 8px;">這支手機已開啟通知。想收哪些，自己決定：</p>'
-    + kinds.map(([k, label]) => `<label style="display:flex; align-items:center; gap:8px; padding:7px 0; font-size:14px;"><input type="checkbox" data-pk="${k}" ${on(k) ? 'checked' : ''}> ${label}</label>`).join('')
-    + `<label style="display:flex; align-items:center; gap:8px; padding:7px 0; font-size:14px;"><input type="checkbox" id="pushQuiet" ${prefs.quiet ? 'checked' : ''}> 勿擾時段（晚上 10 點到早上 6 點不通知）</label>`
+    + kinds.map(([k, label]) => `<label style="display:flex; align-items:center; gap:8px; padding:7px 0; font-size:14px;"><input type="checkbox" data-pk="${k}" ${on(k) ? 'checked' : ''} style="width:auto; flex:none; margin:0;"> ${label}</label>`).join('')
+    + `<label style="display:flex; align-items:center; gap:8px; padding:7px 0; font-size:14px;"><input type="checkbox" id="pushQuiet" ${prefs.quiet ? 'checked' : ''} style="width:auto; flex:none; margin:0;"> 勿擾時段（晚上 10 點到早上 6 點不通知）</label>`
     + '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"><button class="btn ghost" id="pushTest">傳一則測試通知</button><button class="btn ghost" id="pushOff">關閉這支手機的通知</button></div>';
   const save = async () => {
     const next = {};
