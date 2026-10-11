@@ -1770,6 +1770,11 @@ async function wrExtLoad(){
 async function bootWarRoomExternal(token){
   state._wrExternal = token; state.role = 'wr'; state.tab = 'warroom';
   document.title = '碳金戰情室';
+  // 加入主畫面時要記住帶金鑰的網址：換成外部連結專屬的 manifest（見 api/warroom.js），並把主畫面名稱／狀態列色一併設好
+  { let ml = document.querySelector('link[rel="manifest"]'); if(!ml){ ml = document.createElement('link'); ml.rel = 'manifest'; document.head.appendChild(ml); }
+    ml.href = '/api/warroom?manifest=1&token=' + encodeURIComponent(token);
+    const meta = (n, v)=>{ let m = document.querySelector('meta[name="'+n+'"]'); if(!m){ m = document.createElement('meta'); m.name = n; document.head.appendChild(m); } m.content = v; };
+    meta('apple-mobile-web-app-title', '碳金戰情室'); meta('apple-mobile-web-app-capable', 'yes'); meta('theme-color', '#0A0F1A'); }
   document.getElementById('loginGate').style.display = 'none';
   document.getElementById('appLayout').style.display = 'flex';
   document.body.classList.add('wr-full');

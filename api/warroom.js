@@ -28,6 +28,24 @@ module.exports = async (req, res) => {
     return res.status(404).json({ error: '連結無效或已停用，請向主控確認最新連結。' });
   }
 
+  // 「加入主畫面」用的專屬 manifest：系統本身的 site.webmanifest 起始網址固定是首頁，加到主畫面後會丟掉 ?wr=金鑰、
+  // 點開變成登入畫面。外部連結頁面載入時把 <link rel="manifest"> 換成這支，起始網址就帶著金鑰。
+  if (req.query.manifest) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    return res.status(200).send(JSON.stringify({
+      name: '碳金戰情室', short_name: '戰情室', description: '碳金戰情室（唯讀）',
+      start_url: '/?wr=' + encodeURIComponent(token), scope: '/', display: 'standalone',
+      background_color: '#0A0F1A', theme_color: '#0A0F1A',
+      icons: [
+        { src: '/assets/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: '/assets/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: '/assets/icons/maskable-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+        { src: '/assets/icons/maskable-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+      ]
+    }));
+  }
+
   const today = taipeiToday(), d7 = addDays(today, -7), d14 = addDays(today, -14);
   try {
     const [todayRes, histRes, originsRes, routesRes] = await Promise.all([
