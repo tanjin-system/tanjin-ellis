@@ -38,10 +38,10 @@ module.exports = async (req, res) => {
       start_url: '/wr/' + encodeURIComponent(token), scope: '/', display: 'standalone',
       background_color: '#0A0F1A', theme_color: '#0A0F1A',
       icons: [
-        { src: '/assets/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-        { src: '/assets/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-        { src: '/assets/icons/maskable-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-        { src: '/assets/icons/maskable-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+        { src: '/assets/icons/wr-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: '/assets/icons/wr-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: '/assets/icons/wr-maskable-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+        { src: '/assets/icons/wr-maskable-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
       ]
     }));
   }
