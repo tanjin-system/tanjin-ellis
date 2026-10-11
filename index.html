@@ -1795,17 +1795,23 @@ function wrLeaveFull(){
   if(state._wrExternal) return;
   if(!document.body.classList.contains('wr-full')) return;
   document.body.classList.remove('wr-full');
-  try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){}
+  if(wrFsEl()) wrFsExit();
 }
+// 網頁全螢幕：Safari 舊版只有 webkit 前綴、iPhone 完全不支援，所以統一包起來；不支援時要告訴使用者怎麼辦，不能按了沒反應。
+function wrFsEl(){ return document.fullscreenElement || document.webkitFullscreenElement || null; }
+function wrFsEnter(){ const el = document.documentElement, f = el.requestFullscreen || el.webkitRequestFullscreen; if(!f) return Promise.reject(new Error('unsupported')); try{ const r = f.call(el); return (r && r.then) ? r : Promise.resolve(); }catch(e){ return Promise.reject(e); } }
+function wrFsExit(){ const f = document.exitFullscreen || document.webkitExitFullscreen; try{ if(f) f.call(document); }catch(e){} }
+function wrFsTip(){ toast('這個瀏覽器不能用網頁全螢幕。iPhone／iPad：按「分享 → 加入主畫面」，之後從主畫面圖示開啟就是全螢幕；電腦或電視瀏覽器：按 F11。', { type:'info', sticky:true }); }
 function wrToggleFull(){
-  if(state._wrExternal){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
+  if(state._wrExternal){ if(wrFsEl()) wrFsExit(); else wrFsEnter().catch(wrFsTip); return; }
   if(document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); return; }
   document.body.classList.add('wr-full');
-  try{ const el = document.documentElement; if(el.requestFullscreen) el.requestFullscreen().catch(()=>{}); }catch(e){}
+  wrFsEnter().catch(()=>{});
   wrUpdateFullBtn();
 }
-function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(!b) return; const on = state._wrExternal ? !!document.fullscreenElement : document.body.classList.contains('wr-full'); b.textContent = on ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
-document.addEventListener('fullscreenchange', ()=>{ if(state._wrExternal){ wrUpdateFullBtn(); return; } if(!document.fullscreenElement && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } });
+function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(!b) return; const on = state._wrExternal ? !!wrFsEl() : document.body.classList.contains('wr-full'); b.textContent = on ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
+const wrOnFsChange = ()=>{ if(state._wrExternal){ wrUpdateFullBtn(); return; } if(!wrFsEl() && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } };
+document.addEventListener('fullscreenchange', wrOnFsChange); document.addEventListener('webkitfullscreenchange', wrOnFsChange);
 document.addEventListener('keydown', e=>{ if(!state._wrExternal && e.key==='Escape' && document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); } });
 setInterval(()=>{ if(state.data && state.tab==='warroom' && document.getElementById('wrRoot')) wrUpdate(); }, 15000);
 async function renderWarRoom(c){
@@ -1826,6 +1832,7 @@ async function renderWarRoom(c){
     showMute();
     muteBtn.onclick = ()=>{ root.classList.toggle('mute'); try{ localStorage.setItem('wrMute', root.classList.contains('mute')?'1':'0'); }catch(e){} showMute(); };
     document.getElementById('wrFull').onclick = wrToggleFull; wrUpdateFullBtn();
+    if(state._wrExternal && ((window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone)) document.getElementById('wrFull').style.display = 'none'; // 從主畫面開啟已經是全螢幕
     root.addEventListener('change', e=>{ const id = e.target.getAttribute && e.target.getAttribute('data-sel'); if(id) W.sel[id] = e.target.value; });
     root.addEventListener('click', e=>{
       const t = e.target, a = t.getAttribute && t.getAttribute('data-a');
