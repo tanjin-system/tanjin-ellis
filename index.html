@@ -2891,6 +2891,20 @@ function renderDropPoints(c){
 }
 // 地圖座標：把店點地址轉成經緯度（路線管理的地圖路線、預計時間用）。免費、只查一次，每秒一家，所以一次補齊很多家要幾分鐘。
 let geoCancel = { stop:false }, geoRunning = false;
+function suspectDropPoints(list){
+  const km = (a,b,c,d)=>{ const R=6371, r=x=>x*Math.PI/180, dLat=r(c-a), dLng=r(d-b); const h=Math.sin(dLat/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(h)); };
+  const groups = new Map();
+  list.filter(d=>d.lat!=null && d.lng!=null).forEach(d=>{ const k=(d.address||'').replace(/\s+/g,'').slice(0,6); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(d); });
+  const med = arr=>{ const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; };
+  const out = [];
+  list.forEach(d=>{ if(d.lat!=null && (d.lat<21.5 || d.lat>26.5 || d.lng<118 || d.lng>123)) out.push({ dp:d, km:999 }); });
+  groups.forEach(g=>{
+    if(g.length<3) return;
+    const cl = med(g.map(d=>d.lat)), cn = med(g.map(d=>d.lng));
+    g.forEach(d=>{ const k = km(d.lat, d.lng, cl, cn); if(k>12 && !out.find(o=>o.dp.id===d.id)) out.push({ dp:d, km:k }); });
+  });
+  return out.sort((a,b)=>b.km-a.km);
+}
 function renderGeoBox(){
   const box = document.getElementById('geoBox'); if(!box) return;
   const active = state.data.dropPoints.filter(dp=>dp.status!=='inactive');
@@ -2903,7 +2917,16 @@ function renderGeoBox(){
   </div>
   ${miss.length ? `<details class="fold-d no-print" style="margin:-4px 0 12px;" ${state._geoListOpen?'open':''} ontoggle="state._geoListOpen=this.open"><summary style="font-weight:600;"><span>沒有位置的店點（${miss.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　自動查不到的，可以在這裡一家一家手動指定</span></span></summary>
     <div class="panel" style="margin-top:6px;"><table><thead><tr><th>代號</th><th>地址</th><th>通路</th><th></th></tr></thead><tbody>${miss.map(dp=>`<tr><td class="mono">${escapeHtml(dp.code||'—')}</td><td>${escapeHtml(dp.address)}${(state._geoFailed&&state._geoFailed.has(dp.id))?' <span class="badge pending">自動查不到</span>':''}</td><td>${escapeHtml(channelName(dp.channelId))}</td><td><button class="btn amber" data-geoloc="${dp.id}">指定位置</button></td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
-  box.querySelectorAll('[data-geoloc]').forEach(b=>{ b.onclick = ()=> openDpLocate(b.dataset.geoloc); });
+  // 位置可疑：自動查詢退而求其次只查到「路名」，或同名路在別的縣市，位置就可能差很遠。
+  // 這裡抓「離同一縣市區其他店的中心太遠」的店點（同區至少 3 家有座標才判斷），讓你優先檢查。
+  const sus = suspectDropPoints(active);
+  if(sus.length){
+    const wrapEl = document.createElement('div');
+    wrapEl.innerHTML = `<details class="fold-d no-print" style="margin:-4px 0 12px;" ${state._geoSusOpen?'open':''} ontoggle="state._geoSusOpen=this.open"><summary style="font-weight:600;"><span>位置可能不準的店點（${sus.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　離同一區其他店很遠，建議逐一檢查</span></span></summary>
+      <div class="panel" style="margin-top:6px;"><table><thead><tr><th>代號</th><th>地址</th><th>離同區中心</th><th></th></tr></thead><tbody>${sus.map(x=>`<tr><td class="mono">${escapeHtml(x.dp.code||'—')}</td><td>${escapeHtml(x.dp.address)}</td><td>${x.km<1?'<1':Math.round(x.km)} 公里</td><td><button class="btn amber" data-geoloc="${x.dp.id}">檢查／修正</button></td></tr>`).join('')}</tbody></table></div></details>`;
+    box.appendChild(wrapEl);
+  }
+  box.querySelectorAll('[data-geoloc]').forEach(b=>{ b.onclick = ()=> openLocate('dp', b.dataset.geoloc); });
   const go = box.querySelector('#geoGo'); if(!go) return;
   go.onclick = async ()=>{
     if(geoRunning) return;
@@ -3025,8 +3048,9 @@ function renderDpListBody(){
       </td></tr>`;
     }
     const inactive = dp.status==='inactive';
-    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
-    <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} ${dropPointInUse(dp.id)?'':`<button class="btn danger" data-del="${dp.id}" title="這家店從來沒被路線或任務用過，可以直接刪除">刪除</button>`}</td></tr>`;
+    const hasPos = dp.lat!=null && dp.lng!=null;
+    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}${hasPos?'':' <span class="badge pending">沒有位置</span>'}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
+    <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn ghost" data-locdp="${dp.id}" title="在地圖上檢查或修正這家店的位置">${hasPos?'修正位置':'指定位置'}</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} ${dropPointInUse(dp.id)?'':`<button class="btn danger" data-del="${dp.id}" title="這家店從來沒被路線或任務用過，可以直接刪除">刪除</button>`}</td></tr>`;
   };
   const head = '<thead><tr><th>代號</th><th>地址</th><th>目前排在哪些路線</th><th>狀態</th><th></th></tr></thead>';
   wrap.innerHTML = state.data.channels.map(ch=>{
@@ -3062,6 +3086,7 @@ function renderDpListBody(){
       renderDpListBody();
     };
   });
+  wrap.querySelectorAll('[data-locdp]').forEach(btn=>{ btn.onclick = ()=> openLocate('dp', btn.dataset.locdp); });
   wrap.querySelectorAll('[data-editdp]').forEach(btn=>{ btn.onclick = ()=>{ editingDpId = btn.dataset.editdp; renderDpListBody(); }; });
   wrap.querySelectorAll('[data-canceldp]').forEach(btn=>{ btn.onclick = ()=>{ editingDpId = null; renderDpListBody(); }; });
   wrap.querySelectorAll('[data-savedp]').forEach(btn=>{
