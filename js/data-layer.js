@@ -333,7 +333,7 @@ async function loadAllData() {
   }
 
   const data = {
-    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null, warroomConfig: byKey.settingsRes?.data?.warroom_config || null },
+    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null, warroomConfig: byKey.settingsRes?.data?.warroom_config || null, warroomToken: byKey.settingsRes?.data?.warroom_token || null },
     drivers: cachedCatalog ? cachedCatalog.drivers : (byKey.driversRes.data || []).map(mapDriver),
     channels: cachedCatalog ? cachedCatalog.channels : (byKey.channelsRes.data || []).map(mapChannel),
     origins: cachedCatalog ? cachedCatalog.origins : (byKey.originsRes.data || []).map(mapOrigin),
@@ -2289,6 +2289,12 @@ async function saveWarroomConfig(cfg) {
   const { error } = await supabase.from('settings').update({ warroom_config: cfg }).eq('id', 1);
   if (error) throw new Error('儲存戰情室門檻失敗：' + error.message);
   state.data.settings.warroomConfig = cfg;
+}
+async function saveWarroomToken(token) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('settings').update({ warroom_token: token }).eq('id', 1);
+  if (error) throw new Error('儲存外部連結失敗：' + error.message);
+  state.data.settings.warroomToken = token;
 }
 async function fetchWarroomMarks(assignmentIds) {
   const supabase = getSupabase();

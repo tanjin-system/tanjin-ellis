@@ -1613,8 +1613,9 @@ function wrCardHtml(c, anim){
   else if(c.s==='done' && c.resolvedTxt) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolvedTxt)+'</span>';
   const bd = c.batch ? '<div class="bd">🟣 批次上傳，部分時間不準</div>' : '';
   let btn = '';
-  if(c.why==='issue' && !c.steady) btn = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
-  if(c.why==='issue' && c.steady){
+  const ro = !!state._wrExternal;
+  if(!ro && c.why==='issue' && !c.steady) btn = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
+  if(!ro && c.why==='issue' && c.steady){
     const cur = W.sel[c.id] || '已聯絡店家';
     btn = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>';
   }
@@ -1647,15 +1648,15 @@ function wrDetailHtml(c){
     if(d.issueReason) return '<div class="wr-st iss"><b>⚠</b><span>'+nm+'<br><small>'+escapeHtml(d.issueReason)+'</small></span><em>未完成</em></div>';
     return '<div class="wr-st pend"><b>○</b><span>'+nm+'</span><em>待完成</em></div>';
   };
-  const W = wrState(); let act = '';
-  if(c.why==='issue' && !c.steady) act = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
-  if(c.why==='issue' && c.steady){ const cur = W.sel[c.id] || '已聯絡店家'; act = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>'; }
+  const W = wrState(), ro = !!state._wrExternal; let act = '';
+  if(!ro && c.why==='issue' && !c.steady) act = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
+  if(!ro && c.why==='issue' && c.steady){ const cur = W.sel[c.id] || '已聯絡店家'; act = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>'; }
   const tel = c.phone ? '<a href="tel:'+escapeHtml(c.phone)+'">📞 '+escapeHtml(c.phone)+'</a>' : '';
   return '<button class="x" data-a="close">✕ 關閉</button><h3>'+escapeHtml(c.origin+' '+c.label)+'</h3>'
     + '<div class="who">'+(c.driver ? '夥伴：'+escapeHtml(c.driver)+tel : '（空缺，沒有夥伴）')+'</div>'
     + '<div class="why" style="--c:'+WR_COL[c.s]+'"><b>'+wrChip(c)+'</b><br>'+why+(c.resolution?'<br><span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>':'')+'</div>'+act
     + (dps.length ? '<h4>店點（'+doneL.length+' / '+dps.length+' 站完成）</h4>'+doneL.concat(restL).map(row).join('') : '')
-    + '<button class="go" data-a="goto">'+(c.why==='gap'?'前往週期任務清單排人':'前往週期任務清單看這一趟')+'</button>';
+    + (ro ? '' : '<button class="go" data-a="goto">'+(c.why==='gap'?'前往週期任務清單排人':'前往週期任務清單看這一趟')+'</button>');
 }
 function wrBuild(){
   const cfg = wrCfg(), cards = wrCompute();
@@ -1687,7 +1688,7 @@ function wrUpdate(){
   const root = document.getElementById('wrRoot'); if(!root) return;
   const W = wrState(), b = wrBuild(), now = new Date();
   document.getElementById('wrClock').textContent = pad(now.getHours())+':'+pad(now.getMinutes());
-  document.getElementById('wrDate').textContent = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（週${'日一二三四五六'[now.getDay()]}）`+(W.err?'　⚠️ 已看到／已處理的標記暫時無法同步':'');
+  document.getElementById('wrDate').textContent = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（週${'日一二三四五六'[now.getDay()]}）`+(W.err?(state._wrExternal?'　⚠️ 連線中斷，稍後自動重試':'　⚠️ 已看到／已處理的標記暫時無法同步'):'');
   const set = (id, html)=>{ const el = document.getElementById(id); if(el && W.cache[id]!==html){ el.innerHTML = html; W.cache[id] = html; return true; } return false; };
   W.cards = b.cards;
   set('wrKp', b.kpHtml); set('wrNeed', b.needHtml);
@@ -1715,6 +1716,7 @@ function wrUpdate(){
   }
 }
 async function wrLoadMarks(force){
+  if(state._wrExternal) return;
   const W = wrState();
   if(!force && Date.now()-W.loadedAt < 20000) return;
   W.loadedAt = Date.now();
@@ -1747,20 +1749,64 @@ async function wrBackupRefresh(){
   try{ const t = todayStr(); await refreshAssignmentsRange(t, t); await wrLoadMarks(true); }catch(e){ console.error('戰情室備援更新失敗', e); }
   wrUpdate();
 }
+// ---------- 戰情室外部連結（不登入、唯讀、給大螢幕）：網址 /?wr=<token> ----------
+// 外部畫面只拿得到「路線、進度、狀態」：沒有夥伴姓名與電話、店點名稱、未完成原因內容（見 api/warroom.js）。
+async function wrExtLoad(){
+  const W = wrState();
+  try{
+    const r = await fetch('/api/warroom?token='+encodeURIComponent(state._wrExternal), { cache:'no-store' });
+    if(r.status===404 || r.status===400){ const j = await r.json().catch(()=>({})); state._wrExternalDead = j.error || '連結無效或已停用'; return; }
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const p = await r.json();
+    state._wrExternalDead = null;
+    state.data = { settings:{ warroomConfig:p.config }, assignmentsWindowStart:p.windowStart,
+      drivers:[{ id:'x', name:'已排人', phone:'' }], origins:p.origins, routes:p.routes, channels:[], dropPoints:[],
+      assignments:p.assignments.map(a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.hasDriver?'x':null, status:a.status, published:true, isSupport:false,
+        dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.hasIssue?'有回報未完成原因':null, code:'第 '+(i+1)+' 站', address:'' })) })) };
+    W.marks = new Map(p.marks.map(m=>[m.assignmentId, { acked:m.acked, resolved:m.resolved, resolution:'' }]));
+    W.err = false;
+  }catch(e){ W.err = true; console.error('戰情室外部連結載入失敗', e); }
+}
+async function bootWarRoomExternal(token){
+  state._wrExternal = token; state.role = 'wr'; state.tab = 'warroom';
+  document.title = '碳金戰情室';
+  document.getElementById('loginGate').style.display = 'none';
+  document.getElementById('appLayout').style.display = 'flex';
+  document.body.classList.add('wr-full');
+  const c = document.getElementById('content');
+  c.innerHTML = '<div class="wr"><div class="wr-empty">載入中…</div></div>';
+  await wrExtLoad();
+  const show = ()=>{
+    if(state._wrExternalDead){ c.innerHTML = '<div class="wr"><div class="wr-empty">'+escapeHtml(state._wrExternalDead)+'</div></div>'; return false; }
+    if(!state.data){ c.innerHTML = '<div class="wr"><div class="wr-empty">連線中斷，稍後自動重試…</div></div>'; return true; }
+    renderWarRoom(c); return true;
+  };
+  show();
+  const loop = ()=>{
+    const h = new Date().getHours();
+    setTimeout(async ()=>{
+      if(!document.hidden){ await wrExtLoad(); if(!show()) return; }
+      loop();
+    }, (h>=5 && h<21) ? 60000 : 300000);
+  };
+  loop();
+}
 function wrLeaveFull(){
+  if(state._wrExternal) return;
   if(!document.body.classList.contains('wr-full')) return;
   document.body.classList.remove('wr-full');
   try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){}
 }
 function wrToggleFull(){
+  if(state._wrExternal){ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(e){} return; }
   if(document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); return; }
   document.body.classList.add('wr-full');
   try{ const el = document.documentElement; if(el.requestFullscreen) el.requestFullscreen().catch(()=>{}); }catch(e){}
   wrUpdateFullBtn();
 }
-function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(b) b.textContent = document.body.classList.contains('wr-full') ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
-document.addEventListener('fullscreenchange', ()=>{ if(!document.fullscreenElement && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } });
-document.addEventListener('keydown', e=>{ if(e.key==='Escape' && document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); } });
+function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(!b) return; const on = state._wrExternal ? !!document.fullscreenElement : document.body.classList.contains('wr-full'); b.textContent = on ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
+document.addEventListener('fullscreenchange', ()=>{ if(state._wrExternal){ wrUpdateFullBtn(); return; } if(!document.fullscreenElement && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } });
+document.addEventListener('keydown', e=>{ if(!state._wrExternal && e.key==='Escape' && document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); } });
 setInterval(()=>{ if(state.data && state.tab==='warroom' && document.getElementById('wrRoot')) wrUpdate(); }, 15000);
 async function renderWarRoom(c){
   const W = wrState();
@@ -6238,6 +6284,11 @@ function renderSettings(c){
       <button class="btn amber" id="savePin">儲存</button>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
+      <p class="section-sub">產生一條不用登入的唯讀網址，貼到辦公室電視的瀏覽器就能看今天的進度。外部畫面只有路線、站數進度和狀態：不顯示夥伴姓名與電話、店點名稱、未完成原因內容，也沒有任何操作按鈕。知道這條網址的人都看得到今天各路線的進度，請不要公開張貼；外洩時按「重新產生」，舊連結立刻失效。</p>
+      ${state.data.settings.warroomToken ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="wrExtUrl" readonly value="${location.origin}/?wr=${state.data.settings.warroomToken}" style="flex:1; min-width:260px; font-size:12px;" onclick="this.select()"><button class="btn ghost" id="wrExtCopy">複製</button><button class="btn ghost" id="wrExtRegen">重新產生（舊連結失效）</button><button class="btn ghost" id="wrExtOff">停用連結</button></div>` : `<button class="btn amber" id="wrExtGen">產生連結</button>`}
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0;">戰情室門檻</h3>
       <p class="section-sub">夥伴到了這個時間還沒有完成第一站，戰情室卡片先變黃色；超過紅色時間再升級成紅色快閃。停滯是「最近一次完成店點到現在」過了幾分鐘沒有新進度。</p>
       <div class="grid2" style="max-width:560px;">
@@ -6290,6 +6341,12 @@ function renderSettings(c){
     stallYellow: parseInt(document.getElementById('wrStY').value,10), stallRed: parseInt(document.getElementById('wrStR').value,10),
     maxBlink: parseInt(document.getElementById('wrMax').value,10)
   });
+  const wrTokSave = async (tok, msg)=>{ try{ await saveWarroomToken(tok); renderSettings(c); if(msg) toast(msg); }catch(err){ alert(err.message); } };
+  const wrNew = ()=>{ const b = new Uint8Array(24); crypto.getRandomValues(b); return btoa(String.fromCharCode.apply(null, b)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
+  { const g = document.getElementById('wrExtGen'); if(g) g.onclick = ()=> wrTokSave(wrNew(), '已產生戰情室外部連結'); }
+  { const g = document.getElementById('wrExtRegen'); if(g) g.onclick = ()=>{ if(confirm('重新產生後，舊的連結立刻失效，電視上要換成新連結。確定嗎？')) wrTokSave(wrNew(), '已重新產生，舊連結已失效'); }; }
+  { const g = document.getElementById('wrExtOff'); if(g) g.onclick = ()=>{ if(confirm('停用後，目前所有用這條連結的螢幕都會看到「連結無效」。確定嗎？')) wrTokSave(null, '已停用外部連結'); }; }
+  { const g = document.getElementById('wrExtCopy'); if(g) g.onclick = async ()=>{ const el = document.getElementById('wrExtUrl'); try{ await navigator.clipboard.writeText(el.value); toast('已複製連結'); }catch(e){ el.select(); toast('請手動複製（已選取）'); } }; }
   document.getElementById('saveWr').onclick = async ()=>{
     const v = wrRead();
     if(!v.amYellow || !v.amRed || !v.pmYellow || !v.pmRed){ alert('請填好四個時間'); return; }
@@ -7746,6 +7803,7 @@ function liveRenderBlocked(){
   return false;
 }
 function tryLiveRender(){
+  if(state._wrExternal) return; // 外部連結不連資料庫，資料靠自己定時輪詢
   if(liveRenderBlocked()){ livePendingTabs = true; return; }
   livePendingTabs = null;
   try{ renderNav(); renderContent(); }catch(e){ console.error('即時更新畫面失敗', e); }
@@ -7761,6 +7819,7 @@ setInterval(()=>{ if(livePendingTabs && !liveRenderBlocked()) tryLiveRender(); }
 })();
 
 async function refreshHomeDataIfIdle(){
+  if(state._wrExternal) return;
   if(state.data && state.tab==='warroom' && !document.hidden){ wrBackupRefresh(); return; }
   if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
@@ -7795,7 +7854,7 @@ document.addEventListener('visibilitychange', ()=>{
   if(hiddenAtTs && Date.now()-hiddenAtTs > 30000){ hiddenAtTs = null; catchUpAfterResume(); }
 });
 async function catchUpAfterResume(){
-  if(!state.data || !state.role) return;
+  if(!state.data || !state.role || state._wrExternal) return;
   try{
     const today = todayStr();
     if(state.role==='admin'){ await refreshAssignmentsRange(getWeekDates(0)[0], getWeekDates(1)[6]); await refreshFuelClaims(); }
@@ -7834,6 +7893,8 @@ async function bootApp(){
 }
 
 (async function init(){
+  const wrTok = new URLSearchParams(location.search).get('wr');
+  if(wrTok){ await bootWarRoomExternal(wrTok); return; }
   computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
   await bootApp();
 })();

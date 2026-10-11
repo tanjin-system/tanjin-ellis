@@ -1127,3 +1127,8 @@ alter table war_room_marks enable row level security;
 grant select, insert, update, delete on war_room_marks to app_admin;
 create policy admin_all on war_room_marks for all to app_admin using (true) with check (true);
 alter publication supabase_realtime add table war_room_marks;
+
+-- PART 26：戰情室外部連結（2026-10-11）
+-- settings.warroom_token：不登入的唯讀連結金鑰（null＝停用）。連結由 api/warroom.js 用 service role 驗證並回傳今天的進度，
+--   只含路線／進度／狀態，不含夥伴姓名電話、店點名稱、未完成原因內容、金額、照片；anon 對資料庫仍完全鎖死。
+alter table settings add column if not exists warroom_token text;
