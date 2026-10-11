@@ -215,6 +215,18 @@
   .thms{ display:flex; gap:6px; margin-top:6px; }
   .thms .thm{ width:56px; height:56px; max-width:56px; object-fit:cover; border-radius:6px; border:2px solid #2C6B44; margin:0; background:var(--chip); }
   /* 夥伴今日任務：地鐵圖式進度時間軸（依實際完成順序，完成的往上移，剩下的統一在下面） */
+  /* 電腦版拖拉：站點卡片排序、拖夥伴／任務到格子 */
+  .dnd-handle{ cursor:grab; color:var(--ink-soft); padding:0 8px 0 2px; font-size:16px; user-select:none; }
+  .drop-point[draggable=true]{ cursor:grab; } .drop-point.dragging{ opacity:.35; }
+  .drop-point.dnd-before{ box-shadow:0 -3px 0 0 var(--amber); } .drop-point.dnd-after{ box-shadow:0 3px 0 0 var(--amber); }
+  #dndPalette{ margin:0 0 10px; } #dndPalette summary{ cursor:pointer; font-size:13px; font-weight:600; }
+  .dnd-chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; max-height:120px; overflow:auto; }
+  .dnd-chip{ cursor:grab; background:var(--panel); border:1px solid var(--border-strong); border-radius:99px; padding:4px 12px; font-size:13px; user-select:none; }
+  .dnd-chip:active{ cursor:grabbing; } .dnd-chip.dragging{ opacity:.4; }
+  td.grid-cell.dnd-over, .grid-sub.dnd-over{ outline:3px dashed var(--amber); outline-offset:-3px; background:var(--tint-warn) !important; }
+  td.grid-cell.dnd-no, .grid-sub.dnd-no{ outline:3px dashed var(--danger); outline-offset:-3px; }
+  td.grid-cell.dragging, .grid-sub.dragging{ opacity:.4; }
+  .toast .toast-act{ flex:none; background:none; border:1px solid var(--border-strong); color:var(--teal); border-radius:99px; padding:2px 10px; font-weight:700; cursor:pointer; font-size:12.5px; }
   .tl-st{ display:flex; gap:12px; }
   .tl-rail{ width:26px; flex:none; display:flex; flex-direction:column; align-items:center; }
   .tl-dot{ width:22px; height:22px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:12px; box-sizing:border-box; background:var(--panel); border:2px solid var(--border-strong); color:var(--ink-soft); }
@@ -1279,14 +1291,15 @@ function toast(msg, opts){
     : /已|成功|完成|儲存|建立|套用|複製|發佈|更新|刪除|恢復|停用/.test(text) ? 'ok' : 'info');
   const el = document.createElement('div');
   el.className = 'toast ' + type;
-  el.innerHTML = `<span class="toast-ic">${{ok:'✅',error:'⛔',warn:'⚠️',info:'ℹ️'}[type]}</span><span class="toast-tx"></span><button class="toast-x" aria-label="關閉">✕</button>`;
+  el.innerHTML = `<span class="toast-ic">${{ok:'✅',error:'⛔',warn:'⚠️',info:'ℹ️'}[type]}</span><span class="toast-tx"></span>${opts.action?'<button class="toast-act"></button>':''}<button class="toast-x" aria-label="關閉">✕</button>`;
   el.querySelector('.toast-tx').textContent = text;
+  if(opts.action){ const ab = el.querySelector('.toast-act'); ab.textContent = opts.action.label; ab.onclick = e=>{ e.stopPropagation(); dismiss(); Promise.resolve(opts.action.fn()).catch(err=>toast(err.message||'操作失敗', { type:'error' })); }; }
   const dismiss = ()=>{ if(!el.isConnected) return; el.classList.add('out'); setTimeout(()=>el.remove(), 250); };
   el.onclick = dismiss;
   host.appendChild(el);
   while(host.children.length > 4) host.firstChild.remove();
   if(!opts.sticky){
-    const ms = Math.min(12000, (type==='error'||type==='warn' ? 5000 : 2800) + text.length*45);
+    const ms = opts.action ? 9000 : Math.min(12000, (type==='error'||type==='warn' ? 5000 : 2800) + text.length*45);
     setTimeout(dismiss, ms);
   }
   return { dismiss, el };
@@ -2894,6 +2907,38 @@ function applyAutoFees(draft){
   return true;
 }
 // 修正歷史版本：只改「生效開始日」或「各通路拆賬金額」，不動店點／里程／夥伴費用，也不用重建版本。
+// 拖拉只在電腦版（滑鼠、較寬的畫面）啟用；手機維持原本的點按操作。
+function desktopDnd(){ return window.matchMedia && window.matchMedia('(min-width:701px) and (pointer:fine)').matches; }
+// 路線管理：拖拉店點卡片調整順序（放開後順序馬上更新，里程費用的店數也跟著算）
+function bindStopDrag(detailEl, rid){
+  const list = detailEl.querySelector(`[data-orderlist="${rid}"]`);
+  if(!list || !desktopDnd()) return;
+  let from = null;
+  const cards = [...list.querySelectorAll('[data-dragidx]')];
+  const clear = ()=> cards.forEach(c=>c.classList.remove('dnd-before','dnd-after','dragging'));
+  cards.forEach(c=>{
+    c.addEventListener('dragstart', e=>{ from = Number(c.dataset.dragidx); c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'stop:'+from); });
+    c.addEventListener('dragend', ()=>{ clear(); from = null; });
+    c.addEventListener('dragover', e=>{
+      if(from===null) return; e.preventDefault();
+      const r = c.getBoundingClientRect(), before = (e.clientY - r.top) < r.height/2;
+      cards.forEach(x=>x.classList.remove('dnd-before','dnd-after'));
+      c.classList.add(before ? 'dnd-before' : 'dnd-after');
+    });
+    c.addEventListener('drop', e=>{
+      if(from===null) return; e.preventDefault();
+      const r = c.getBoundingClientRect(), before = (e.clientY - r.top) < r.height/2;
+      let to = Number(c.dataset.dragidx) + (before ? 0 : 1);
+      const order = routeDraft[rid].order;
+      const [moved] = order.splice(from, 1);
+      if(from < to) to--;
+      order.splice(to, 0, moved);
+      clear(); from = null;
+      applyAutoFees(routeDraft[rid]);
+      renderRouteDetail(rid);
+    });
+  });
+}
 function bindVersionFix(container, route){
   container.querySelectorAll('[data-verfix]').forEach(btn=>{
     btn.onclick = ()=>{
@@ -3023,8 +3068,8 @@ function renderRouteDetail(rid){
       <div data-orderlist="${r.id}">
         ${draft.order.map((id,i)=>{
           const dp = state.data.dropPoints.find(x=>x.id===id);
-          return `<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
-            <span>${i+1}. ${dp?dpLabel(dp):'（已刪除的店點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
+          return `<div class="drop-point" ${desktopDnd()?`draggable="true" data-dragidx="${i}"`:''} style="display:flex; align-items:center; justify-content:space-between;">
+            <span>${desktopDnd()?'<span class="dnd-handle" title="按住拖拉調整順序">⠿</span>':''}${i+1}. ${dp?dpLabel(dp):'（已刪除的店點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
             <span>
               <button class="btn ghost" data-up="${r.id}|${i}" ${i===0?'disabled':''}>↑</button>
               <button class="btn ghost" data-down="${r.id}|${i}" ${i===draft.order.length-1?'disabled':''}>↓</button>
@@ -3046,6 +3091,7 @@ function renderRouteDetail(rid){
     </div>
   `;
   bindVersionFix(detailEl, r);
+  bindStopDrag(detailEl, r.id);
   const verHistorySelect = document.getElementById('verHistorySelect');
   if(verHistorySelect){
     verHistorySelect.onchange = ()=>{
@@ -3403,6 +3449,8 @@ async function renderScheduleAdmin(c){
     </div>
     <div class="m-sched ${bulkOn()?'bulk-on':''}" id="mSchedule"></div>
     <div id="mSheetBackdrop"></div>
+    ${desktopDnd() && !bulkOn() ? `<details id="dndPalette" class="panel no-print" ${state._palOpen?'open':''}><summary>拖拉排班：把夥伴拖到格子（空格＝排進去、有人的格子＝換人；格子之間互拖＝對調）</summary>
+      <input id="dndFilter" placeholder="搜尋夥伴" style="max-width:200px; margin-top:8px;"><div class="dnd-chips" id="dndChips"></div></details>` : ''}
     <div id="gridWeek1" class="${bulkOn()?'bulk-on':''}"></div>
     <div id="assignDetail"></div>
     ${bulkOn()?'<div style="height:150px;"></div><div id="bulkBar" class="bulk-bar no-print"></div>':''}
@@ -3410,7 +3458,7 @@ async function renderScheduleAdmin(c){
   document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
   document.getElementById('bulkToggle').onclick = ()=>{ state._bulk = bulkOn() ? null : { on:true, sel:new Set() }; renderContent(); };
-  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); renderMobileSchedule(week1); if(bulkOn()) renderBulkBar(week1); };
+  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); bindGridDnd(document.getElementById('gridWeek1')); renderMobileSchedule(week1); if(bulkOn()) renderBulkBar(week1); };
   document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週期任務清單_${week1[0]}_${week1[6]}`);
   const publishBtn = document.getElementById('publishWeekBtn');
   if(publishBtn) publishBtn.onclick = async ()=>{
@@ -3476,6 +3524,7 @@ async function renderScheduleAdmin(c){
     renderContent();
   };
   renderWeekGrid('gridWeek1', week1);
+  bindGridDnd(document.getElementById('gridWeek1'));
   renderMobileSchedule(week1);
   if(bulkOn()) renderBulkBar(week1);
 }
@@ -3718,6 +3767,92 @@ function renderMobileSchedule(week){
   document.getElementById('mCopyLastWeek').onclick = ()=> copyDayAssignments(ymd(addDays(day,-7)), day);
   const mb = document.getElementById('mBatchBtn');
   if(mb) mb.onclick = ()=>{ const bp = document.getElementById('batchPanel'); bp.classList.toggle('open'); if(bp.classList.contains('open')) bp.scrollIntoView({behavior:'smooth', block:'start'}); };
+}
+// ---------- 週期任務清單：電腦版拖拉排班 ----------
+// 拖「夥伴」到格子：空格＝排進去、有人的格子＝換人；拖「任務格子」到另一格：兩格對調夥伴（空格＝移過去）。
+// 只動「還沒出發」的任務；每個動作都有「復原」按鈕。
+async function dndExecute(src, targetEl){
+  const dropAssign = targetEl.dataset.viewassign ? state.data.assignments.find(a=>a.id===targetEl.dataset.viewassign) : null;
+  const quick = targetEl.dataset.quickcreate ? targetEl.dataset.quickcreate.split('|') : null;
+  const nameOf = id=> driverName(id);
+  const done = (msg, undo)=>{ toast(msg, { type:'ok', action: undo ? { label:'復原', fn: async ()=>{ await undo(); renderContent(); toast('已復原', { type:'ok' }); } } : null }); renderContent(); };
+  const mustBeScheduled = a=>{ if(a.status!=='scheduled'){ toast('這一趟已經出發或完成，不能再換。', { type:'error' }); return false; } return true; };
+  try{
+    if(src.kind==='driver'){
+      if(quick){
+        const [routeId, date] = quick;
+        const route = state.data.routes.find(r=>r.id===routeId);
+        if(!route || !getActiveVersion(route, date)){ toast(`這條路線在 ${date} 沒有生效的店點版本，請先到路線管理建立。`, { type:'error' }); return; }
+        const created = await createAssignment({ date, routeId, driverId: src.id });
+        done(`已把「${nameOf(src.id)}」排進 ${date.slice(5)} ${routeDisplayName(route.name)}`, async ()=>{ await deleteAssignment(created.id); });
+      } else if(dropAssign){
+        if(!mustBeScheduled(dropAssign)) return;
+        if(dropAssign.driverId===src.id) return;
+        const prev = dropAssign.driverId;
+        await reassignAssignmentDriver(dropAssign.id, src.id);
+        done(`已把 ${dropAssign.date.slice(5)} ${routeName(dropAssign.routeId)} 從「${nameOf(prev)}」換成「${nameOf(src.id)}」`, async ()=>{ await reassignAssignmentDriver(dropAssign.id, prev); });
+      }
+    } else if(src.kind==='task'){
+      const S = state.data.assignments.find(a=>a.id===src.id); if(!S || !mustBeScheduled(S)) return;
+      if(dropAssign){
+        if(dropAssign.id===S.id) return;
+        if(!mustBeScheduled(dropAssign)) return;
+        const a1 = S.driverId, a2 = dropAssign.driverId;
+        if(a1===a2) return;
+        await reassignAssignmentDriver(S.id, a2); await reassignAssignmentDriver(dropAssign.id, a1);
+        done(`已對調：${S.date.slice(5)} ${routeName(S.routeId)}「${nameOf(a2)}」⇄ ${dropAssign.date.slice(5)} ${routeName(dropAssign.routeId)}「${nameOf(a1)}」`, async ()=>{ await reassignAssignmentDriver(S.id, a1); await reassignAssignmentDriver(dropAssign.id, a2); });
+      } else if(quick){
+        const [routeId, date] = quick;
+        const route = state.data.routes.find(r=>r.id===routeId);
+        if(!route || !getActiveVersion(route, date)){ toast(`這條路線在 ${date} 沒有生效的店點版本，請先到路線管理建立。`, { type:'error' }); return; }
+        const driverId = S.driverId, oldRoute = S.routeId, oldDate = S.date;
+        const created = await createAssignment({ date, routeId, driverId });
+        await deleteAssignment(S.id);
+        done(`已把「${nameOf(driverId)}」從 ${oldDate.slice(5)} ${routeName(oldRoute)} 移到 ${date.slice(5)} ${routeDisplayName(route.name)}`, async ()=>{ await deleteAssignment(created.id); await createAssignment({ date: oldDate, routeId: oldRoute, driverId }); });
+      }
+    }
+  }catch(err){ toast(err.message, { type:'error' }); }
+}
+function bindGridDnd(wrap){
+  if(!desktopDnd() || bulkOn()) return;
+  let src = null;
+  const targets = [...wrap.querySelectorAll('[data-viewassign],[data-quickcreate]')];
+  const clearOver = ()=> targets.forEach(t=>t.classList.remove('dnd-over','dnd-no'));
+  const canDrop = t=>{
+    if(!src) return false;
+    const a = t.dataset.viewassign ? state.data.assignments.find(x=>x.id===t.dataset.viewassign) : null;
+    if(a && a.status!=='scheduled') return false;
+    if(src.kind==='task' && a && a.id===src.id) return false;
+    return true;
+  };
+  targets.forEach(t=>{
+    const a = t.dataset.viewassign ? state.data.assignments.find(x=>x.id===t.dataset.viewassign) : null;
+    if(a && a.status==='scheduled'){
+      t.setAttribute('draggable','true');
+      t.addEventListener('dragstart', e=>{ src = { kind:'task', id:a.id }; t.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain','task:'+a.id); e.stopPropagation(); });
+      t.addEventListener('dragend', ()=>{ t.classList.remove('dragging'); clearOver(); src = null; });
+    }
+    t.addEventListener('dragover', e=>{ if(!src) return; e.preventDefault(); clearOver(); t.classList.add(canDrop(t) ? 'dnd-over' : 'dnd-no'); e.dataTransfer.dropEffect = canDrop(t) ? 'move' : 'none'; });
+    t.addEventListener('dragleave', ()=> t.classList.remove('dnd-over','dnd-no'));
+    t.addEventListener('drop', e=>{ if(!src) return; e.preventDefault(); const ok = canDrop(t), s = src; src = null; clearOver(); if(ok) dndExecute(s, t); });
+  });
+  // 夥伴調色盤
+  const chipsEl = document.getElementById('dndChips'), filter = document.getElementById('dndFilter'), pal = document.getElementById('dndPalette');
+  if(pal){
+    pal.addEventListener('toggle', ()=>{ state._palOpen = pal.open; });
+    const weekCounts = new Map();
+    state.data.assignments.forEach(a=>{ if(a.status!=='cancelled' && !a.isSupport) weekCounts.set(a.driverId, (weekCounts.get(a.driverId)||0)+1); });
+    const drivers = state.data.drivers.filter(d=>d.status==='active').sort((x,y)=>(weekCounts.get(y.id)||0)-(weekCounts.get(x.id)||0) || x.name.localeCompare(y.name,'zh-Hant'));
+    const draw = ()=>{
+      const q = (filter.value||'').trim().toLowerCase();
+      chipsEl.innerHTML = drivers.filter(d=>!q || d.name.toLowerCase().includes(q)).map(d=>`<span class="dnd-chip" draggable="true" data-chip="${d.id}">${escapeHtml(d.name)}</span>`).join('') || '<span style="font-size:12px; color:var(--ink-soft);">找不到夥伴</span>';
+      chipsEl.querySelectorAll('[data-chip]').forEach(ch=>{
+        ch.addEventListener('dragstart', e=>{ src = { kind:'driver', id:ch.dataset.chip }; ch.classList.add('dragging'); e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain','driver:'+ch.dataset.chip); });
+        ch.addEventListener('dragend', ()=>{ ch.classList.remove('dragging'); clearOver(); src = null; });
+      });
+    };
+    filter.oninput = draw; draw();
+  }
 }
 // ---------- 批量修改（週期任務清單）----------
 // 開啟後，點格子不再開明細，而是「選取」：已排任務和空格都能選。選好之後一次：
