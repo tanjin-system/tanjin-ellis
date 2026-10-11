@@ -100,6 +100,7 @@ function mapAssignment(row) {
       photoPath: p.photo_url,
       photo: null,
       photoCleared: p.photo_cleared,
+      completedAt: p.completed_at || null,
       issueReason: p.issue_reason || null,
       helperId: p.helper_id || null, helperName: p.helper_name || '', delegationId: p.delegation_id || null, completedBy: p.completed_by || null,
       // 主要送達證明照以外的附加照片/影片（見 assignment_drop_point_media）；
@@ -1498,7 +1499,7 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
     .eq('id', dropPointId);
   if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
 
-  if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; }
+  if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; dp.completedAt = completedAt; }
 }
 
 // 未完成原因：夥伴在單一店點旁邊直接選填，不用等到整趟結束才填一個籠統的

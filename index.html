@@ -214,6 +214,26 @@
   /* 照片上傳／拍照成功的打勾回饋：畫面中央大勾勾一閃＋店點上常駐「✓ 已上傳 N 張」 */
   .thms{ display:flex; gap:6px; margin-top:6px; }
   .thms .thm{ width:56px; height:56px; max-width:56px; object-fit:cover; border-radius:6px; border:2px solid #2C6B44; margin:0; background:var(--chip); }
+  /* 夥伴今日任務：地鐵圖式進度時間軸（依實際完成順序，完成的往上移，剩下的統一在下面） */
+  .tl-st{ display:flex; gap:12px; }
+  .tl-rail{ width:26px; flex:none; display:flex; flex-direction:column; align-items:center; }
+  .tl-dot{ width:22px; height:22px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:12px; box-sizing:border-box; background:var(--panel); border:2px solid var(--border-strong); color:var(--ink-soft); }
+  .tl-dot.done{ background:#2C6B44; border-color:#2C6B44; color:#fff; } .tl-dot.warn{ background:#E0902E; border-color:#E0902E; color:#fff; font-weight:700; }
+  .tl-dot.cur{ border:3px solid #BA7517; background:var(--panel); } .tl-dot.org{ background:var(--ink-soft); border-color:var(--ink-soft); color:var(--panel); }
+  .tl-seg{ flex:1; width:0; border-left:4px solid #2C6B44; margin:2px 0; min-height:10px; } .tl-seg.todo{ border-left:4px dotted var(--border-strong); }
+  .tl-body{ flex:1; min-width:0; padding:0 0 12px; }
+  .tl-row{ cursor:pointer; padding:2px 0 0; -webkit-tap-highlight-color:transparent; } .tl-row:active{ opacity:.6; }
+  .tl-nm{ font-size:15px; font-weight:600; line-height:1.4; }
+  .tl-sub{ font-size:12px; color:var(--ink-soft); margin-top:1px; }
+  .tl-pill{ display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:var(--chip); color:var(--ink-soft); margin-left:6px; vertical-align:1px; font-weight:400; }
+  .tl-pill.alt{ background:var(--bg-accent,#E6F1FB); color:var(--text-accent,#185FA5); }
+  .tl-card{ border-radius:12px; padding:8px 8px 4px; margin:-4px 0 10px -6px; background:var(--tint-warn); border:1.5px solid var(--amber); }
+  .tl-card.donecard{ background:var(--bg-soft); border-color:var(--border-strong); }
+  .tl-card .drop-point-driver{ background:transparent !important; border:none; padding:6px 4px; }
+  .tl-fold{ font-size:13px; color:var(--teal); font-weight:600; cursor:pointer; padding:2px 0; }
+  .tl-divider{ font-size:12px; color:var(--ink-soft); padding:0 0 8px 38px; }
+  .tl-new{ animation:tlnew .7s ease-out; }
+  @keyframes tlnew{ 0%{ transform:translateY(46px); opacity:.2; background:#C9E6D2; } 100%{ transform:none; opacity:1; background:transparent; } }
   .upok{ display:inline-flex; align-items:center; gap:6px; background:#DCEBE0; color:#2C6B44; border-radius:99px; padding:2px 10px 2px 3px; font-weight:700; font-size:13px; }
   .upok b{ background:#2C6B44; color:#fff; border-radius:50%; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; font-size:13px; }
   html[data-theme=dark] .upok{ background:#1F3A2A; color:#8FD2A5; }
@@ -6033,13 +6053,13 @@ function renderTodayDetail(todays){
   const doneN = allDps.filter(dp=>dp.status==='completed').length;
   let nextA = todayMine.find(a=>a.status==='in_progress' && ownDropPoints(a).some(pending)) || todayMine.find(a=>a.status==='scheduled');
   const nextDp = nextA ? ownDropPoints(nextA).find(pending) : null;
-  const nextDpId = nextA && nextA.status==='in_progress' && nextDp ? nextDp.id : null;
+  const nextDpId = null; // 進行中的任務改由下方時間軸呈現「建議下一站」
   const flashId = state._flashDp; state._flashDp = null;
   const progHtml = allDps.length ? `<div class="dv-prog">
       <div class="dv-top"><span>今日進度</span><span><b>${doneN}</b> / ${allDps.length} 站</span></div>
       <div class="ov-bar" style="margin:8px 0 0;"><i style="width:${Math.round(doneN*100/allDps.length)}%"></i></div>
     </div>` : '';
-  const nextHtml = (nextA && nextDp) ? `<div class="dv-next">
+  const nextHtml = (nextA && nextA.status==='scheduled' && nextDp) ? `<div class="dv-next">
       <span class="dv-tag">${nextA.status==='in_progress'?'下一站':'今天第一站'}</span>
       <div class="dv-name">${escapeHtml(dpLabel(nextDp))}</div>
       <div class="dv-addr">${escapeHtml(nextDp.address||'')}（${escapeHtml(channelName(nextDp.channelId))}）・${escapeHtml(routeName(nextA.routeId))}</div>
@@ -6092,6 +6112,71 @@ function renderTodayDetail(todays){
       <p style="font-size:12.5px; color:var(--ink-soft);">這是臨時交給您支援的店點（${a.dropPoints.length} 個），到店後直接拍照上傳即可，不需要再傳給原夥伴。完成後原夥伴會自動看到。</p>
       ${a.dropPoints.map(dp=>dpRow(a, dp, false)).join('')}
     </div>`).join('');
+  // 時間軸：已完成（依實際完成順序，多了會收成一行）在上，還沒到的站（預排順序）在下；點某一站展開它的拍照／導航。
+  state._tl = state._tl || {};
+  const tlState = aid=> (state._tl[aid] = state._tl[aid] || { focus:null, doneOpen:false });
+  const timelineHtml = (a, mine)=>{
+    const st = tlState(a.id);
+    const seq = dp=> mine.indexOf(dp) + 1;
+    const doneL = mine.filter(dp=>dp.status==='completed').sort((x,y)=> (x.completedAt||'').localeCompare(y.completedAt||'') || seq(x)-seq(y));
+    const handledL = mine.filter(dp=>dp.status!=='completed' && dp.issueReason);
+    const pendL = mine.filter(dp=>dp.status!=='completed' && !dp.issueReason);
+    const finished = doneL.concat(handledL);
+    let focus = st.focus;
+    if(focus===null) focus = pendL.length ? pendL[0].id : '__none';
+    st.eff = focus; // 目前實際展開的是哪一站（點同一站＝收合）
+    const key = dp=> `${a.id}|${dp.id}`;
+    const chips = dp=>{
+      const th = thumbsGet(dp.id);
+      return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="">`).join('')}</div>` : '';
+    };
+    const photoN = dp=> (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
+    const expanded = (dp, kind)=> `<div class="tl-card ${kind==='done'?'donecard':''}">
+        <div class="tl-row" data-tlpick="${key(dp)}"><div class="tl-nm">${escapeHtml(dpLabel(dp))}<span class="tl-pill">${escapeHtml(channelName(dp.channelId))}</span><span class="tl-pill">預排第 ${seq(dp)} 站</span></div>
+        <div class="tl-sub" style="color:var(--teal); font-weight:600;">${kind==='next' ? (dp===pendL[0] ? '建議下一站' : '你選的下一站') : '點一下收合'}</div></div>
+        ${dpRow(a, dp, false)}</div>`;
+    const rowOf = (dp, kind, idxInDone)=>{
+      const isFocus = focus===dp.id;
+      const isNew = dp.id===flashId;
+      let dot, info;
+      if(kind==='done'){
+        dot = '<div class="tl-dot done">✓</div>';
+        const reordered = seq(dp)!==idxInDone+1;
+        info = `<div class="tl-nm">${escapeHtml(dpLabel(dp))}${reordered?`<span class="tl-pill alt">預排第 ${seq(dp)} 站</span>`:''}</div>
+          <div class="tl-sub" style="color:var(--ok,#2C6B44);">第 ${idxInDone+1} 個到${photoN(dp)?`　✓ 已上傳 ${photoN(dp)} 張`:''}</div>${chips(dp)}`;
+      } else if(kind==='handled'){
+        dot = '<div class="tl-dot warn">!</div>';
+        info = `<div class="tl-nm">${escapeHtml(dpLabel(dp))}</div><div class="tl-sub" style="color:#8A5A17;">未完成：${escapeHtml(dp.issueReason)}</div>`;
+      } else {
+        dot = isFocus ? '<div class="tl-dot cur"></div>' : `<div class="tl-dot">${seq(dp)}</div>`;
+        info = `<div class="tl-nm">${escapeHtml(dpLabel(dp))}<span class="tl-pill">${escapeHtml(channelName(dp.channelId))}</span></div><div class="tl-sub">預排第 ${seq(dp)} 站・點一下展開</div>`;
+      }
+      const body = isFocus ? expanded(dp, kind==='pend'?'next':'done') : `<div class="tl-row" data-tlpick="${key(dp)}">${info}</div>`;
+      return { dot, body, isNew };
+    };
+    const lines = [];
+    // 已完成區（超過 2 站收成一行）
+    const hideN = (!st.doneOpen && finished.length>2) ? finished.length-2 : 0;
+    if(hideN) lines.push({ dot:'<div class="tl-dot done">✓</div>', body:`<div class="tl-fold" data-tldone="${a.id}">已完成 ${hideN} 站 ▸（點一下展開）</div>`, seg:'done' });
+    finished.forEach((dp,k)=>{
+      if(k<hideN) return;
+      const kind = dp.status==='completed' ? 'done' : 'handled';
+      const r = rowOf(dp, kind, k);
+      lines.push({ dot:r.dot, body:r.body, seg:'done', isNew:r.isNew });
+    });
+    if(st.doneOpen && finished.length>2) lines.push({ dot:'', body:`<div class="tl-fold" data-tldone="${a.id}" style="padding-left:0;">收起 ▴</div>`, seg:'none' });
+    if(pendL.length && finished.length) lines.push({ divider:`還沒到的站（可以任選順序）` });
+    pendL.forEach(dp=>{ const r = rowOf(dp, 'pend', 0); lines.push({ dot:r.dot, body:r.body, seg:'todo' }); });
+    const flag = pendL.length ? '<div class="tl-dot">⚑</div>' : '<div class="tl-dot done">⚑</div>';
+    let h = `<div class="tl-st"><div class="tl-rail"><div class="tl-dot org">⌂</div><div class="tl-seg"></div></div><div class="tl-body" style="padding-bottom:6px;"><div class="tl-sub" style="margin-top:3px;">出發　${escapeHtml(a.origin||'')}</div></div></div>`;
+    lines.forEach(L=>{
+      if(L.divider){ h += `<div class="tl-divider">${L.divider}</div>`; return; }
+      if(L.seg==='none'){ h += `<div class="tl-st"><div class="tl-rail"></div><div class="tl-body" style="padding-bottom:6px;">${L.body}</div></div>`; return; }
+      h += `<div class="tl-st ${L.isNew?'tl-new':''}"><div class="tl-rail">${L.dot}<div class="tl-seg ${L.seg==='todo'?'todo':''}"></div></div><div class="tl-body">${L.body}</div></div>`;
+    });
+    h += `<div class="tl-st"><div class="tl-rail">${flag}</div><div class="tl-body" style="padding-bottom:4px;"><div class="tl-sub" style="margin-top:3px;">收工　全部處理完後按下面「完成任務」</div></div></div>`;
+    return h;
+  };
   box.innerHTML = progHtml + nextHtml + todays.map(a=>{
     const mine = ownDropPoints(a);
     const allHandled = mine.length>0 && mine.every(dp=>dp.status==='completed' || dp.issueReason);
@@ -6107,7 +6192,7 @@ function renderTodayDetail(todays){
       <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, mine); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
       ${a===todays[0] ? supportToday.map(supBlock).join('') : ''}
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
-        ${mine.map(dp=>dpRow(a, dp, false)).join('')}
+        ${timelineHtml(a, mine)}
         <button class="btn amber" style="margin-top:10px;" data-finish="${a.id}">完成任務（自動封存進歷史任務）</button>
         ${!allHandled?'<p style="font-size:11.5px;color:var(--ink-soft);">尚有店點未完成拍照或未選擇未完成原因，結束時需填寫備註說明原因</p>':''}
       `}
@@ -6122,6 +6207,12 @@ function renderTodayDetail(todays){
     const dp = dpById[el.dataset.dpid];
     const urls = dp ? dpPhotoUrls(dp) : [];
     if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
+  });
+  box.querySelectorAll('[data-tlpick]').forEach(el=>{
+    el.onclick = ()=>{ const [aid, dpid] = el.dataset.tlpick.split('|'); const st = tlState(aid); st.focus = (st.eff===dpid) ? '__none' : dpid; renderTodayDetail(todays); };
+  });
+  box.querySelectorAll('[data-tldone]').forEach(el=>{
+    el.onclick = ()=>{ const st = tlState(el.dataset.tldone); st.doneOpen = !st.doneOpen; renderTodayDetail(todays); };
   });
   box.querySelectorAll('[data-gonext]').forEach(btn=>{
     btn.onclick = ()=>{ const el = box.querySelector(`[data-dpid="${btn.dataset.gonext}"]`); if(el) el.scrollIntoView({behavior:'smooth', block:'center'}); };
@@ -6177,7 +6268,7 @@ function renderTodayDetail(todays){
       try{
         for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
         up.dismiss();
-        state._flashDp = dpid;
+        state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
         renderContent();
         showCheckOverlay(dataUrls.length);
       }catch(err){ up.dismiss(); console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
@@ -6232,7 +6323,7 @@ function renderTodayDetail(todays){
           const dataUrls = [];
           for(const f of acceptFiles) dataUrls.push(await compressImageFile(f));
           for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
-          state._flashDp = dpid;
+          state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
           showCheckOverlay(acceptFiles.length);
           if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
           renderContent();
