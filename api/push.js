@@ -75,7 +75,7 @@ async function sendMessages(messages) {
   for (const m of messages) {
     const subs = await subsFor(m.to);
     for (const s of subs) {
-      const prefs = s.prefs || {};
+      const prefs = s.is_admin ? (s.prefs || {}) : {}; // 夥伴的開關與勿擾一律不採用：公司任務通知全部都收；只有主控的手機可以自己選
       // 測試通知（kind 不在清單內）一律送，不看個別開關與勿擾時段，方便確認「這支手機收得到」
       const isKind = KINDS.includes(m.kind);
       if (isKind && (prefs[m.kind] === false || inQuiet(prefs))) { skipped++; continue; }

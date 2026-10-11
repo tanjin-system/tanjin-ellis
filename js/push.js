@@ -1,5 +1,5 @@
 // ---------- 推播通知（Web Push）前端 ----------
-// 夥伴／主控在「通知設定」按「開啟通知」→ 註冊 /sw.js、向瀏覽器訂閱推播、把訂閱存進 push_subscriptions（RLS：夥伴只看得到自己的）。
+// 夥伴／主控在「通知設定」按「開啟通知」（夥伴開啟後不能挑類別、也不能在系統裡關閉；主控可以）→ 註冊 /sw.js、向瀏覽器訂閱推播、把訂閱存進 push_subscriptions（RLS：夥伴只看得到自己的）。
 // 主控的操作（發佈、換人、取消、公告）會呼叫 pushQueueTasks()／pushAnnouncement()，4 秒內的合併成「每位夥伴一則」，
 // 再由 /api/push?op=send 送出。前一天提醒與月底對帳由伺服器排程送（見 api/push.js）。
 const PUSH_KINDS_PARTNER = [['publish', '新任務'], ['change', '任務調整（換人、取消）'], ['announce', '公告'], ['reminder', '前一天提醒（隔天有任務）'], ['statement', '月底對帳']];
@@ -81,6 +81,18 @@ async function pushRenderBox(el) {
     };
     return;
   }
+  // 夥伴：不能挑類別、也不能在系統裡關閉——公司的任務通知一律都收（只能在手機自己的設定裡關掉系統通知）。
+  if (state.role !== 'admin') {
+    el.innerHTML = '<p class="section-sub" style="margin:0 0 8px;">這支手機已開啟通知，會收到：新任務、任務調整（換人、取消）、公告、前一天提醒、月底對帳。</p>'
+      + '<button class="btn ghost" id="pushTest">傳一則測試通知</button>';
+    document.getElementById('pushTest').onclick = async ev => {
+      ev.target.disabled = true;
+      try { const r = await pushApi('test', {}); toast(r.sent ? '已送出測試通知，幾秒內會收到' : '沒有送出（這支手機的通知可能已失效，請聯絡主控）'); } catch (e) { alert(e.message); }
+      ev.target.disabled = false;
+    };
+    return;
+  }
+  // 主控：可以選要收哪些、勿擾時段、關閉
   let prefs = await pushLoadPrefs(sub.endpoint);
   const on = k => prefs[k] !== false;
   el.innerHTML = '<p class="section-sub" style="margin:0 0 8px;">這支手機已開啟通知。想收哪些，自己決定：</p>'
