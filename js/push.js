@@ -33,12 +33,20 @@ async function pushEnable() {
   const { publicKey } = await kr.json();
   let sub = await reg.pushManager.getSubscription();
   if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushB64ToU8(publicKey) });
-  const j = sub.toJSON(), isAdmin = state.role === 'admin';
-  const { error } = await getSupabase().from('push_subscriptions').upsert({
-    driver_id: isAdmin ? null : state.activeDriverId, is_admin: isAdmin, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
-    user_agent: navigator.userAgent.slice(0, 200), updated_at: new Date().toISOString()
-  }, { onConflict: 'endpoint' });
-  if (error) throw new Error('儲存通知設定失敗：' + error.message);
+  await pushRegister(sub);
+}
+// 把這支手機登記給「現在登入的人」（伺服器以 JWT 為準；同一支手機換人登入會改登記）
+async function pushRegister(sub) {
+  const j = sub.toJSON();
+  await pushApi('subscribe', { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, ua: navigator.userAgent });
+}
+// 已經允許通知、手機也有訂閱的情況下，每次登入悄悄把這支手機登記給現在的人（不用再按一次；也修復資料庫登記遺失或登記給別人的情況）
+async function pushAutoSync() {
+  try {
+    if (!pushSupported() || Notification.permission !== 'granted' || state.adminViewDriver || !(state.role === 'admin' || state.role === 'driver')) return;
+    const sub = await pushCurrentSub();
+    if (sub) await pushRegister(sub);
+  } catch (e) { /* 悄悄失敗，使用者開設定頁會看到真實狀態 */ }
 }
 async function pushDisable() {
   const sub = await pushCurrentSub();
@@ -81,6 +89,18 @@ async function pushRenderBox(el) {
     };
     return;
   }
+  // 以資料庫的登記為準（手機本身有訂閱，不代表登記給現在登入的這個人）
+  let st = { registered: false, prefs: {} };
+  try { st = await pushApi('status', { endpoint: sub.endpoint }); } catch (e) { return msg('目前無法確認通知狀態，請稍後再試。'); }
+  if (!st.registered) {
+    el.innerHTML = '<p class="section-sub" style="margin:0 0 10px;">這支手機還沒有登記給你，按下去就會開始收到通知。</p><button class="btn amber" id="pushOn">開啟通知</button>';
+    document.getElementById('pushOn').onclick = async ev => {
+      ev.target.disabled = true;
+      try { await pushEnable(); toast('已開啟通知'); } catch (e) { alert(e.message); }
+      pushRenderBox(el);
+    };
+    return;
+  }
   // 夥伴：不能挑類別、也不能在系統裡關閉——公司的任務通知一律都收（只能在手機自己的設定裡關掉系統通知）。
   if (state.role !== 'admin') {
     el.innerHTML = '<p class="section-sub" style="margin:0 0 8px;">這支手機已開啟通知，會收到：新任務、任務調整（換人、取消）、公告、前一天提醒、月底對帳。</p>'
@@ -93,7 +113,7 @@ async function pushRenderBox(el) {
     return;
   }
   // 主控：可以選要收哪些、勿擾時段、關閉
-  let prefs = await pushLoadPrefs(sub.endpoint);
+  let prefs = st.prefs || {};
   const on = k => prefs[k] !== false;
   el.innerHTML = '<p class="section-sub" style="margin:0 0 8px;">這支手機已開啟通知。想收哪些，自己決定：</p>'
     + kinds.map(([k, label]) => `<label style="display:flex; align-items:center; gap:8px; padding:7px 0; font-size:14px;"><input type="checkbox" data-pk="${k}" ${on(k) ? 'checked' : ''} style="width:auto; flex:none; margin:0;"> ${label}</label>`).join('')

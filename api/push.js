@@ -2,6 +2,9 @@
 //   GET  ?op=key   → 回傳 VAPID 公鑰（第一次用到時自動產生一組金鑰存在 settings，私鑰只有伺服器讀得到）。
 //   POST ?op=send  → 主控發送：body { messages:[{ to:{driverId}|{all:true}|{admin:true}, kind, title, body, url, tag }] }，
 //                    驗證主控的 JWT 後依對象查出訂閱並送出；失效的訂閱（404/410）順手刪除。
+//   POST ?op=subscribe → 夥伴或主控登記「這支手機」：以登入身份（JWT）為準，同一支手機換人登入會改登記給新的人
+//                    （例如主控用自己的手機測試夥伴帳號），換人時偏好設定重置。
+//   POST ?op=status    → 這支手機目前是不是登記給「現在登入的這個人」（畫面用這個判斷，不能只看手機本身有沒有訂閱）。
 //   POST ?op=test  → 夥伴或主控傳一則測試通知給「自己」。
 //   GET  ?op=cron  → 每天一次的排程（vercel.json）：前一天提醒隔天有任務的夥伴；月底最後一天提醒對帳。
 //                    用 push_log 去重（同一天只會發一次），且 16 點以前不動作，所以就算網址被別人呼叫也不會重複打擾。
@@ -143,6 +146,23 @@ module.exports = async (req, res) => {
       await initPush();
       const messages = (parseBody(req).messages || []).slice(0, 200);
       return res.status(200).json(await sendMessages(messages));
+    }
+    if ((op === 'subscribe' || op === 'status') && req.method === 'POST') {
+      const claims = authOf(req);
+      if (!claims || (claims.role !== 'app_admin' && !(claims.role === 'app_driver' && claims.driver_id))) return res.status(401).json({ error: '請先登入' });
+      const b = parseBody(req), endpoint = String(b.endpoint || '');
+      if (!/^https:\/\//.test(endpoint) || endpoint.length > 1000) return res.status(400).json({ error: 'Bad endpoint' });
+      const owner = claims.role === 'app_admin' ? { driver_id: null, is_admin: true } : { driver_id: claims.driver_id, is_admin: false };
+      const { data: ex, error: exErr } = await supabase.from('push_subscriptions').select('id, driver_id, is_admin, prefs').eq('endpoint', endpoint).maybeSingle();
+      if (exErr) throw new Error(exErr.message);
+      const same = !!ex && ex.is_admin === owner.is_admin && ex.driver_id === owner.driver_id;
+      if (op === 'status') return res.status(200).json({ registered: same, prefs: same ? (ex.prefs || {}) : {} });
+      const keys = { p256dh: String(b.p256dh || ''), auth: String(b.auth || '') };
+      if (!keys.p256dh || !keys.auth) return res.status(400).json({ error: 'Bad keys' });
+      const row = Object.assign({}, owner, keys, { user_agent: String(b.ua || '').slice(0, 200), updated_at: new Date().toISOString() });
+      if (ex) { if (!same) row.prefs = {}; const { error } = await supabase.from('push_subscriptions').update(row).eq('id', ex.id); if (error) throw new Error(error.message); }
+      else { const { error } = await supabase.from('push_subscriptions').insert(Object.assign({ endpoint }, row)); if (error) throw new Error(error.message); }
+      return res.status(200).json({ ok: true, changedOwner: !!ex && !same });
     }
     if (op === 'test' && req.method === 'POST') {
       const claims = authOf(req);

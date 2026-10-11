@@ -7752,6 +7752,7 @@ function showApp(){
   // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
   startRealtimeSync(handleLiveEvent);
+  if(typeof pushAutoSync==='function') pushAutoSync();
 }
 // renderLoginGate() 的正式版實作在 js/auth.js（呼叫 /api/auth-driver、/api/auth-admin，
 // 不再直接比對 state.data 裡的明文PIN/代碼；此時 state.data 根本還沒載入）。
