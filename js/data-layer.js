@@ -1270,6 +1270,7 @@ async function createAssignment(input) {
 
   const full = await fetchAssignment(assignRow.id);
   state.data.assignments.push(full);
+  if (full.published && typeof pushQueueTasks === 'function') pushQueueTasks('publish', [full]); // 立刻生效的任務（本週）通知夥伴；草稿等按「發佈」才通知
   return full;
 }
 
@@ -1286,7 +1287,9 @@ async function publishWeek(start, end, driverIds) {
   const { error } = await q;
   if (error) throw new Error('發佈失敗：' + error.message);
   const only = driverIds && driverIds.length ? new Set(driverIds) : null;
+  const justPublished = state.data.assignments.filter(a => a.date >= start && a.date <= end && a.published === false && (!only || only.has(a.driverId)));
   state.data.assignments.forEach(a => { if (a.date >= start && a.date <= end && (!only || only.has(a.driverId))) a.published = true; });
+  if (typeof pushQueueTasks === 'function') pushQueueTasks('publish', justPublished, { force: true });
 }
 
 async function rolloverNextWeekIfNeeded() {
@@ -1453,7 +1456,9 @@ async function deleteAssignment(assignmentId) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').delete().eq('id', assignmentId);
   if (error) throw new Error('刪除任務失敗：' + error.message);
+  const gone = state.data.assignments.find(a => a.id === assignmentId);
   state.data.assignments = state.data.assignments.filter(a => a.id !== assignmentId);
+  if (gone && typeof pushQueueTasks === 'function') pushQueueTasks('cancelled', [gone]);
 }
 
 // 臨時異動：已排定或已出發的任務需要臨時換夥伴（例如原本排定的夥伴臨時請假），
@@ -1465,7 +1470,12 @@ async function reassignAssignmentDriver(assignmentId, newDriverId) {
   const supabase = getSupabase();
   const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).eq('id', assignmentId);
   if (error) throw new Error('換夥伴失敗：' + error.message);
+  const oldDriverId = a ? a.driverId : null;
   if (a) a.driverId = newDriverId;
+  if (a && oldDriverId !== newDriverId && typeof pushQueueTasks === 'function') {
+    if (oldDriverId) pushQueueTasks('removed', [a], { driverId: oldDriverId });
+    pushQueueTasks('publish', [a], { driverId: newDriverId });
+  }
 }
 
 // 批量修改（週期任務清單）：一次換很多趟的夥伴／一次刪很多趟。只動「已排定、尚未出發」的任務
@@ -1476,7 +1486,15 @@ async function reassignAssignmentsBulk(ids, newDriverId) {
     const chunk = ids.slice(i, i + 50);
     const { error } = await supabase.from('assignments').update({ driver_id: newDriverId }).in('id', chunk).eq('status', 'scheduled');
     if (error) throw new Error('批量換夥伴失敗：' + error.message);
-    state.data.assignments.forEach(a => { if (chunk.includes(a.id) && a.status === 'scheduled') a.driverId = newDriverId; });
+    state.data.assignments.forEach(a => {
+      if (chunk.includes(a.id) && a.status === 'scheduled') {
+        const oldId = a.driverId; a.driverId = newDriverId;
+        if (oldId !== newDriverId && typeof pushQueueTasks === 'function') {
+          if (oldId) pushQueueTasks('removed', [a], { driverId: oldId });
+          pushQueueTasks('publish', [a], { driverId: newDriverId });
+        }
+      }
+    });
   }
 }
 async function deleteAssignmentsBulk(ids) {
@@ -1485,7 +1503,9 @@ async function deleteAssignmentsBulk(ids) {
     const chunk = ids.slice(i, i + 50);
     const { error } = await supabase.from('assignments').delete().in('id', chunk).eq('status', 'scheduled');
     if (error) throw new Error('批量刪除失敗：' + error.message);
+    const gone = state.data.assignments.filter(a => chunk.includes(a.id) && a.status === 'scheduled');
     state.data.assignments = state.data.assignments.filter(a => !(chunk.includes(a.id) && a.status === 'scheduled'));
+    if (gone.length && typeof pushQueueTasks === 'function') pushQueueTasks('cancelled', gone);
   }
 }
 

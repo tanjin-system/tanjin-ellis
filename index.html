@@ -537,6 +537,7 @@
 <script src="js/supabase-client.js"></script>
 <script src="js/data-layer.js"></script>
 <script src="js/auth.js"></script>
+<script src="js/push.js"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -1902,6 +1903,7 @@ function renderAnnouncements(c){
     if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位夥伴，或改選「全體夥伴」'); return; }
     try{
       await createAnnouncement({ title, content, audience, driverIds });
+      pushAnnouncement(title, audience, driverIds);
       renderContent();
     }catch(err){ alert(err.message); }
   };
@@ -6295,6 +6297,7 @@ function renderSettings(c){
       <div class="field" style="max-width:200px;"><label>主控PIN碼</label><input id="setPin" value="${state.data.settings.adminPin}"></div>
       <button class="btn amber" id="savePin">儲存</button>
     </div>
+    <div class="panel"><h3 style="margin-top:0;">這支手機的通知</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
     <div class="panel">
       <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
       <p class="section-sub">產生一條不用登入的唯讀網址，貼到辦公室電視的瀏覽器就能看今天的進度。外部畫面有路線、站數進度、夥伴姓名、每一站的店點名稱與通路、夥伴回報的未完成原因；不顯示夥伴電話、金額、照片，也沒有任何操作按鈕。知道這條網址的人都看得到今天各路線的進度，請不要公開張貼；外洩時按「重新產生」，舊連結立刻失效。</p>
@@ -6353,6 +6356,7 @@ function renderSettings(c){
     stallYellow: parseInt(document.getElementById('wrStY').value,10), stallRed: parseInt(document.getElementById('wrStR').value,10),
     maxBlink: parseInt(document.getElementById('wrMax').value,10)
   });
+  pushRenderBox(document.getElementById('pushBox'));
   const wrTokSave = async (tok, msg)=>{ try{ await saveWarroomToken(tok); renderSettings(c); if(msg) toast(msg); }catch(err){ alert(err.message); } };
   const wrNew = ()=>{ const b = new Uint8Array(24); crypto.getRandomValues(b); return btoa(String.fromCharCode.apply(null, b)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
   { const g = document.getElementById('wrExtGen'); if(g) g.onclick = ()=> wrTokSave(wrNew(), '已產生戰情室外部連結'); }
@@ -7347,7 +7351,9 @@ function renderMyProfile(c){
       </div>
       <button class="btn amber" id="mpSave">儲存修改</button>
     </div>
+    <div class="panel"><h3 style="margin-top:0;">通知設定</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
   `;
+  pushRenderBox(document.getElementById('pushBox'));
   document.getElementById('mpSave').onclick = async ()=>{
     const changes = [];
     const checks = [
@@ -7658,6 +7664,11 @@ function viewAsDriver(driverId){
   updateHeaderBar(); renderNav(); renderContent();
 }
 function showApp(){
+  // 推播通知點開會帶 ?go=分頁：直接跳到那一頁（任務、公告、報酬…），跳完把網址清乾淨
+  try{
+    const go = new URLSearchParams(location.search).get('go');
+    if(go){ const tabs = state.role==='driver' ? DRIVER_TABS : ADMIN_TABS; if(tabs.find(t=>t.id===go)) state.tab = go; history.replaceState(null, '', location.pathname); }
+  }catch(e){}
   document.getElementById('loginGate').style.display = 'none';
   document.getElementById('appLayout').style.display = 'flex';
   updateHeaderBar();

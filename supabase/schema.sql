@@ -1132,3 +1132,18 @@ alter publication supabase_realtime add table war_room_marks;
 -- settings.warroom_token：不登入的唯讀連結金鑰（null＝停用）。連結由 api/warroom.js 用 service role 驗證並回傳今天的進度，
 --   只含路線／進度／狀態，不含夥伴姓名電話、店點名稱、未完成原因內容、金額、照片；anon 對資料庫仍完全鎖死。
 alter table settings add column if not exists warroom_token text;
+
+-- PART 27：推播通知（Web Push，2026-10-12）
+-- push_subscriptions：每支手機（瀏覽器）一列。夥伴只能看／改／刪自己的（driver_id = 我），主控全部可以；
+--   is_admin=true 是主控的手機（driver_id 為空）。prefs（jsonb）存各類通知的開關，{ "reminder": false } 表示關掉，{ "quiet": true } 是勿擾時段。
+-- push_log：排程通知去重用（同一天的前一天提醒、同一個月的月底對帳只發一次），只有伺服器（service role）讀寫。
+-- settings.vapid_public / vapid_private：推播金鑰（第一次用到時由 /api/push 自動產生；私鑰只有伺服器讀得到，settings 對夥伴不可見）。
+create table if not exists push_subscriptions (id uuid primary key default gen_random_uuid(), driver_id uuid references drivers(id) on delete cascade, is_admin boolean not null default false, endpoint text not null unique, p256dh text not null, auth text not null, prefs jsonb not null default '{}', user_agent text, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+alter table push_subscriptions enable row level security;
+grant select, insert, update, delete on push_subscriptions to app_admin;
+grant select, insert, update, delete on push_subscriptions to app_driver;
+create policy admin_all on push_subscriptions for all to app_admin using (true) with check (true);
+create policy driver_own on push_subscriptions for all to app_driver using (driver_id = auth_driver_id()) with check (driver_id = auth_driver_id() and is_admin = false);
+create table if not exists push_log (key text primary key, created_at timestamptz not null default now());
+alter table push_log enable row level security;
+alter table settings add column if not exists vapid_public text, add column if not exists vapid_private text;
