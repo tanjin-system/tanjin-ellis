@@ -1,7 +1,7 @@
 // 戰情室外部連結（大螢幕／不登入）的資料來源。前端只帶 token 呼叫這支 API，驗證與查詢都在這裡用
-// service role 做，資料庫對 anon 維持完全鎖死。唯讀（沒有任何寫入），而且刻意只回傳「看進度」需要的最少欄位：
-// 路線名稱、任務起點、每一站有沒有完成與完成時間、有沒有回報未完成原因、有沒有排人。
-// 不含夥伴姓名／電話、店點名稱與地址、未完成原因內容、報酬與請款金額、照片。
+// service role 做，資料庫對 anon 維持完全鎖死。唯讀（沒有任何寫入），只回傳「看實際狀況」需要的欄位：
+// 路線名稱、任務起點、每一站的店點名稱（代號，沒有代號才用地址）／通路／完成時間／未完成原因、有沒有排人。
+// 不含夥伴姓名與電話、報酬與請款金額、照片。
 // 回應帶 s-maxage 讓 Vercel 邊緣快取 45 秒：同時開幾個螢幕，資料庫也最多每 45 秒被問一次。
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
@@ -48,15 +48,16 @@ module.exports = async (req, res) => {
 
   const today = taipeiToday(), d7 = addDays(today, -7), d14 = addDays(today, -14);
   try {
-    const [todayRes, histRes, originsRes, routesRes] = await Promise.all([
+    const [todayRes, histRes, originsRes, routesRes, channelsRes] = await Promise.all([
       supabase.from('assignments')
-        .select('id, trip_date, route_id, driver_id, status, assignment_drop_points(status, completed_at, issue_reason, sequence_no)')
+        .select('id, trip_date, route_id, driver_id, status, assignment_drop_points(status, completed_at, issue_reason, sequence_no, code, address, channel_id)')
         .eq('trip_date', today).eq('published', true).neq('status', 'cancelled'),
       supabase.from('assignments').select('id, trip_date, route_id, status').in('trip_date', [d7, d14]).eq('published', true).neq('status', 'cancelled'),
       supabase.from('origins').select('id, address, label, status'),
-      supabase.from('routes').select('id, name, seq, shift, status, origins(address), route_versions(start_date, end_date)')
+      supabase.from('routes').select('id, name, seq, shift, status, origins(address), route_versions(start_date, end_date)'),
+      supabase.from('channels').select('id, name')
     ]);
-    for (const r of [todayRes, histRes, originsRes, routesRes]) if (r.error) throw new Error(r.error.message);
+    for (const r of [todayRes, histRes, originsRes, routesRes, channelsRes]) if (r.error) throw new Error(r.error.message);
     const ids = (todayRes.data || []).map(a => a.id);
     let marks = [];
     if (ids.length) {
@@ -67,7 +68,7 @@ module.exports = async (req, res) => {
     const assignments = (todayRes.data || []).map(a => ({
       id: a.id, date: a.trip_date, routeId: a.route_id, hasDriver: !!a.driver_id, status: a.status,
       dropPoints: (a.assignment_drop_points || []).slice().sort((x, y) => x.sequence_no - y.sequence_no).map(p => ({
-        status: p.status, completedAt: p.completed_at, hasIssue: !!p.issue_reason
+        status: p.status, completedAt: p.completed_at, label: p.code || p.address || '', channelId: p.channel_id, issueReason: p.issue_reason || null
       }))
     })).concat((histRes.data || []).map(a => ({ id: a.id, date: a.trip_date, routeId: a.route_id, hasDriver: false, status: a.status, dropPoints: [] })));
     res.setHeader('Cache-Control', 'public, s-maxage=45, stale-while-revalidate=15');
@@ -78,6 +79,7 @@ module.exports = async (req, res) => {
         id: r.id, name: r.name, originAddr: r.origins ? r.origins.address : '', seq: r.seq, shift: r.shift, status: r.status || 'active',
         versions: (r.route_versions || []).map(v => ({ start: v.start_date, end: v.end_date }))
       })),
+      channels: channelsRes.data || [],
       assignments,
       marks: marks.map(m => ({ assignmentId: m.assignment_id, acked: m.acked_count || 0, resolved: m.resolved_count || 0 }))
     });

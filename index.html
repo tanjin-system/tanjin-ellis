@@ -1629,7 +1629,7 @@ function wrDetailHtml(c){
   const yel = pm ? cfg.pmYellow : cfg.amYellow, red = pm ? cfg.pmRed : cfg.amRed;
   let why;
   if(c.why==='gap') why = '今天這個班次沒有排夥伴（這條路線上週或上上週的同一天有排過）。';
-  else if(c.why==='issue') why = c.issues+' 站回報了未完成原因，需要你確認處理。';
+  else if(c.why==='issue') why = c.issues+(state._wrExternal ? ' 站回報了未完成原因（見下方店點）。' : ' 站回報了未完成原因，需要你確認處理。');
   else if(c.s==='hot' && c.why==='late') why = '已超過預計出發時間 '+c.over+' 分鐘（紅色門檻 '+red+'），還沒有完成任何一站。';
   else if(c.s==='late') why = '已超過預計出發時間 '+c.over+' 分鐘，還沒有完成任何一站（'+yel+' 變黃色、'+red+' 變紅色）。';
   else if(c.s==='hot' && c.why==='stall') why = c.over+' 分鐘沒有新進度（紅色門檻 '+cfg.stallRed+' 分鐘）。';
@@ -1750,7 +1750,7 @@ async function wrBackupRefresh(){
   wrUpdate();
 }
 // ---------- 戰情室外部連結（不登入、唯讀、給大螢幕）：網址 /?wr=<token> ----------
-// 外部畫面只拿得到「路線、進度、狀態」：沒有夥伴姓名與電話、店點名稱、未完成原因內容（見 api/warroom.js）。
+// 外部畫面拿得到「路線、進度、店點名稱／通路、未完成原因」，但沒有夥伴姓名與電話、金額、照片（見 api/warroom.js）。
 async function wrExtLoad(){
   const W = wrState();
   try{
@@ -1760,9 +1760,9 @@ async function wrExtLoad(){
     const p = await r.json();
     state._wrExternalDead = null;
     state.data = { settings:{ warroomConfig:p.config }, assignmentsWindowStart:p.windowStart,
-      drivers:[{ id:'x', name:'已排人', phone:'' }], origins:p.origins, routes:p.routes, channels:[], dropPoints:[],
+      drivers:[{ id:'x', name:'已排人', phone:'' }], origins:p.origins, routes:p.routes, channels:p.channels||[], dropPoints:[],
       assignments:p.assignments.map(a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.hasDriver?'x':null, status:a.status, published:true, isSupport:false,
-        dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.hasIssue?'有回報未完成原因':null, code:'第 '+(i+1)+' 站', address:'' })) })) };
+        dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.issueReason||null, code:d.label||('第 '+(i+1)+' 站'), address:'', channelId:d.channelId })) })) };
     W.marks = new Map(p.marks.map(m=>[m.assignmentId, { acked:m.acked, resolved:m.resolved, resolution:'' }]));
     W.err = false;
   }catch(e){ W.err = true; console.error('戰情室外部連結載入失敗', e); }
@@ -6297,7 +6297,7 @@ function renderSettings(c){
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
-      <p class="section-sub">產生一條不用登入的唯讀網址，貼到辦公室電視的瀏覽器就能看今天的進度。外部畫面只有路線、站數進度和狀態：不顯示夥伴姓名與電話、店點名稱、未完成原因內容，也沒有任何操作按鈕。知道這條網址的人都看得到今天各路線的進度，請不要公開張貼；外洩時按「重新產生」，舊連結立刻失效。</p>
+      <p class="section-sub">產生一條不用登入的唯讀網址，貼到辦公室電視的瀏覽器就能看今天的進度。外部畫面有路線、站數進度、每一站的店點名稱與通路、夥伴回報的未完成原因；不顯示夥伴姓名與電話、金額、照片，也沒有任何操作按鈕。知道這條網址的人都看得到今天各路線的進度，請不要公開張貼；外洩時按「重新產生」，舊連結立刻失效。</p>
       ${state.data.settings.warroomToken ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="wrExtUrl" readonly value="${location.origin}/wr/${state.data.settings.warroomToken}" style="flex:1; min-width:260px; font-size:12px;" onclick="this.select()"><button class="btn ghost" id="wrExtCopy">複製</button><button class="btn ghost" id="wrExtRegen">重新產生（舊連結失效）</button><button class="btn ghost" id="wrExtOff">停用連結</button></div>` : `<button class="btn amber" id="wrExtGen">產生連結</button>`}
     </div>
     <div class="panel">
