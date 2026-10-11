@@ -121,6 +121,10 @@
   .wr .m{ font-size:.86em; color:var(--soft); margin-top:.45em; } .wr .bd{ margin-top:.4em; font-size:.86em; color:#B79BEB; } .wr .ok{ color:#3FB37F; }
   .wr .ack{ margin-top:.55em; width:100%; background:#E5594F; color:#fff; border:0; border-radius:6px; padding:.4em; font-size:.93em; cursor:pointer; }
   .wr .res{ display:flex; gap:.4em; margin-top:.55em; } .wr .res select{ flex:1; min-width:0; background:var(--bg); color:var(--ink); border:1px solid #3A4A68; border-radius:6px; padding:.25em; } .wr .res .ack{ margin-top:0; width:auto; padding:.35em .9em; background:#2F7DD1; }
+  .wr .dot{ display:inline-block; width:.55em; height:.55em; border-radius:50%; background:#4A90E2; margin-right:.45em; vertical-align:.08em; animation:wrBreath 3.2s ease-in-out infinite; }
+  @keyframes wrBreath{ 0%,100%{ opacity:.35; box-shadow:0 0 0 0 rgba(74,144,226,0); } 50%{ opacity:1; box-shadow:0 0 0 .3em rgba(74,144,226,.28); } }
+  .wr.mute .dot{ animation:none; opacity:.8; }
+  @media (prefers-reduced-motion:reduce){ .wr .dot{ animation:none; opacity:.8; } }
   .wr .c.gap{ border-style:dashed; border-left-style:solid; }
   .wr .c.hotst{ box-shadow:0 0 0 3px rgba(229,89,79,.9); } .wr .c.amst{ box-shadow:0 0 0 2px rgba(224,144,46,.8); }
   .wr .c.late{ animation:wrPulse 2.4s ease-in-out infinite; } .wr .c.stall{ animation:wrPulse 1.6s ease-in-out infinite; } .wr .c.hot{ animation:wrBlink .9s ease-in-out infinite; } .wr .c.fresh{ animation:wrFlash 1.6s ease-out 1; }
@@ -1608,7 +1612,7 @@ function wrCardHtml(c, anim){
   }
   const tel = (c.phone && c.s!=='done') ? ' <a href="tel:'+escapeHtml(c.phone)+'" title="撥給 '+escapeHtml(c.driver)+'">📞</a>' : '';
   const cls = (hot ? (anim?'hot':'hotst') : am ? (anim?c.s:'amst') : '') + (c.why==='gap'?' gap':'');
-  return '<div class="c '+cls+'" data-key="'+escapeHtml(c.key)+'" style="--c:'+WR_COL[c.s]+'"><div class="r"><b>'+escapeHtml(c.label)+'</b><span class="chip">'+wrChip(c)+'</span></div>'
+  return '<div class="c '+cls+'" data-key="'+escapeHtml(c.key)+'" style="--c:'+WR_COL[c.s]+'"><div class="r"><b>'+(c.s==='run'?'<i class="dot"></i>':'')+escapeHtml(c.label)+'</b><span class="chip">'+wrChip(c)+'</span></div>'
     + '<div class="p">'+(c.driver ? escapeHtml(c.driver)+tel : '（空缺）')+'</div>'+(segs?'<div class="segs">'+segs+'</div>':'')+'<div class="m">'+m+'</div>'+bd+btn+'</div>';
 }
 function wrBuild(){
@@ -1712,7 +1716,7 @@ async function renderWarRoom(c){
       <div class="wr-top"><div><div class="wr-t">碳金<span>戰情室</span></div><div class="wr-sub" id="wrDate"></div></div>
         <div class="wr-right"><div><div class="wr-clock" id="wrClock"></div><div class="wr-live">即時更新中</div></div>
         <div class="wr-btns"><button class="wr-btn" id="wrMute"></button><button class="wr-btn" id="wrFull"></button></div></div></div>
-      <div class="wr-lg"><span>⚪ 待出發</span><span>🔵 進行中</span><span>🟢 完成</span><span>🟡 注意（慢速脈動，超過門檻自動升級）</span><span>🔴 要處理（快閃→按「已看到」→紅框常亮→按「已處理」才消失）</span><span>🟣 時間存疑</span></div>
+      <div class="wr-lg"><span>⚪ 待出發</span><span>🔵 進行中（圓點緩慢呼吸）</span><span>🟢 完成</span><span>🟡 注意（慢速脈動，超過門檻自動升級）</span><span>🔴 要處理（快閃→按「已看到」→紅框常亮→按「已處理」才消失）</span><span>🟣 時間存疑</span></div>
       <div class="wr-kp" id="wrKp"></div><div class="wr-bar"><i id="wrBar"></i></div><div class="wr-pct" id="wrPct"></div>
       <div class="wr-main"><div id="wrBoard"></div><div class="wr-need"><h3>需要處理</h3><div id="wrNeed"></div></div></div></div>`;
     const root = document.getElementById('wrRoot');
