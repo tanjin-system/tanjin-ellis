@@ -2931,14 +2931,17 @@ function parseLatLng(text){
   if(a < 20 || a > 27 || b < 118 || b > 124) return null; // 不在台灣範圍
   return { lat:a, lng:b };
 }
-async function openDpLocate(dpId){
-  const dp = state.data.dropPoints.find(x=>x.id===dpId); if(!dp) return;
+function openDpLocate(dpId){ return openLocate('dp', dpId); }
+// kind：'dp'（店點）或 'origin'（任務起點）；onDone：儲存成功後要做的事（例如重畫路線地圖）
+async function openLocate(kind, targetId, onDone){
+  const isOg = kind==='origin';
+  const dp = isOg ? state.data.origins.find(x=>x.id===targetId) : state.data.dropPoints.find(x=>x.id===targetId); if(!dp) return;
   try{ await loadLeaflet(); }catch(e){ toast(e.message, { type:'error' }); return; }
   document.getElementById('locBackdrop')?.remove();
   const wrap = document.createElement('div'); wrap.className = 'modal-backdrop'; wrap.id = 'locBackdrop';
   wrap.innerHTML = `<div class="panel" style="max-width:760px; width:100%; margin:0 auto;">
-    <h3 style="margin-top:0;">指定位置　<span class="mono">${escapeHtml(dp.code||'')}</span></h3>
-    <p class="section-sub" style="margin:0 0 8px;">${escapeHtml(dp.address)}（${escapeHtml(channelName(dp.channelId))}）</p>
+    <h3 style="margin-top:0;">${isOg?'指定任務起點位置':'指定位置'}　<span class="mono">${escapeHtml(isOg ? (dp.label||'') : (dp.code||''))}</span></h3>
+    <p class="section-sub" style="margin:0 0 8px;">${escapeHtml(dp.address)}${isOg?'':'（'+escapeHtml(channelName(dp.channelId))+'）'}</p>
     <div class="field"><label>方法一：貼上座標或 Google 地圖網址</label>
       <div style="display:flex; gap:8px;"><input id="locPaste" placeholder="例如 25.0330, 121.5654　或整段 Google 地圖網址"><button class="btn ghost" id="locApply" style="white-space:nowrap;">套用</button></div>
       <div style="font-size:12px; color:var(--ink-soft); margin-top:4px;">先 <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(dp.address)}" target="_blank" rel="noopener">在 Google 地圖查這個地址</a>，找到店後對著地點「按右鍵」，點最上面那行數字（座標）就會複製起來，貼到這裡。手機上長按地點，座標會出現在下方。</div></div>
@@ -2953,7 +2956,7 @@ async function openDpLocate(dpId){
   document.getElementById('locCancel').onclick = close;
   // 起始位置：同一個「縣市＋區」已經有座標的店點的中心；沒有就看整個台灣
   const pref = (dp.address||'').replace(/\s+/g,'').slice(0,6);
-  const near = state.data.dropPoints.filter(x=>x.lat!=null && x.lng!=null && (x.address||'').replace(/\s+/g,'').slice(0,6)===pref);
+  const near = state.data.dropPoints.concat(state.data.origins).filter(x=>x.id!==dp.id && x.lat!=null && x.lng!=null && (x.address||'').replace(/\s+/g,'').slice(0,6)===pref);
   const center = near.length ? [near.reduce((a,x)=>a+x.lat,0)/near.length, near.reduce((a,x)=>a+x.lng,0)/near.length] : [23.7, 121.0];
   const map = L.map('locMap').setView(center, near.length ? 14 : 8);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
@@ -2984,10 +2987,12 @@ async function openDpLocate(dpId){
   document.getElementById('locSave').onclick = async ()=>{
     if(!pos){ toast('請先選位置：貼上座標，或在地圖上點一下', { type:'warn' }); return; }
     try{
-      await saveDropPointCoord(dp.id, pos.lat, pos.lng);
+      if(isOg) await saveOriginCoord(dp.id, pos.lat, pos.lng); else await saveDropPointCoord(dp.id, pos.lat, pos.lng);
       close(); toast('已儲存位置');
       if(state._geoFailed) state._geoFailed.delete(dp.id);
       if(document.getElementById('geoBox')){ renderGeoBox(); renderDpListBody(); }
+      if(document.getElementById('ogList')) renderOgList();
+      if(onDone) onDone();
     }catch(e){ toast(e.message, { type:'error' }); }
   };
 }
@@ -3126,11 +3131,11 @@ function renderOgList(){
   el.innerHTML = `
     <div class="panel">
       <table>
-        <thead><tr><th>名稱</th><th>地址</th><th>狀態</th><th></th></tr></thead>
+        <thead><tr><th>名稱</th><th>地址</th><th>地圖位置</th><th>狀態</th><th></th></tr></thead>
         <tbody>
           ${state.data.origins.map(og=>{
             if(editingOgId === og.id){
-              return `<tr><td colspan="4">
+              return `<tr><td colspan="5">
                 <div class="grid2">
                   <div class="field"><label>地址</label><input id="eogAddr" value="${og.address}"></div>
                   <div class="field"><label>備註名稱</label><input id="eogLabel" value="${og.label||''}"></div>
@@ -3139,13 +3144,15 @@ function renderOgList(){
                 <button class="btn ghost" data-cancelog="${og.id}">取消</button>
               </td></tr>`;
             }
-            return `<tr><td>${og.label||'—'}</td><td>${og.address}</td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
+            const hasPos = og.lat!=null && og.lng!=null;
+            return `<tr><td>${og.label||'—'}</td><td>${og.address}</td><td>${hasPos?'<span style="color:var(--teal);">已定位</span>':'<span style="color:var(--danger);">還沒有位置</span>'} <button class="btn ghost" data-locog="${og.id}" style="padding:2px 8px; font-size:12px;">${hasPos?'修正':'指定位置'}</button></td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
             <td><button class="btn ghost" data-editog="${og.id}">編輯</button> ${og.status!=='inactive'?`<button class="btn danger" data-del="${og.id}">刪除</button>`:''}</td></tr>`;
-          }).join('') || `<tr><td colspan="4"><div class="empty">尚無任務起點資料</div></td></tr>`}
+          }).join('') || `<tr><td colspan="5"><div class="empty">尚無任務起點資料</div></td></tr>`}
         </tbody>
       </table>
     </div>
   `;
+  el.querySelectorAll('[data-locog]').forEach(btn=>{ btn.onclick = ()=> openLocate('origin', btn.dataset.locog); });
   el.querySelectorAll('[data-editog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = btn.dataset.editog; renderOgList(); }; });
   el.querySelectorAll('[data-cancelog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = null; renderOgList(); }; });
   el.querySelectorAll('[data-saveog]').forEach(btn=>{
@@ -3436,7 +3443,8 @@ async function renderRouteMap(rid){
   if(window._rvMap){ try{ window._rvMap.remove(); }catch(e){} window._rvMap = null; }
   const og = state.data.origins.find(o=>o.address===route.originAddr);
   // 任務起點沒有座標就先查一次（只查一次，存起來）
-  if(og && (og.lat==null || og.lng==null)){
+  if(og && (og.lat==null || og.lng==null) && !og._geoTried){
+    og._geoTried = true; // 查不到就不要每次重畫地圖都再查一輪（很慢），改用「指定起點位置」手動補
     summary.textContent = '正在查詢任務起點位置…';
     const g = await geocodeAddress(og.address);
     if(g){ try{ await saveOriginCoord(og.id, g.lat, g.lng); }catch(e){ og.lat = g.lat; og.lng = g.lng; } }
@@ -3508,8 +3516,9 @@ async function renderRouteMap(rid){
   } else if(seq.length>=2){
     html += '<div class="note" style="margin:6px 0;">路徑服務暫時連不上，先用虛線連接各站（只是直線示意）。</div>';
   }
-  summary.innerHTML = missHtml + (originOk ? '' : (og ? '<div class="note" style="margin:6px 0;">任務起點的位置查不到，路線從第一站開始算。</div>' : ''));
+  summary.innerHTML = missHtml + (originOk ? '' : (og ? `<div class="note" style="margin:6px 0;">任務起點的位置查不到，路線從第一站開始算。 <button class="btn amber" data-locog="${og.id}" style="padding:2px 10px; font-size:12px;">指定起點位置</button></div>` : ''));
   etaEl.innerHTML = html;
+  summary.querySelectorAll('[data-locog]').forEach(b=>{ b.onclick = ()=> openLocate('origin', b.dataset.locog, ()=>renderRouteMap(rid)); });
   summary.querySelectorAll('[data-place]').forEach(b=>{ b.onclick = ()=>{ placing = state.data.dropPoints.find(d=>d.id===b.dataset.place); el.style.cursor = 'crosshair'; toast(`請在地圖上點一下「${dpLabel(placing)}」的位置`, { type:'info' }); }; });
   const useKm = etaEl.querySelector('#rvUseKm');
   if(useKm) useKm.onclick = ()=>{ draft.distanceKm = Math.round(rt.km*10)/10; applyAutoFees(draft); toast(`已採用地圖里程 ${draft.distanceKm} km，夥伴費用與請款總額已依公式重算。`, { type:'ok' }); renderRouteDetail(rid); };
