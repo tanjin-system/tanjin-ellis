@@ -1116,3 +1116,14 @@ alter table routes add column if not exists status text not null default 'active
 -- PART 24：地圖座標。店點與任務起點的經緯度（地址轉座標後存起來，路線管理的地圖與路徑用）。
 alter table drop_points add column if not exists lat double precision, add column if not exists lng double precision;
 alter table origins add column if not exists lat double precision, add column if not exists lng double precision;
+
+-- PART 25：戰情室（2026-10-11）
+-- settings.warroom_config：逾時／停滯門檻（jsonb，null＝程式內預設值）。
+-- war_room_marks：主控在戰情室按「已看到」「已處理」的標記，每趟任務一列；acked_count／resolved_count＝按下當時
+--   有幾站回報未完成原因，之後出現新的未完成原因會重新亮起。只有主控能讀寫，Realtime 推播讓多個螢幕同步。
+alter table settings add column if not exists warroom_config jsonb;
+create table if not exists war_room_marks (assignment_id uuid primary key references assignments(id) on delete cascade, acked_count int not null default 0, resolved_count int not null default 0, resolution text, updated_at timestamptz not null default now());
+alter table war_room_marks enable row level security;
+grant select, insert, update, delete on war_room_marks to app_admin;
+create policy admin_all on war_room_marks for all to app_admin using (true) with check (true);
+alter publication supabase_realtime add table war_room_marks;

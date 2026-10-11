@@ -94,6 +94,50 @@
   main{ flex:1; padding:20px; max-width:1000px; min-width:0; }
   /* 電腦版：主控所有頁面的內容區都放寬到可用寬度（夥伴端維持原本的窄版）。 */
   main.wide{ max-width:none; }
+  /* ---------- 戰情室 ---------- */
+  .wr{ --bg:#0A0F1A; --card:#131B2D; --line:#223050; --ink:#E6EBF5; --soft:#8FA0BF; background:var(--bg); color:var(--ink); border-radius:12px; padding:1.3em 1.5em; font-size:14px; min-height:70vh; }
+  .wr *{ box-sizing:border-box; }
+  .wr-top{ display:flex; justify-content:space-between; align-items:center; gap:1em; margin-bottom:1em; flex-wrap:wrap; }
+  .wr-t{ font-size:1.6em; font-weight:700; letter-spacing:.08em; } .wr-t span{ color:#D4AF37; }
+  .wr-sub{ font-size:.86em; color:var(--soft); margin-top:.15em; }
+  .wr-right{ display:flex; align-items:center; gap:1em; }
+  .wr-clock{ font-size:2.4em; font-weight:600; font-family:'IBM Plex Mono',ui-monospace,monospace; line-height:1; text-align:right; }
+  .wr-live{ font-size:.86em; color:#3FB37F; text-align:right; margin-top:.3em; } .wr-live:before{ content:''; display:inline-block; width:.6em; height:.6em; border-radius:50%; background:#3FB37F; margin-right:.45em; }
+  .wr-btns{ display:flex; flex-direction:column; gap:.4em; }
+  .wr-btn{ background:var(--card); color:var(--ink); border:1px solid #3A4A68; border-radius:6px; padding:.35em .8em; cursor:pointer; font-size:.86em; white-space:nowrap; }
+  .wr-kp{ display:grid; grid-template-columns:repeat(6,1fr); gap:.85em; margin-bottom:.7em; }
+  .wr-k{ background:var(--card); border:1px solid var(--line); border-top:4px solid var(--c); border-radius:10px; padding:.8em 1.1em; }
+  .wr-k b{ display:block; font-size:2.3em; font-weight:600; font-family:'IBM Plex Mono',ui-monospace,monospace; line-height:1.1; } .wr-k span{ font-size:.93em; color:var(--soft); }
+  .wr-bar{ height:.55em; background:var(--line); border-radius:99px; overflow:hidden; margin:.4em 0 .3em; } .wr-bar i{ display:block; height:100%; background:#3FB37F; transition:width .6s; }
+  .wr-pct{ font-size:.86em; color:var(--soft); margin-bottom:1em; }
+  .wr-main{ display:grid; grid-template-columns:1fr 22em; gap:1.3em; align-items:start; }
+  .wr-og{ font-size:1em; color:#9FB0CF; margin:1em 0 .55em; letter-spacing:.08em; font-weight:600; } .wr-og:first-child{ margin-top:0; }
+  .wr-cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(13.5em,1fr)); gap:.7em; }
+  .wr .c{ background:var(--card); border:1px solid var(--line); border-left:5px solid var(--c); border-radius:10px; padding:.7em .85em; }
+  .wr .c .r{ display:flex; justify-content:space-between; align-items:baseline; gap:.4em; } .wr .c .r b{ font-weight:600; }
+  .wr .chip{ font-size:.86em; padding:.1em .65em; border-radius:99px; background:var(--line); color:var(--ink); white-space:nowrap; }
+  .wr .p{ margin:.2em 0 .55em; font-size:1.2em; font-weight:600; } .wr .p a{ text-decoration:none; font-size:.8em; margin-left:.3em; }
+  .wr .segs{ display:flex; gap:3px; } .wr .segs i{ flex:1; height:.65em; border-radius:2px; background:#26324F; } .wr .segs i.d{ background:#3FB37F; } .wr .segs i.h{ background:#E0902E; }
+  .wr .m{ font-size:.86em; color:var(--soft); margin-top:.45em; } .wr .bd{ margin-top:.4em; font-size:.86em; color:#B79BEB; } .wr .ok{ color:#3FB37F; }
+  .wr .ack{ margin-top:.55em; width:100%; background:#E5594F; color:#fff; border:0; border-radius:6px; padding:.4em; font-size:.93em; cursor:pointer; }
+  .wr .res{ display:flex; gap:.4em; margin-top:.55em; } .wr .res select{ flex:1; min-width:0; background:var(--bg); color:var(--ink); border:1px solid #3A4A68; border-radius:6px; padding:.25em; } .wr .res .ack{ margin-top:0; width:auto; padding:.35em .9em; background:#2F7DD1; }
+  .wr .c.gap{ border-style:dashed; border-left-style:solid; }
+  .wr .c.hotst{ box-shadow:0 0 0 3px rgba(229,89,79,.9); } .wr .c.amst{ box-shadow:0 0 0 2px rgba(224,144,46,.8); }
+  .wr .c.late{ animation:wrPulse 2.4s ease-in-out infinite; } .wr .c.stall{ animation:wrPulse 1.6s ease-in-out infinite; } .wr .c.hot{ animation:wrBlink .9s ease-in-out infinite; } .wr .c.fresh{ animation:wrFlash 1.6s ease-out 1; }
+  @keyframes wrPulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(224,144,46,0); } 50%{ box-shadow:0 0 0 4px rgba(224,144,46,.65); background:#2A2418; } }
+  @keyframes wrBlink{ 0%,100%{ box-shadow:0 0 0 0 rgba(229,89,79,0); } 50%{ box-shadow:0 0 0 5px rgba(229,89,79,.85); background:#331B1E; } }
+  @keyframes wrFlash{ 0%{ background:#1F5A3F; transform:scale(1.03); } 100%{ background:#131B2D; transform:none; } }
+  .wr.mute .c{ animation:none!important; }
+  @media (prefers-reduced-motion:reduce){ .wr .c{ animation:none!important; } }
+  .wr-need{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.85em 1em; position:sticky; top:.8em; } .wr-need h3{ font-size:1.05em; margin:0 0 .4em; color:var(--ink); }
+  .wr-n{ padding:.55em 0; border-top:1px solid var(--line); font-size:.93em; line-height:1.5; display:flex; gap:.55em; }
+  .wr-lg{ display:flex; gap:1em; flex-wrap:wrap; font-size:.86em; color:var(--soft); margin:0 0 1em; }
+  .wr-empty{ padding:3em 1em; text-align:center; color:var(--soft); font-size:1.1em; }
+  body.wr-full header, body.wr-full nav.tabs, body.wr-full #globalSearchList{ display:none!important; }
+  body.wr-full .layout{ min-height:100vh; } body.wr-full main{ padding:0!important; max-width:none; }
+  body.wr-full .wr{ border-radius:0; min-height:100vh; font-size:clamp(14px,1.1vw,26px); }
+  @media (max-width:900px){ .wr-kp{ grid-template-columns:repeat(3,1fr); } .wr-main{ grid-template-columns:1fr; } .wr-need{ position:static; } }
+
   h2.section-title{ font-size:16px; font-weight:600; margin:0 0 4px; }
   p.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
   .panel{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
@@ -1249,6 +1293,7 @@ function getWeekDates(offset){
 // ---------- Tabs ----------
 const ADMIN_TABS = [
   {id:'home', label:'首頁', icon:'🏠'},
+  {id:'warroom', label:'戰情室', icon:'🛰️', group:'排班'},
   {id:'announcements', label:'公告管理', icon:'📢', group:'排班'},
   {id:'schedule', label:'週期任務清單', icon:'📅', group:'排班'},
   {id:'drivers', label:'夥伴資料', icon:'👥', group:'基本資料'},
@@ -1455,16 +1500,238 @@ function renderContent(){
   const c = document.getElementById('content');
   const inDriverView = state.adminViewDriver || state.role==='driver';
   if(state.tab!=='schedule' && state._bulk) state._bulk = null;
+  if(state.tab!=='warroom') wrLeaveFull();
   const mainEl = c && c.closest('main');
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
-    ({home:renderHomeAdmin, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+    ({home:renderHomeAdmin, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
     maybeGreetDriver();
   }
+}
+// ---------- 戰情室（主控電腦版／大螢幕） ----------
+// 只讀「今天」的任務（state.data.assignments，由 Realtime 即時更新），每 15 秒依現在時間重算一次，
+// 逾時、停滯這類「時間到了才發生」的狀況不用等資料變動。紅色情況（夥伴回報未完成原因、沒人排、嚴重逾時）
+// 要有人處理：「已看到」→ 紅框常亮、「已處理」→ 解除；標記存在 war_room_marks，所有螢幕共用。
+const WR_DEFAULTS = { amYellow:'09:30', amRed:'10:00', pmYellow:'14:30', pmRed:'15:00', stallYellow:90, stallRed:120, maxBlink:3 };
+function wrCfg(){ return Object.assign({}, WR_DEFAULTS, (state.data && state.data.settings && state.data.settings.warroomConfig) || {}); }
+function wrMin(hhmm){ const m = String(hhmm||'').match(/^(\d{1,2}):(\d{2})$/); return m ? (+m[1])*60 + (+m[2]) : 0; }
+function wrHM(min){ return pad(Math.floor(min/60)) + ':' + pad(Math.floor(min%60)); }
+function wrState(){
+  if(!state._wr) state._wr = { marks:new Map(), loadedAt:0, err:false, prevDone:{}, sel:{}, cache:{}, lastPoll:0 };
+  return state._wr;
+}
+const WR_COL = { done:'#3FB37F', run:'#4A90E2', late:'#E0902E', stall:'#E0902E', wait:'#5C6B88', hot:'#E5594F' };
+function wrCompute(){
+  const cfg = wrCfg(), now = new Date(), nowMin = now.getHours()*60 + now.getMinutes(), nowMs = now.getTime(), today = todayStr();
+  const wd = now.getDay()===0 ? 7 : now.getDay();
+  const W = wrState();
+  const tasks = state.data.assignments.filter(a=>a.date===today && a.status!=='cancelled' && a.published!==false && !a.isSupport);
+  const cards = tasks.map(a=>{
+    const route = state.data.routes.find(r=>r.id===a.routeId) || null;
+    const dps = a.dropPoints || [];
+    const done = dps.filter(d=>d.status==='completed');
+    const issues = dps.filter(d=>d.status!=='completed' && d.issueReason).length;
+    const stamps = done.map(d=>d.completedAt ? new Date(d.completedAt).getTime() : NaN).filter(t=>!isNaN(t));
+    const lastMs = stamps.length ? Math.max.apply(null, stamps) : null;
+    const perMin = {}; stamps.forEach(t=>{ const k = Math.floor(t/60000); perMin[k] = (perMin[k]||0)+1; });
+    const batch = Object.keys(perMin).some(k=>perMin[k]>=3);
+    const m = W.marks.get(a.id) || { acked:0, resolved:0, resolution:'' };
+    const shiftPm = route ? route.shift==='PM' : false;
+    let s, why = '', over = 0, steady = false;
+    if(issues > m.resolved){ s = 'hot'; why = 'issue'; steady = m.acked >= issues; }
+    else if(a.status==='completed') s = 'done';
+    else if(!done.length){
+      const y = wrMin(shiftPm ? cfg.pmYellow : cfg.amYellow), r = wrMin(shiftPm ? cfg.pmRed : cfg.amRed);
+      if(nowMin >= r){ s = 'hot'; why = 'late'; over = nowMin - y; }
+      else if(nowMin >= y){ s = 'late'; over = nowMin - y; }
+      else s = 'wait';
+    } else {
+      const idle = lastMs ? (nowMs - lastMs)/60000 : 0;
+      if(idle >= cfg.stallRed){ s = 'hot'; why = 'stall'; over = Math.round(idle); }
+      else if(idle >= cfg.stallYellow){ s = 'stall'; over = Math.round(idle); }
+      else s = 'run';
+    }
+    const dr = state.data.drivers.find(x=>x.id===a.driverId);
+    return { key:a.id, id:a.id, route, origin: route ? originLabel(route.originAddr) : '（未知任務起點）', label: wrLabel(route),
+      driver: dr ? dr.name : '未指派', phone: dr ? (dr.phone||'') : '', n:dps.length, doneN:done.length, issues, s, why, over, steady, lastMs, batch,
+      resolution: (issues && m.resolved>=issues) ? m.resolution : '', resolvedTxt: m.resolved>0 && m.resolution ? m.resolution : '' };
+  });
+  // 沒人排的空格：今天完全沒有任務（假日／休息日）就不提示，免得整片紅。
+  if(tasks.length){
+    mobileSlotsFor(today, '').forEach(o=>o.routes.forEach(r=>r.slots.forEach(sl=>{
+      if(sl.items.length) return;
+      const wdList = routeWeekdays(sl.route);
+      if(wdList && !wdList.includes(wd)) return;
+      if(!getActiveVersion(sl.route, today)) return;
+      cards.push({ key:'gap:'+sl.route.id, id:null, route:sl.route, origin:originLabel(sl.route.originAddr), label:wrLabel(sl.route), driver:'', phone:'', n:0, doneN:0, issues:0, s:'hot', why:'gap', over:0, steady:false, lastMs:null, batch:false, resolution:'', resolvedTxt:'' });
+    })));
+  }
+  cards.sort((x,y)=> x.route && y.route ? routeSortCompare(x.route, y.route) : (x.route?-1:1));
+  return cards;
+}
+function wrLabel(route){
+  if(!route) return '—';
+  let t = routeDisplayName(route.name);
+  const og = originLabel(route.originAddr);
+  if(og && t.indexOf(og)===0) t = t.slice(og.length);
+  return t.trim() || routeDisplayName(route.name);
+}
+function wrChip(c){
+  if(c.s==='hot'){
+    if(c.why==='gap') return '🔴 沒人排';
+    if(c.why==='issue') return c.steady ? '🔴 待處理' : '🔴 '+c.issues+' 站未完成';
+    return c.why==='late' ? '🔴 逾時 '+c.over+' 分' : '🔴 '+c.over+' 分沒進度';
+  }
+  return { done:'🟢 已完成', run:'🔵 進行中', late:'🟡 逾時未出發', wait:'⚪ 待出發', stall:'🟡 停滯' }[c.s];
+}
+function wrSev(c){ return (c.why==='issue'||c.why==='gap') ? 0 : c.s==='hot' ? 1 : 2; }
+function wrCardHtml(c, anim){
+  const W = wrState(), hot = c.s==='hot', am = c.s==='late'||c.s==='stall';
+  let segs = '';
+  for(let i=0;i<c.n;i++) segs += '<i class="'+(i<c.doneN?'d':(i<c.doneN+c.issues?'h':''))+'"></i>';
+  let m;
+  if(c.why==='gap') m = '今天這個班次沒有排夥伴';
+  else if(c.s==='wait'||c.s==='late'||(c.s==='hot'&&c.why==='late')) m = '還沒有完成的店點（共 '+c.n+' 站）';
+  else m = c.doneN+' / '+c.n+' 站'+(c.lastMs?'　最近 '+wrHM(new Date(c.lastMs).getHours()*60+new Date(c.lastMs).getMinutes()):'');
+  if(c.resolution) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>';
+  else if(c.s==='done' && c.resolvedTxt) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolvedTxt)+'</span>';
+  const bd = c.batch ? '<div class="bd">🟣 批次上傳，部分時間不準</div>' : '';
+  let btn = '';
+  if(c.why==='issue' && !c.steady) btn = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
+  if(c.why==='issue' && c.steady){
+    const cur = W.sel[c.id] || '已聯絡店家';
+    btn = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>';
+  }
+  const tel = (c.phone && c.s!=='done') ? ' <a href="tel:'+escapeHtml(c.phone)+'" title="撥給 '+escapeHtml(c.driver)+'">📞</a>' : '';
+  const cls = (hot ? (anim?'hot':'hotst') : am ? (anim?c.s:'amst') : '') + (c.why==='gap'?' gap':'');
+  return '<div class="c '+cls+'" data-key="'+escapeHtml(c.key)+'" style="--c:'+WR_COL[c.s]+'"><div class="r"><b>'+escapeHtml(c.label)+'</b><span class="chip">'+wrChip(c)+'</span></div>'
+    + '<div class="p">'+(c.driver ? escapeHtml(c.driver)+tel : '（空缺）')+'</div>'+(segs?'<div class="segs">'+segs+'</div>':'')+'<div class="m">'+m+'</div>'+bd+btn+'</div>';
+}
+function wrBuild(){
+  const cfg = wrCfg(), cards = wrCompute();
+  const cnt = { done:0, run:0, wait:0, late:0, stall:0, hot:0, bat:0 };
+  let sd = 0, sn = 0;
+  cards.forEach(c=>{ cnt[c.s]++; if(c.batch) cnt.bat++; if(c.driver){ sd += c.doneN; sn += c.n; } });
+  const pct = sn ? Math.round(sd*100/sn) : 0;
+  const cand = cards.filter(c=>(c.s==='hot'&&!c.steady) || c.s==='late' || c.s==='stall')
+    .sort((a,b)=> wrSev(a)-wrSev(b) || (b.over-a.over));
+  const animKeys = new Set(cand.slice(0, cfg.maxBlink).map(c=>c.key));
+  const still = Math.max(0, cand.length - cfg.maxBlink);
+  const kp = [['需要處理',cnt.hot,cnt.hot?'#E5594F':'#3A4A68'],['注意',cnt.late+cnt.stall,(cnt.late+cnt.stall)?'#E0902E':'#3A4A68'],['進行中',cnt.run,'#4A90E2'],['已完成',cnt.done,'#3FB37F'],['待出發',cnt.wait,'#5C6B88'],['時間存疑',cnt.bat,cnt.bat?'#9B72D9':'#3A4A68']];
+  const kpHtml = kp.map(k=>'<div class="wr-k" style="--c:'+k[2]+'"><b>'+k[1]+'</b><span>'+k[0]+'</span></div>').join('');
+  const pctHtml = '站數完成率 '+pct+'%　｜　目前閃爍 '+Math.min(cfg.maxBlink, cand.length)+' 張'+(still?'（另有 '+still+' 張因名額已滿改為常亮）':'（上限 '+cfg.maxBlink+' 張）');
+  const ogs = []; cards.forEach(c=>{ if(!ogs.includes(c.origin)) ogs.push(c.origin); });
+  const boardHtml = cards.length ? ogs.map(o=>'<div class="wr-og">'+escapeHtml(o)+'</div><div class="wr-cards">'+cards.filter(c=>c.origin===o).map(c=>wrCardHtml(c, animKeys.has(c.key))).join('')+'</div>').join('')
+    : '<div class="wr-empty">今天沒有排任何任務</div>';
+  const nd = [];
+  const nm = c=> escapeHtml(c.origin+' '+c.label)+(c.driver?'（'+escapeHtml(c.driver)+'）':'');
+  cards.filter(c=>c.s==='hot'&&!c.steady).sort((a,b)=>wrSev(a)-wrSev(b)).forEach(c=>{
+    nd.push(['🔴', nm(c)+'　'+(c.why==='gap'?'今天沒有排夥伴':c.why==='issue'?c.issues+' 站回報未完成原因，等你確認':c.why==='late'?'已逾時 '+c.over+' 分鐘還沒有完成任何一站':c.over+' 分鐘沒有新進度')]);
+  });
+  cards.filter(c=>c.s==='hot'&&c.steady).forEach(c=> nd.push(['🔴', nm(c)+'　已看到，待處理']));
+  cards.filter(c=>c.s==='late'||c.s==='stall').forEach(c=> nd.push(['🟡', nm(c)+'　'+(c.s==='late'?'已過預計出發時間 '+c.over+' 分鐘還沒有完成任何一站':c.over+' 分鐘沒有新進度（'+c.doneN+'/'+c.n+' 站）')]));
+  const needHtml = nd.length ? nd.map(n=>'<div class="wr-n"><span>'+n[0]+'</span><em style="font-style:normal;">'+n[1]+'</em></div>').join('') : '<div class="wr-n" style="color:#3FB37F;">目前沒有需要處理的事項</div>';
+  return { kpHtml, pctHtml, pct, boardHtml, needHtml, cards };
+}
+function wrUpdate(){
+  const root = document.getElementById('wrRoot'); if(!root) return;
+  const W = wrState(), b = wrBuild(), now = new Date();
+  document.getElementById('wrClock').textContent = pad(now.getHours())+':'+pad(now.getMinutes());
+  document.getElementById('wrDate').textContent = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（週${'日一二三四五六'[now.getDay()]}）`+(W.err?'　⚠️ 已看到／已處理的標記暫時無法同步':'');
+  const set = (id, html)=>{ const el = document.getElementById(id); if(el && W.cache[id]!==html){ el.innerHTML = html; W.cache[id] = html; return true; } return false; };
+  set('wrKp', b.kpHtml); set('wrNeed', b.needHtml);
+  const bar = document.getElementById('wrBar'); if(bar) bar.style.width = b.pct+'%';
+  const pc = document.getElementById('wrPct'); if(pc) pc.textContent = b.pctHtml;
+  const boardEl = document.getElementById('wrBoard');
+  if(boardEl && !(document.activeElement && boardEl.contains(document.activeElement) && /SELECT/.test(document.activeElement.tagName))){
+    const changed = set('wrBoard', b.boardHtml);
+    // 剛有新進度的卡片閃一下綠色（不放進 html，免得每次重畫都重播）
+    const fresh = [];
+    b.cards.forEach(c=>{ const prev = W.prevDone[c.key]; if(prev!==undefined && c.doneN>prev) fresh.push(c.key); W.prevDone[c.key] = c.doneN; });
+    if(changed) fresh.forEach(k=>{ const el = boardEl.querySelector('[data-key="'+(window.CSS&&CSS.escape?CSS.escape(k):k)+'"]'); if(el){ el.classList.add('fresh'); setTimeout(()=>el.classList.remove('fresh'), 1800); } });
+  }
+}
+async function wrLoadMarks(force){
+  const W = wrState();
+  if(!force && Date.now()-W.loadedAt < 20000) return;
+  W.loadedAt = Date.now();
+  const today = todayStr();
+  const ids = state.data.assignments.filter(a=>a.date===today).map(a=>a.id);
+  if(!ids.length) return;
+  try{ W.marks = await fetchWarroomMarks(ids); W.err = false; }
+  catch(e){ W.err = true; console.error('讀取戰情室標記失敗', e); }
+}
+function wrApplyMarkEvent(ev){
+  const W = wrState(), r = ev.eventType==='DELETE' ? ev.old : ev.new;
+  if(!r || !r.assignment_id) return;
+  if(ev.eventType==='DELETE') W.marks.delete(r.assignment_id);
+  else W.marks.set(r.assignment_id, { acked:r.acked_count||0, resolved:r.resolved_count||0, resolution:r.resolution||'' });
+  if(state.tab==='warroom') wrUpdate();
+}
+async function wrMark(id, kind, reason){
+  const W = wrState(), a = state.data.assignments.find(x=>x.id===id); if(!a) return;
+  const issues = (a.dropPoints||[]).filter(d=>d.status!=='completed' && d.issueReason).length;
+  const cur = W.marks.get(id) || { acked:0, resolved:0, resolution:'' };
+  const next = { acked:issues, resolved: kind==='res' ? issues : cur.resolved, resolution: kind==='res' ? reason : cur.resolution };
+  W.marks.set(id, next); wrUpdate();
+  try{ await saveWarroomMark(id, next); W.err = false; }
+  catch(e){ W.err = true; wrUpdate(); toast('標記沒有存到資料庫，只有這台螢幕看得到：'+e.message, { type:'error' }); }
+}
+async function wrBackupRefresh(){
+  const W = wrState(), now = new Date(), h = now.getHours();
+  if(state.role!=='admin' || h<5 || h>=21 || Date.now()-W.lastPoll < 270000) { wrUpdate(); return; } // 夜間不輪詢；備援最快每 4.5 分鐘一次
+  W.lastPoll = Date.now();
+  try{ const t = todayStr(); await refreshAssignmentsRange(t, t); await wrLoadMarks(true); }catch(e){ console.error('戰情室備援更新失敗', e); }
+  wrUpdate();
+}
+function wrLeaveFull(){
+  if(!document.body.classList.contains('wr-full')) return;
+  document.body.classList.remove('wr-full');
+  try{ if(document.fullscreenElement) document.exitFullscreen(); }catch(e){}
+}
+function wrToggleFull(){
+  if(document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); return; }
+  document.body.classList.add('wr-full');
+  try{ const el = document.documentElement; if(el.requestFullscreen) el.requestFullscreen().catch(()=>{}); }catch(e){}
+  wrUpdateFullBtn();
+}
+function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(b) b.textContent = document.body.classList.contains('wr-full') ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
+document.addEventListener('fullscreenchange', ()=>{ if(!document.fullscreenElement && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); } });
+setInterval(()=>{ if(state.data && state.tab==='warroom' && document.getElementById('wrRoot')) wrUpdate(); }, 15000);
+async function renderWarRoom(c){
+  const W = wrState();
+  if(!document.getElementById('wrRoot') || !c.contains(document.getElementById('wrRoot'))){
+    let mute = false; try{ mute = localStorage.getItem('wrMute')==='1'; }catch(e){}
+    W.cache = {};
+    c.innerHTML = `<div class="wr${mute?' mute':''}" id="wrRoot">
+      <div class="wr-top"><div><div class="wr-t">碳金<span>戰情室</span></div><div class="wr-sub" id="wrDate"></div></div>
+        <div class="wr-right"><div><div class="wr-clock" id="wrClock"></div><div class="wr-live">即時更新中</div></div>
+        <div class="wr-btns"><button class="wr-btn" id="wrMute"></button><button class="wr-btn" id="wrFull"></button></div></div></div>
+      <div class="wr-lg"><span>⚪ 待出發</span><span>🔵 進行中</span><span>🟢 完成</span><span>🟡 注意（慢速脈動，超過門檻自動升級）</span><span>🔴 要處理（快閃→按「已看到」→紅框常亮→按「已處理」才消失）</span><span>🟣 時間存疑</span></div>
+      <div class="wr-kp" id="wrKp"></div><div class="wr-bar"><i id="wrBar"></i></div><div class="wr-pct" id="wrPct"></div>
+      <div class="wr-main"><div id="wrBoard"></div><div class="wr-need"><h3>需要處理</h3><div id="wrNeed"></div></div></div></div>`;
+    const root = document.getElementById('wrRoot');
+    const muteBtn = document.getElementById('wrMute');
+    const showMute = ()=>{ muteBtn.textContent = root.classList.contains('mute') ? '🔇 靜音模式：開' : '🔔 靜音模式：關'; };
+    showMute();
+    muteBtn.onclick = ()=>{ root.classList.toggle('mute'); try{ localStorage.setItem('wrMute', root.classList.contains('mute')?'1':'0'); }catch(e){} showMute(); };
+    document.getElementById('wrFull').onclick = wrToggleFull; wrUpdateFullBtn();
+    root.addEventListener('change', e=>{ const id = e.target.getAttribute && e.target.getAttribute('data-sel'); if(id) W.sel[id] = e.target.value; });
+    root.addEventListener('click', e=>{
+      const t = e.target, a = t.getAttribute && t.getAttribute('data-a'); if(!a) return;
+      const id = t.getAttribute('data-id');
+      if(a==='ack') wrMark(id, 'ack');
+      if(a==='res'){ const sel = t.parentNode.querySelector('select'); wrMark(id, 'res', sel ? sel.value : '已處理'); }
+    });
+  }
+  wrUpdate();
+  await wrLoadMarks(true);
+  if(document.getElementById('wrRoot')) wrUpdate();
 }
 function goTab(id){ switchTab(id); }
 // ---------- 公告管理（主控發布，全體夥伴首頁看得到） ----------
@@ -5938,6 +6205,20 @@ function renderSettings(c){
       <button class="btn amber" id="savePin">儲存</button>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0;">戰情室門檻</h3>
+      <p class="section-sub">夥伴到了這個時間還沒有完成第一站，戰情室卡片先變黃色；超過紅色時間再升級成紅色快閃。停滯是「最近一次完成店點到現在」過了幾分鐘沒有新進度。</p>
+      <div class="grid2" style="max-width:560px;">
+        <div class="field"><label>上午班：變黃色</label><input type="time" id="wrAmY" value="${wrCfg().amYellow}"></div>
+        <div class="field"><label>上午班：變紅色</label><input type="time" id="wrAmR" value="${wrCfg().amRed}"></div>
+        <div class="field"><label>下午班：變黃色</label><input type="time" id="wrPmY" value="${wrCfg().pmYellow}"></div>
+        <div class="field"><label>下午班：變紅色</label><input type="time" id="wrPmR" value="${wrCfg().pmRed}"></div>
+        <div class="field"><label>停滯：變黃色（分鐘）</label><input type="number" id="wrStY" min="10" step="5" value="${wrCfg().stallYellow}"></div>
+        <div class="field"><label>停滯：變紅色（分鐘）</label><input type="number" id="wrStR" min="10" step="5" value="${wrCfg().stallRed}"></div>
+        <div class="field"><label>同時最多閃爍幾張</label><input type="number" id="wrMax" min="1" max="12" value="${wrCfg().maxBlink}"></div>
+      </div>
+      <button class="btn amber" id="saveWr">儲存門檻</button> <button class="btn ghost" id="resetWr">恢復預設值</button>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0;">Supabase 免費方案用量</h3>
       <p class="section-sub">免費方案上限：資料庫 500MB・檔案儲存 1GB・每月流量 5GB。免費方案沒有自動備份機制，接近上限時請用下方「資料匯出與封存」處理，或考慮升級付費方案。</p>
       <div id="usageStatsBody"><div class="empty">載入中...</div></div>
@@ -5970,6 +6251,24 @@ function renderSettings(c){
     const body = document.getElementById('usageStatsBody');
     if(body) body.innerHTML = `<div class="empty">用量資料載入失敗：${err.message}</div>`;
   });
+  const wrRead = ()=>({
+    amYellow: document.getElementById('wrAmY').value, amRed: document.getElementById('wrAmR').value,
+    pmYellow: document.getElementById('wrPmY').value, pmRed: document.getElementById('wrPmR').value,
+    stallYellow: parseInt(document.getElementById('wrStY').value,10), stallRed: parseInt(document.getElementById('wrStR').value,10),
+    maxBlink: parseInt(document.getElementById('wrMax').value,10)
+  });
+  document.getElementById('saveWr').onclick = async ()=>{
+    const v = wrRead();
+    if(!v.amYellow || !v.amRed || !v.pmYellow || !v.pmRed){ alert('請填好四個時間'); return; }
+    if(wrMin(v.amRed) < wrMin(v.amYellow) || wrMin(v.pmRed) < wrMin(v.pmYellow)){ alert('紅色時間不能早於黃色時間'); return; }
+    if(!(v.stallYellow>=10) || !(v.stallRed>=v.stallYellow)){ alert('停滯分鐘請填 10 以上，且紅色不能小於黃色'); return; }
+    if(!(v.maxBlink>=1 && v.maxBlink<=12)){ alert('同時閃爍張數請填 1～12'); return; }
+    try{ await saveWarroomConfig(v); alert('已儲存戰情室門檻。'); }catch(err){ alert(err.message); }
+  };
+  document.getElementById('resetWr').onclick = async ()=>{
+    if(!confirm('把戰情室門檻恢復成預設值？')) return;
+    try{ await saveWarroomConfig(null); renderSettings(c); alert('已恢復預設值。'); }catch(err){ alert(err.message); }
+  };
   document.getElementById('savePin').onclick = async ()=>{
     const pin = document.getElementById('setPin').value.trim();
     if(!pin){ alert('PIN碼不能空白'); return; }
@@ -7336,7 +7635,7 @@ let lastHomeRefreshAt = null;
 // 只抓「有變的那幾筆」合併進記憶體，然後讓「目前這一頁」立刻跟著更新（不再只有首頁會更新）。
 // 使用者正在輸入、或開著明細／簽名視窗時，不硬重畫（以免打到一半的字被洗掉），改成稍後安全時再更新。
 const LIVE_TABS = {
-  assignments: ['home','schedule','today','history','my-earnings'],
+  assignments: ['home','schedule','today','history','my-earnings','warroom'],
   statements: ['home','slips','my-statement'],
   adjustments: ['home','payroll','my-earnings'],
   fuel_claims: ['home','payroll','my-earnings']
@@ -7344,6 +7643,7 @@ const LIVE_TABS = {
 let liveQ = { assignments:new Set(), assignmentsDel:new Set(), statements:new Set(), statementsDel:new Set(), adjustments:new Set(), adjustmentsDel:new Set(), fuel_claims:new Set(), fuel_claimsDel:new Set() };
 let liveTimer = null, livePendingTabs = null;
 function handleLiveEvent(ev){
+  if(ev.table==='war_room_marks'){ wrApplyMarkEvent(ev); return; }
   const id = ev.new.id || ev.old.id;
   const del = ev.eventType==='DELETE';
   if(ev.table==='assignment_drop_points'){
@@ -7428,6 +7728,7 @@ setInterval(()=>{ if(livePendingTabs && !liveRenderBlocked()) tryLiveRender(); }
 })();
 
 async function refreshHomeDataIfIdle(){
+  if(state.data && state.tab==='warroom' && !document.hidden){ wrBackupRefresh(); return; }
   if(!state.data || state.tab!=='home' || document.hidden) return;
   try{
     // 只重抓首頁真的需要跟上即時狀態的任務資料，不呼叫整支 loadAllData()——

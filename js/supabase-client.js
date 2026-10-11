@@ -53,7 +53,7 @@ async function startRealtimeSync(onEvent) {
     });
     await realtimeClient.realtime.setAuth(token);
     let ch = realtimeClient.channel('live-sync');
-    ['assignments', 'assignment_drop_points', 'statements', 'adjustments', 'fuel_claims'].forEach(table => {
+    ['assignments', 'assignment_drop_points', 'statements', 'adjustments', 'fuel_claims', 'war_room_marks'].forEach(table => {
       ch = ch.on('postgres_changes', { event: '*', schema: 'public', table }, payload => onEvent({
         table, eventType: payload.eventType, new: payload.new || {}, old: payload.old || {}
       }));

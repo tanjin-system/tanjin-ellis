@@ -333,7 +333,7 @@ async function loadAllData() {
   }
 
   const data = {
-    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null },
+    settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null, warroomConfig: byKey.settingsRes?.data?.warroom_config || null },
     drivers: cachedCatalog ? cachedCatalog.drivers : (byKey.driversRes.data || []).map(mapDriver),
     channels: cachedCatalog ? cachedCatalog.channels : (byKey.channelsRes.data || []).map(mapChannel),
     origins: cachedCatalog ? cachedCatalog.origins : (byKey.originsRes.data || []).map(mapOrigin),
@@ -2279,6 +2279,31 @@ async function updateAdminPin(pin) {
   const { error } = await supabase.from('settings').update({ admin_pin: pin }).eq('id', 1);
   if (error) throw new Error('更新PIN碼失敗：' + error.message);
   state.data.settings.adminPin = pin;
+}
+
+// ---------- 戰情室：門檻設定與「已看到／已處理」標記 ----------
+// 門檻存在 settings.warroom_config（jsonb，null＝用預設值）；標記存在 war_room_marks（每趟任務一列，
+// acked_count／resolved_count 記的是「當時有幾站回報未完成原因」，之後又有新的未完成原因就會重新亮起）。
+async function saveWarroomConfig(cfg) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('settings').update({ warroom_config: cfg }).eq('id', 1);
+  if (error) throw new Error('儲存戰情室門檻失敗：' + error.message);
+  state.data.settings.warroomConfig = cfg;
+}
+async function fetchWarroomMarks(assignmentIds) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('war_room_marks').select('*').in('assignment_id', assignmentIds);
+  if (error) throw new Error(error.message);
+  const map = new Map();
+  (data || []).forEach(r => map.set(r.assignment_id, { acked: r.acked_count || 0, resolved: r.resolved_count || 0, resolution: r.resolution || '' }));
+  return map;
+}
+async function saveWarroomMark(assignmentId, m) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('war_room_marks').upsert({
+    assignment_id: assignmentId, acked_count: m.acked, resolved_count: m.resolved, resolution: m.resolution || null, updated_at: new Date().toISOString()
+  }, { onConflict: 'assignment_id' });
+  if (error) throw new Error(error.message);
 }
 
 // 記錄「剛剛做過一次手動備份」，只用來在首頁顯示「超過7天沒備份」提醒，
