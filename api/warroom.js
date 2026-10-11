@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     return res.status(200).send(JSON.stringify({
       name: '碳金戰情室', short_name: '戰情室', description: '碳金戰情室（唯讀）',
-      start_url: '/?wr=' + encodeURIComponent(token), scope: '/', display: 'standalone',
+      start_url: '/wr/' + encodeURIComponent(token), scope: '/', display: 'standalone',
       background_color: '#0A0F1A', theme_color: '#0A0F1A',
       icons: [
         { src: '/assets/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },

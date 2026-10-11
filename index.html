@@ -6298,7 +6298,7 @@ function renderSettings(c){
     <div class="panel">
       <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
       <p class="section-sub">產生一條不用登入的唯讀網址，貼到辦公室電視的瀏覽器就能看今天的進度。外部畫面只有路線、站數進度和狀態：不顯示夥伴姓名與電話、店點名稱、未完成原因內容，也沒有任何操作按鈕。知道這條網址的人都看得到今天各路線的進度，請不要公開張貼；外洩時按「重新產生」，舊連結立刻失效。</p>
-      ${state.data.settings.warroomToken ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="wrExtUrl" readonly value="${location.origin}/?wr=${state.data.settings.warroomToken}" style="flex:1; min-width:260px; font-size:12px;" onclick="this.select()"><button class="btn ghost" id="wrExtCopy">複製</button><button class="btn ghost" id="wrExtRegen">重新產生（舊連結失效）</button><button class="btn ghost" id="wrExtOff">停用連結</button></div>` : `<button class="btn amber" id="wrExtGen">產生連結</button>`}
+      ${state.data.settings.warroomToken ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="wrExtUrl" readonly value="${location.origin}/wr/${state.data.settings.warroomToken}" style="flex:1; min-width:260px; font-size:12px;" onclick="this.select()"><button class="btn ghost" id="wrExtCopy">複製</button><button class="btn ghost" id="wrExtRegen">重新產生（舊連結失效）</button><button class="btn ghost" id="wrExtOff">停用連結</button></div>` : `<button class="btn amber" id="wrExtGen">產生連結</button>`}
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">戰情室門檻</h3>
@@ -7905,7 +7905,8 @@ async function bootApp(){
 }
 
 (async function init(){
-  const wrTok = new URLSearchParams(location.search).get('wr');
+  const wrPath = location.pathname.match(/^\/wr\/([A-Za-z0-9_-]{16,128})\/?$/);
+  const wrTok = (wrPath && wrPath[1]) || new URLSearchParams(location.search).get('wr');
   if(wrTok){ await bootWarRoomExternal(wrTok); return; }
   computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
   await bootApp();
