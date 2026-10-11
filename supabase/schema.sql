@@ -1112,3 +1112,7 @@ alter table drop_points add column if not exists allow_duplicate boolean not nul
 
 -- PART 23：路線停用（status）。停用的路線不出現在週期任務清單／批次建立／下週自動延續／涵蓋檢查，歷史資料全部保留。
 alter table routes add column if not exists status text not null default 'active' check (status in ('active','inactive'));
+
+-- PART 24：地圖座標。店點與任務起點的經緯度（地址轉座標後存起來，路線管理的地圖與路徑用）。
+alter table drop_points add column if not exists lat double precision, add column if not exists lng double precision;
+alter table origins add column if not exists lat double precision, add column if not exists lng double precision;

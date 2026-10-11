@@ -37,11 +37,11 @@ function mapChannel(row) {
 }
 
 function mapOrigin(row) {
-  return { id: row.id, address: row.address, label: row.label || '', status: row.status };
+  return { id: row.id, address: row.address, label: row.label || '', status: row.status, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null };
 }
 
 function mapDropPoint(row) {
-  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate };
+  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null };
 }
 
 function mapRoute(row) {
@@ -641,7 +641,10 @@ async function createOrigin(input) {
 // ——這樣不管路線名稱原本是用哪個舊名組出來的，改完都保證跟任務起點同步。
 async function updateOrigin(originId, input) {
   const supabase = getSupabase();
-  const { data, error } = await supabase.from('origins').update({ address: input.address, label: input.label || null }).eq('id', originId).select().single();
+  const prevOrigin = state.data.origins.find(o => o.id === originId);
+  const payload = { address: input.address, label: input.label || null };
+  if (prevOrigin && prevOrigin.address !== input.address) { payload.lat = null; payload.lng = null; } // 地址改了，舊座標作廢
+  const { data, error } = await supabase.from('origins').update(payload).eq('id', originId).select().single();
   if (error) throw new Error('更新任務起點失敗：' + error.message);
   const origin = mapOrigin(data);
   const idx = state.data.origins.findIndex(o => o.id === originId);
@@ -675,6 +678,73 @@ async function deleteOrDeactivateOrigin(originId) {
   return 'deleted';
 }
 
+// ---------------- 地圖座標（地址轉座標、儲存） ----------------
+// 地址轉座標用 OpenStreetMap 的 Nominatim（免費、不用金鑰、請求直接從瀏覽器送出，不經過 Supabase，不佔資料庫流量）。
+// 規則是每秒最多一次請求，所以一次補齊很多家店會花幾分鐘；做過的會存進資料庫，之後不用再查。
+async function geocodeAddress(addr) {
+  const tries = [];
+  const clean = (addr || '').replace(/\s+/g, '').replace(/^台灣/, '');
+  tries.push(clean);
+  tries.push(clean.replace(/\d+樓.*$/, '').replace(/之\d+號/, '號')); // 去掉樓層、之幾
+  const roadOnly = clean.replace(/\d+(之\d+)?號.*$/, '');
+  if (roadOnly && roadOnly !== clean) tries.push(roadOnly);   // 找不到門牌，退而求其次用路段
+  for (const q of [...new Set(tries)]) {
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=tw&accept-language=zh-TW&q=' + encodeURIComponent(q));
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j[0]) return { lat: Number(j[0].lat), lng: Number(j[0].lon), exact: q === clean };
+      }
+    } catch (e) { /* 換下一種寫法 */ }
+    await new Promise(res => setTimeout(res, 1100));
+  }
+  return null;
+}
+async function saveDropPointCoord(dpId, lat, lng) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('drop_points').update({ lat, lng }).eq('id', dpId);
+  if (error) throw new Error('儲存座標失敗：' + error.message);
+  const dp = state.data.dropPoints.find(x => x.id === dpId);
+  if (dp) { dp.lat = lat; dp.lng = lng; }
+}
+async function saveOriginCoord(originId, lat, lng) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('origins').update({ lat, lng }).eq('id', originId);
+  if (error) throw new Error('儲存座標失敗：' + error.message);
+  const o = state.data.origins.find(x => x.id === originId);
+  if (o) { o.lat = lat; o.lng = lng; }
+}
+// 補齊所有「使用中、還沒有座標」的店點。onProgress({done,total,name,failed}) 會一路回報；cancel.stop=true 可中途停止。
+async function geocodeMissingDropPoints(onProgress, cancel) {
+  const todo = state.data.dropPoints.filter(dp => dp.status !== 'inactive' && (dp.lat == null || dp.lng == null));
+  const failed = [];
+  let done = 0;
+  for (const dp of todo) {
+    if (cancel && cancel.stop) break;
+    const g = await geocodeAddress(dp.address);
+    if (g) await saveDropPointCoord(dp.id, g.lat, g.lng); else failed.push(dp);
+    done++;
+    if (onProgress) onProgress({ done, total: todo.length, name: dp.code || dp.address, failed: failed.length });
+    await new Promise(res => setTimeout(res, 1100));
+  }
+  return { total: todo.length, done, failed };
+}
+// 路徑與行車時間：OSRM 公開路徑服務（免費、不用金鑰、從瀏覽器直接送出）。coords = [[lat,lng],...] 依序經過。
+async function fetchRoadRoute(coords) {
+  if (coords.length < 2) return null;
+  const path = coords.map(c => c[1] + ',' + c[0]).join(';');
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 9000);
+  try {
+    const r = await fetch('https://router.project-osrm.org/route/v1/driving/' + path + '?overview=full&geometries=geojson&steps=false', { signal: ctl.signal });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const rt = j.routes && j.routes[0];
+    if (!rt) return null;
+    // legs[i] = 第 i 段（上一點到這一點）的距離（公尺）與行車時間（秒）
+    return { line: rt.geometry.coordinates.map(c => [c[1], c[0]]), km: rt.distance / 1000, sec: rt.duration, legs: (rt.legs || []).map(l => ({ m: l.distance, s: l.duration })) };
+  } catch (e) { return null; } finally { clearTimeout(tm); }
+}
+
 // ---------------- 店點 ----------------
 
 async function createDropPoint(input) {
@@ -702,9 +772,9 @@ async function updateDropPoint(dpId, input) {
   const supabase = getSupabase();
   const prev = state.data.dropPoints.find(x => x.id === dpId);
   const channelChanged = prev && prev.channelId !== input.channelId;
-  const { data, error } = await supabase.from('drop_points').update({
-    address: input.address, channel_id: input.channelId, code: input.code || null
-  }).eq('id', dpId).select().single();
+  const dpPayload = { address: input.address, channel_id: input.channelId, code: input.code || null };
+  if (prev && prev.address !== input.address) { dpPayload.lat = null; dpPayload.lng = null; } // 地址改了，舊座標作廢
+  const { data, error } = await supabase.from('drop_points').update(dpPayload).eq('id', dpId).select().single();
   if (error) throw new Error('更新店點失敗：' + error.message);
   const idx = state.data.dropPoints.findIndex(x => x.id === dpId);
   if (idx >= 0) state.data.dropPoints[idx] = mapDropPoint(data);

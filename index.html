@@ -2495,6 +2495,7 @@ function renderDropPoints(c){
     <h2 class="section-title">店點資料庫</h2>
     <p class="section-sub">先建立好常用店點，之後在「路線管理」用選單直接組成路線，不用每次手key地址。</p>
     <div id="covHost"></div>
+    <div id="geoBox"></div>
     <div class="panel">
       <div class="grid3">
         <div class="field"><label>地址</label><input id="dpAddr"></div>
@@ -2520,12 +2521,40 @@ function renderDropPoints(c){
     }catch(err){ alert(err.message); }
   };
   state._dpSearchInit = '';
+  renderGeoBox();
   document.getElementById('dpSearch').oninput = renderDpListBody;
   document.getElementById('dpOnlyMissing').onchange = e=>{ dpOnlyMissing = e.target.checked; renderDpListBody(); };
   document.getElementById('dpExpandAll').onclick = ()=>{ state.data.channels.forEach(ch=>dpExpandedChannels.add(ch.id)); renderDpListBody(); };
   document.getElementById('dpCollapseAll').onclick = ()=>{ dpExpandedChannels.clear(); renderDpListBody(); };
   renderCoveragePanel();
   renderDpListBody();
+}
+// 地圖座標：把店點地址轉成經緯度（路線管理的地圖路線、預計時間用）。免費、只查一次，每秒一家，所以一次補齊很多家要幾分鐘。
+let geoCancel = { stop:false }, geoRunning = false;
+function renderGeoBox(){
+  const box = document.getElementById('geoBox'); if(!box) return;
+  const active = state.data.dropPoints.filter(dp=>dp.status!=='inactive');
+  const miss = active.filter(dp=>dp.lat==null || dp.lng==null);
+  if(!desktopDnd()){ box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="panel no-print" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+    <div><b>地圖座標</b>　已定位 <b>${active.length-miss.length}</b> ／ ${active.length} 家${miss.length?`　<span style="color:var(--danger);">還有 ${miss.length} 家沒有位置</span>`:'　✅'}
+      <div id="geoProg" style="font-size:12px; color:var(--ink-soft); margin-top:2px;">${miss.length?`補齊後，路線管理就能顯示地圖路線與預計到達時間。每秒查一家，約需 ${Math.ceil(miss.length*2.2/60)} 分鐘（可以中途停止、之後接著補）。`:'路線管理的地圖與預計時間可以使用。'}</div></div>
+    ${miss.length?'<span><button class="btn amber" id="geoGo">補齊地圖座標</button> <button class="btn ghost" id="geoStop" style="display:none;">停止</button></span>':''}
+  </div>`;
+  const go = box.querySelector('#geoGo'); if(!go) return;
+  go.onclick = async ()=>{
+    if(geoRunning) return;
+    if(!confirm(`要把 ${miss.length} 家店的地址轉成地圖座標嗎？\n\n會一家一家查（約 ${Math.ceil(miss.length*2.2/60)} 分鐘），查的過程請不要關閉這個頁面；可以隨時按「停止」，下次接著補。`)) return;
+    geoRunning = true; geoCancel = { stop:false };
+    go.disabled = true; const stop = box.querySelector('#geoStop'); stop.style.display = ''; stop.onclick = ()=>{ geoCancel.stop = true; stop.disabled = true; };
+    const prog = box.querySelector('#geoProg');
+    try{
+      const r = await geocodeMissingDropPoints(p=>{ if(prog.isConnected) prog.textContent = `查詢中 ${p.done} / ${p.total}：${p.name}（查不到 ${p.failed} 家）`; }, geoCancel);
+      toast(`座標補齊完成：成功 ${r.done - r.failed.length} 家${r.failed.length?`，${r.failed.length} 家查不到（可在路線地圖上手動點選位置）`:''}${geoCancel.stop?'（已中途停止）':''}`, { type: r.failed.length ? 'warn' : 'ok' });
+    }catch(e){ toast(e.message, { type:'error' }); }
+    geoRunning = false;
+    if(document.getElementById('geoBox')){ renderGeoBox(); renderDpListBody(); }
+  };
 }
 function renderDpListBody(){
   const wrap = document.getElementById('dpListBody');
@@ -2939,6 +2968,129 @@ function bindStopDrag(detailEl, rid){
     });
   });
 }
+// ---------- 路線地圖：站點連線、行車路徑、預計到達時間（電腦版路線管理） ----------
+// 地圖用 Leaflet＋OpenStreetMap，路徑用 OSRM，地址轉座標用 Nominatim——全部免費、不用金鑰、直接從瀏覽器連線，
+// 不經過 Supabase（不佔你的資料庫流量）。座標存在店點／任務起點上，第一次補齊之後就不用再查。
+// 預計時間 ＝ 行車時間（不含塞車）＋ 每站停留時間，只是估算，給調整順序時參考。
+let _leafletP = null;
+function loadLeaflet(){
+  if(window.L) return Promise.resolve();
+  if(_leafletP) return _leafletP;
+  _leafletP = new Promise((res, rej)=>{
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css'; document.head.appendChild(css);
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';
+    sc.onload = ()=>res(); sc.onerror = ()=>{ _leafletP = null; rej(new Error('地圖元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _leafletP;
+}
+const ROUTE_DWELL_DEFAULT_MIN = 5;
+function fmtClock(startHHMM, addMin){
+  const [h, m] = (startHHMM||'08:00').split(':').map(Number);
+  const t = (h*60 + m + Math.round(addMin)) % (24*60);
+  return String(Math.floor(t/60)).padStart(2,'0') + ':' + String(t%60).padStart(2,'0');
+}
+async function renderRouteMap(rid){
+  const el = document.getElementById('rvMap'); if(!el) return;
+  const route = state.data.routes.find(x=>x.id===rid), draft = routeDraft[rid];
+  if(!route || !draft) return;
+  const summary = document.getElementById('rvMapSummary'), etaEl = document.getElementById('rvEta');
+  summary.textContent = '地圖載入中…';
+  try{ await loadLeaflet(); }catch(e){ summary.textContent = e.message; return; }
+  if(!el.isConnected) return;
+  if(window._rvMap){ try{ window._rvMap.remove(); }catch(e){} window._rvMap = null; }
+  const og = state.data.origins.find(o=>o.address===route.originAddr);
+  // 任務起點沒有座標就先查一次（只查一次，存起來）
+  if(og && (og.lat==null || og.lng==null)){
+    summary.textContent = '正在查詢任務起點位置…';
+    const g = await geocodeAddress(og.address);
+    if(g){ try{ await saveOriginCoord(og.id, g.lat, g.lng); }catch(e){ og.lat = g.lat; og.lng = g.lng; } }
+  }
+  const pts = draft.order.map(id=>state.data.dropPoints.find(d=>d.id===id)).filter(Boolean);
+  const located = pts.filter(d=>d.lat!=null && d.lng!=null);
+  const missing = pts.filter(d=>d.lat==null || d.lng==null);
+  const originOk = og && og.lat!=null && og.lng!=null;
+  if(!located.length && !originOk){
+    summary.innerHTML = '這條路線的店點還沒有地圖座標。請先到「店點資料庫」按「補齊地圖座標」，或在下面一家一家點地圖設定位置。';
+  }
+  const map = L.map(el, { scrollWheelZoom:true });
+  window._rvMap = map;
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+  const mk = (n, bg)=> L.divIcon({ className:'', html:`<div style="background:${bg};color:#fff;border-radius:50%;width:26px;height:26px;line-height:22px;text-align:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);font-size:13px;">${n}</div>`, iconSize:[26,26], iconAnchor:[13,13] });
+  const all = [];
+  if(originOk){ L.marker([og.lat, og.lng], { icon: mk('⌂', '#5B6472') }).addTo(map).bindTooltip('出發：'+(og.label||og.address)); all.push([og.lat, og.lng]); }
+  pts.forEach((d, i)=>{
+    if(d.lat==null || d.lng==null) return;
+    const m = L.marker([d.lat, d.lng], { icon: mk(i+1, '#E0902E'), draggable:true }).addTo(map).bindTooltip(`${i+1}. ${dpLabel(d)}（拖曳可修正位置）`);
+    m.on('dragend', async ()=>{
+      const ll = m.getLatLng();
+      if(!confirm(`把「${dpLabel(d)}」的位置改到這裡？`)){ renderRouteMap(rid); return; }
+      try{ await saveDropPointCoord(d.id, ll.lat, ll.lng); toast('位置已更新', { type:'ok' }); }catch(e){ toast(e.message, { type:'error' }); }
+      renderRouteMap(rid);
+    });
+    all.push([d.lat, d.lng]);
+  });
+  if(all.length) map.fitBounds(all, { padding:[30,30], maxZoom:16 }); else map.setView([25.05, 121.52], 11);
+  // 沒座標的店：一家一家在地圖上點選位置
+  let placing = null;
+  const missHtml = missing.length ? `<div class="note" style="margin:8px 0;">這 ${missing.length} 家還沒有位置，路線沒有算進去：${missing.map(d=>`<button class="btn ghost" data-place="${d.id}" style="padding:2px 8px; font-size:12px; margin:2px;">${escapeHtml(dpLabel(d))}：點地圖設定</button>`).join('')}</div>` : '';
+  map.on('click', async e=>{
+    if(!placing) return;
+    const d = placing; placing = null; el.style.cursor = '';
+    if(!confirm(`把「${dpLabel(d)}」設在這個位置？`)) return;
+    try{ await saveDropPointCoord(d.id, e.latlng.lat, e.latlng.lng); toast('位置已儲存', { type:'ok' }); }catch(err){ toast(err.message, { type:'error' }); }
+    renderRouteMap(rid);
+  });
+  // 路徑
+  const seq = [];
+  if(originOk) seq.push({ ll:[og.lat, og.lng], label:'出發' });
+  pts.forEach((d,i)=>{ if(d.lat!=null && d.lng!=null) seq.push({ ll:[d.lat, d.lng], dp:d, n:i+1 }); });
+  let rt = null;
+  if(seq.length >= 2){ summary.textContent = '計算路線中…'; rt = await fetchRoadRoute(seq.map(s=>s.ll)); }
+  if(!el.isConnected || window._rvMap !== map) return;
+  if(seq.length >= 2){
+    if(rt){ L.polyline(rt.line, { color:'#E0902E', weight:5, opacity:.85 }).addTo(map); }
+    else { L.polyline(seq.map(s=>s.ll), { color:'#E0902E', weight:4, dashArray:'6 8', opacity:.8 }).addTo(map); }
+  }
+  const dwell = Number(draft.dwell ?? ROUTE_DWELL_DEFAULT_MIN);
+  const start = draft.startTime || '08:00';
+  let html = '';
+  if(rt){
+    const driveMin = rt.sec/60;
+    const stopsN = pts.filter(d=>d.lat!=null && d.lng!=null).length;
+    const totalMin = driveMin + dwell*stopsN;
+    html += `<div style="display:flex; gap:14px; flex-wrap:wrap; align-items:baseline; margin:6px 0;">
+      <span>地圖里程 <b>${rt.km.toFixed(1)} km</b></span><span>行車約 <b>${Math.round(driveMin)} 分</b></span><span>含停留約 <b>${Math.round(totalMin)} 分</b>（${fmtClock(start,0)} 出發 → ${fmtClock(start,totalMin)} 完成）</span>
+      <button class="btn ghost" id="rvUseKm" style="padding:3px 10px; font-size:12px;">採用地圖里程 ${rt.km.toFixed(1)} km</button></div>`;
+    // 每站預計到達
+    let acc = 0, legIdx = 0; const rows = [];
+    seq.forEach((s, idx)=>{
+      if(idx>0){ acc += rt.legs[legIdx] ? rt.legs[legIdx].s/60 : 0; legIdx++; }
+      if(s.dp){ rows.push(`<tr><td>${s.n}</td><td>${escapeHtml(dpLabel(s.dp))}</td><td class="amount">${idx>0 && rt.legs[legIdx-1] ? (rt.legs[legIdx-1].m/1000).toFixed(1)+' km' : '—'}</td><td class="amount">${fmtClock(start, acc + dwell*(rows.length))}</td></tr>`); }
+    });
+    html += `<table style="margin-top:6px;"><thead><tr><th>站</th><th>店點</th><th>距上一點</th><th>預計到達</th></tr></thead><tbody>${rows.join('')}</tbody></table>
+      <div style="font-size:11.5px; color:var(--ink-soft); margin-top:4px;">預計時間＝行車時間（不含塞車）＋每站停留 ${dwell} 分，僅供調整順序時參考。路徑資料來自 OpenStreetMap／OSRM。</div>`;
+  } else if(seq.length>=2){
+    html += '<div class="note" style="margin:6px 0;">路徑服務暫時連不上，先用虛線連接各站（只是直線示意）。</div>';
+  }
+  summary.innerHTML = missHtml + (originOk ? '' : (og ? '<div class="note" style="margin:6px 0;">任務起點的位置查不到，路線從第一站開始算。</div>' : ''));
+  etaEl.innerHTML = html;
+  summary.querySelectorAll('[data-place]').forEach(b=>{ b.onclick = ()=>{ placing = state.data.dropPoints.find(d=>d.id===b.dataset.place); el.style.cursor = 'crosshair'; toast(`請在地圖上點一下「${dpLabel(placing)}」的位置`, { type:'info' }); }; });
+  const useKm = etaEl.querySelector('#rvUseKm');
+  if(useKm) useKm.onclick = ()=>{ draft.distanceKm = Math.round(rt.km*10)/10; applyAutoFees(draft); toast(`已採用地圖里程 ${draft.distanceKm} km，夥伴費用與請款總額已依公式重算。`, { type:'ok' }); renderRouteDetail(rid); };
+}
+function bindRouteMap(detailEl, rid){
+  const draft = routeDraft[rid]; if(!draft) return;
+  const tg = detailEl.querySelector('#rvMapToggle'), body = detailEl.querySelector('#rvMapBody');
+  if(!tg || !body) return;
+  const sync = ()=>{ body.style.display = draft.mapOpen ? 'block' : 'none'; tg.textContent = draft.mapOpen ? '收起地圖' : '顯示地圖與預計時間'; };
+  sync();
+  tg.onclick = ()=>{ draft.mapOpen = !draft.mapOpen; sync(); if(draft.mapOpen) renderRouteMap(rid); else if(window._rvMap){ try{ window._rvMap.remove(); }catch(e){} window._rvMap = null; } };
+  const st = detailEl.querySelector('#rvStartTime'), dw = detailEl.querySelector('#rvDwell');
+  if(st) st.onchange = ()=>{ draft.startTime = st.value || '08:00'; if(draft.mapOpen) renderRouteMap(rid); };
+  if(dw) dw.onchange = ()=>{ draft.dwell = Math.max(0, Number(dw.value)||0); if(draft.mapOpen) renderRouteMap(rid); };
+  if(draft.mapOpen) renderRouteMap(rid);
+}
 function bindVersionFix(container, route){
   container.querySelectorAll('[data-verfix]').forEach(btn=>{
     btn.onclick = ()=>{
@@ -3078,6 +3230,17 @@ function renderRouteDetail(rid){
           </div>`;
         }).join('') || '<div class="empty">尚未加入任何店點</div>'}
       </div>
+      ${desktopDnd() ? `<div class="note" style="margin-top:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <b>地圖路線與預計時間</b>
+          <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <label style="margin:0; display:flex; align-items:center; gap:4px;">出發 <input type="time" id="rvStartTime" value="${draft.startTime||'08:00'}" style="width:auto;"></label>
+            <label style="margin:0; display:flex; align-items:center; gap:4px;">每站停留 <input type="number" id="rvDwell" min="0" max="60" value="${draft.dwell ?? ROUTE_DWELL_DEFAULT_MIN}" style="width:64px;"> 分</label>
+            <button class="btn ghost" id="rvMapToggle" style="padding:5px 12px; font-size:12.5px;">顯示地圖與預計時間</button>
+          </span>
+        </div>
+        <div id="rvMapBody" style="display:none; margin-top:8px;"><div id="rvMapSummary" style="font-size:12.5px;"></div><div id="rvMap" style="height:380px; border:1px solid var(--border); border-radius:8px; z-index:0;"></div><div id="rvEta" style="font-size:13px;"></div></div>
+      </div>` : ''}
       <h4 style="margin:14px 0 4px;">費用資料（人工輸入，跟著這個版本走）</h4>
       <div class="grid3">
         <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
@@ -3092,6 +3255,7 @@ function renderRouteDetail(rid){
   `;
   bindVersionFix(detailEl, r);
   bindStopDrag(detailEl, r.id);
+  bindRouteMap(detailEl, r.id);
   const verHistorySelect = document.getElementById('verHistorySelect');
   if(verHistorySelect){
     verHistorySelect.onchange = ()=>{
