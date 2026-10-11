@@ -208,14 +208,6 @@
      收合時整張卡片都能點；按下去有下沉內陷的回饋；展開後左邊有琥珀色細線，標題列釘在畫面上方，
      清單很長時捲到下面也能直接收合。 */
   /* ---- 第一批美化：首頁總覽卡、提醒分級、排班狀態色條、夥伴端下一站 ---- */
-  .ov-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-bottom:14px; }
-  .ov-card{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px; cursor:pointer; border-top:4px solid var(--ov, #C9CED6); transition:transform .07s ease-out, box-shadow .1s ease-out, filter .1s ease-out; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
-  .ov-card:hover{ background:var(--bg-hover); }
-  .ov-card:active{ transform:scale(.97); filter:brightness(.93); box-shadow:inset 0 3px 6px rgba(27,33,41,.2); }
-  .ov-card .ov-n{ font-family:'IBM Plex Mono',monospace; font-size:28px; font-weight:700; line-height:1.1; }
-  .ov-card .ov-l{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
-  .ov-card[data-lv=ok]{ --ov:#2C6B44; } .ov-card[data-lv=run]{ --ov:#2C5F8A; } .ov-card[data-lv=warn]{ --ov:#E0902E; } .ov-card[data-lv=danger]{ --ov:#B5493A; }
-  .ov-card[data-lv=danger] .ov-n{ color:var(--danger); }
   .ov-bar{ height:8px; background:var(--chip); border-radius:99px; overflow:hidden; margin:2px 0 14px; }
   .ov-bar > i{ display:block; height:100%; background:#2C6B44; border-radius:99px; transition:width .3s; }
   .rem-box{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:16px; }
@@ -2063,9 +2055,6 @@ async function renderHomeAdmin(c){
     if(state.tab!=='home') return; // 使用者可能已經切走這一頁
   }
   const p = computeProfitSnapshot();
-  const progressShifts = currentProgressShifts();
-  const showProgress = !!progressShifts;
-  const progressGroups = showProgress ? undeliveredTodayGroups(progressShifts) : [];
   // 備份提醒：超過7天沒按過「下載快照」或「顯示備份文字」就提醒——免費方案
   // 沒有自動備份，全靠這個提醒讓人記得手動備份一次。
   const lastBackupAt = state.data.settings.lastBackupAt;
@@ -2100,26 +2089,10 @@ async function renderHomeAdmin(c){
       unsettledNames = unsettledRows(prevMonthStr, lite).map(r=>r.d.name);
     }catch(e){ console.error('讀取月結名單失敗', e); }
   }
-  // 今日總覽卡：任務數、已完成、進行中、沒人排的空格、有異常的
-  const ovToday = todayStr();
-  const ovTasks = state.data.assignments.filter(a=>a.date===ovToday && a.status!=='cancelled' && !a.isSupport);
-  const ovDone = ovTasks.filter(a=>a.status==='completed').length;
-  const ovRun = ovTasks.filter(a=>a.status==='in_progress').length;
-  const ovWait = ovTasks.filter(a=>a.status==='scheduled').length;
-  const ovEmpty = mobileSlotsFor(ovToday, '').reduce((n,o)=> n + o.routes.reduce((m,r)=> m + r.slots.filter(sl=>!sl.items.length).length, 0), 0);
-  const ovIssue = ovTasks.filter(a=> a.hasIssue || (a.dropPoints||[]).some(dp=>dp.status!=='completed' && dp.issueReason)).length;
   const covNow = computeCoverage(todayStr());
   const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length;
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
-    <div class="ov-grid">
-      <div class="ov-card" data-lv="ok" data-goto-today="1"><div class="ov-n">${ovDone}<span style="font-size:15px; color:var(--ink-soft);"> / ${ovTasks.length}</span></div><div class="ov-l">今日已完成</div></div>
-      <div class="ov-card" data-lv="run" data-goto-today="1"><div class="ov-n">${ovRun}</div><div class="ov-l">進行中</div></div>
-      <div class="ov-card" data-lv="${ovWait?'warn':'ok'}" data-goto-today="1"><div class="ov-n">${ovWait}</div><div class="ov-l">待出發</div></div>
-      <div class="ov-card" data-lv="${ovEmpty?'danger':'ok'}" data-goto-today="1"><div class="ov-n">${ovEmpty}</div><div class="ov-l">沒人排的空格</div></div>
-      <div class="ov-card" data-lv="${ovIssue?'danger':'ok'}" data-goto-today="1"><div class="ov-n">${ovIssue}</div><div class="ov-l">有異常</div></div>
-    </div>
-    <div class="ov-bar" title="今日完成進度"><i style="width:${ovTasks.length?Math.round(ovDone*100/ovTasks.length):0}%"></i></div>
     <p class="section-sub">主控帳號${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
       <h3>⏰ 待辦提醒 <span class="rem-count">${[covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
@@ -2149,14 +2122,6 @@ async function renderHomeAdmin(c){
       <div id="profitDaily" style="display:none; margin-top:8px;"></div>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟報酬結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
     </div>
-    ${showProgress ? `<div class="panel" style="border-color:var(--danger); border-width:2px;">
-      <div class="toolbar"><h3 style="margin:0;">今日尚未完成</h3>
-        <span style="font-size:11px; color:var(--ink-soft);">即時更新中・${lastHomeRefreshAt?`上次更新 ${lastHomeRefreshAt.toLocaleTimeString('zh-Hant-TW')}`:'尚未更新'}
-          <button class="btn ghost" id="manualRefreshBtn" style="margin-left:6px; padding:2px 8px; font-size:11px;">↻ 立即更新</button>
-        </span>
-      </div>
-      ${progressGroups.length ? progressGroups.map(g=>`<div style="font-size:13px; padding:6px 0; border-bottom:1px solid var(--border);">${g.started?'<span style="color:var(--teal);" title="已出發">✅</span> ':''}<strong>${g.routeLabel}</strong>，${g.points.join('、')}</div>`).join('') : '<div class="empty">今天的車次都已配送完成 🎉</div>'}
-    </div>` : ''}
   `;
   { // 點「利潤總額」展開／收合每日明細（資料更新重畫後維持展開狀態）
     const row = document.getElementById('profitRow'), box = document.getElementById('profitDaily'), chev = document.getElementById('profitChevron');
@@ -2167,16 +2132,10 @@ async function renderHomeAdmin(c){
     }
   }
   c.querySelectorAll('[data-gostuck]').forEach(el=>{ el.onclick = ()=>{ const d = el.dataset.gostuck; for(let off=-8; off<=8; off++){ if(getWeekDates(off).includes(d)){ state.weekOffset = off; break; } } state._mDay = d; goTab('schedule'); }; });
-  c.querySelectorAll('[data-goto-today]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 0; state._mDay = todayStr(); goTab('schedule'); }; });
   c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
   c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
   c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
-  const manualRefreshBtn = document.getElementById('manualRefreshBtn');
-  if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
-    manualRefreshBtn.disabled = true; manualRefreshBtn.textContent = '更新中…';
-    await refreshHomeDataIfIdle();
-  };
 }
 function renderHomeDriver(c){
   const dId = state.activeDriverId;
@@ -6086,7 +6045,7 @@ function renderBilling(c){
   const month = state._billingMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">請款結算</h2>
-    <p class="section-sub">勾選要一起結算的通路（可複選）。每個通路自己的請款總覽（未稅／含稅合計），永遠依「通路管理」設定的自己週期計算（例如康達盛通是自然月、7-11是每月27日至次月26日），不會因為同時勾了好幾個通路而互相污染；下方的「抓取範圍」只用來決定合併配送明細要撈多寬的資料，只勾一個通路時可直接當作那個通路自己的週期手動調整。系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一任務，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p>
+    <details class="fold-d" ${state._billingHelpOpen?'open':''} ontoggle="state._billingHelpOpen=this.open" style="margin-bottom:12px;"><summary style="font-weight:600;"><span>計算規則說明<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　（需要時點開查看）</span></span></summary><p class="section-sub" style="margin:10px 4px 4px;">勾選要一起結算的通路（可複選）。每個通路自己的請款總覽（未稅／含稅合計），永遠依「通路管理」設定的自己週期計算（例如康達盛通是自然月、7-11是每月27日至次月26日），不會因為同時勾了好幾個通路而互相污染；下方的「抓取範圍」只用來決定合併配送明細要撈多寬的資料，只勾一個通路時可直接當作那個通路自己的週期手動調整。系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一任務，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p></details>
     <div class="panel">
       <div class="field">
         <label>通路（可複選；各通路各自產生一份請款總覽，配送明細則合併成一份，只顯示已選通路）</label>
