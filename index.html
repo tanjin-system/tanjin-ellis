@@ -125,6 +125,16 @@
   @keyframes wrBreath{ 0%,100%{ opacity:.35; box-shadow:0 0 0 0 rgba(74,144,226,0); } 50%{ opacity:1; box-shadow:0 0 0 .3em rgba(74,144,226,.28); } }
   .wr.mute .dot{ animation:none; opacity:.8; }
   @media (prefers-reduced-motion:reduce){ .wr .dot{ animation:none; opacity:.8; } }
+  .wr .c{ cursor:pointer; } .wr .c:hover{ border-color:#3A4A68; }
+  .wr-dtbg{ position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:1500; }
+  .wr-dt{ position:fixed; top:0; right:0; bottom:0; width:min(28em,100vw); background:#0F1626; color:var(--ink); border-left:1px solid #3A4A68; z-index:1501; overflow:auto; padding:1em 1.1em 2em; font-size:max(14px,1em); }
+  .wr-dt h3{ margin:0; font-size:1.25em; } .wr-dt .x{ float:right; background:none; border:1px solid #3A4A68; color:var(--ink); border-radius:6px; padding:.2em .7em; cursor:pointer; }
+  .wr-dt .who{ margin:.5em 0; font-size:1.05em; } .wr-dt .who a{ color:#7DB8FF; text-decoration:none; margin-left:.5em; }
+  .wr-dt .why{ margin:.7em 0; padding:.6em .8em; border-radius:8px; background:var(--card); border-left:4px solid var(--c); line-height:1.6; font-size:.95em; }
+  .wr-dt h4{ margin:1.1em 0 .4em; font-size:.95em; color:var(--soft); letter-spacing:.06em; }
+  .wr-st{ display:flex; gap:.6em; align-items:baseline; padding:.45em 0; border-top:1px solid var(--line); font-size:.95em; } .wr-st b{ width:1.3em; flex:none; text-align:center; } .wr-st span{ flex:1; word-break:break-all; } .wr-st em{ font-style:normal; color:var(--soft); font-family:ui-monospace,monospace; white-space:nowrap; }
+  .wr-st.done b{ color:#3FB37F; } .wr-st.iss b, .wr-st.iss em{ color:#E0902E; } .wr-st.pend{ color:var(--soft); }
+  .wr-dt .go{ margin-top:1em; width:100%; background:var(--card); color:var(--ink); border:1px solid #3A4A68; border-radius:8px; padding:.6em; cursor:pointer; font-size:.95em; }
   .wr .c.gap{ border-style:dashed; border-left-style:solid; }
   .wr .c.hotst{ box-shadow:0 0 0 3px rgba(229,89,79,.9); } .wr .c.amst{ box-shadow:0 0 0 2px rgba(224,144,46,.8); }
   .wr .c.late{ animation:wrPulse 2.4s ease-in-out infinite; } .wr .c.stall{ animation:wrPulse 1.6s ease-in-out infinite; } .wr .c.hot{ animation:wrBlink .9s ease-in-out infinite; } .wr .c.fresh{ animation:wrFlash 1.6s ease-out 1; }
@@ -1571,6 +1581,12 @@ function wrCompute(){
       const wdList = routeWeekdays(sl.route);
       if(wdList && !wdList.includes(wd)) return;
       if(!getActiveVersion(sl.route, today)) return;
+      // 只有「這條路線上週或上上週的同一天有排過」才算應該有人；平常這天不跑的路線（例如週日只跑牧穀）不提示。
+      // 超出已載入的資料範圍時（看不出歷史）才保守地照樣提示。
+      const d7 = ymd(addDays(today,-7)), d14 = ymd(addDays(today,-14)), ids = new Set(sl.candidates.map(r=>r.id));
+      const ws = state.data.assignmentsWindowStart;
+      const canTell = !ws || ws <= d7;
+      if(canTell && !state.data.assignments.some(x=> ids.has(x.routeId) && x.status!=='cancelled' && !x.isSupport && (x.date===d7 || (ws && ws<=d14 && x.date===d14)))) return;
       cards.push({ key:'gap:'+sl.route.id, id:null, route:sl.route, origin:originLabel(sl.route.originAddr), label:wrLabel(sl.route), driver:'', phone:'', n:0, doneN:0, issues:0, s:'hot', why:'gap', over:0, steady:false, lastMs:null, batch:false, resolution:'', resolvedTxt:'' });
     })));
   }
@@ -1615,6 +1631,40 @@ function wrCardHtml(c, anim){
   return '<div class="c '+cls+'" data-key="'+escapeHtml(c.key)+'" style="--c:'+WR_COL[c.s]+'"><div class="r"><b>'+(c.s==='run'?'<i class="dot"></i>':'')+escapeHtml(c.label)+'</b><span class="chip">'+wrChip(c)+'</span></div>'
     + '<div class="p">'+(c.driver ? escapeHtml(c.driver)+tel : '（空缺）')+'</div>'+(segs?'<div class="segs">'+segs+'</div>':'')+'<div class="m">'+m+'</div>'+bd+btn+'</div>';
 }
+function wrDetailHtml(c){
+  const cfg = wrCfg(), a = c.id ? state.data.assignments.find(x=>x.id===c.id) : null, pm = c.route && c.route.shift==='PM';
+  const yel = pm ? cfg.pmYellow : cfg.amYellow, red = pm ? cfg.pmRed : cfg.amRed;
+  let why;
+  if(c.why==='gap') why = '今天這個班次沒有排夥伴（這條路線上週或上上週的同一天有排過）。';
+  else if(c.why==='issue') why = c.issues+' 站回報了未完成原因，需要你確認處理。';
+  else if(c.s==='hot' && c.why==='late') why = '已超過預計出發時間 '+c.over+' 分鐘（紅色門檻 '+red+'），還沒有完成任何一站。';
+  else if(c.s==='late') why = '已超過預計出發時間 '+c.over+' 分鐘，還沒有完成任何一站（'+yel+' 變黃色、'+red+' 變紅色）。';
+  else if(c.s==='hot' && c.why==='stall') why = c.over+' 分鐘沒有新進度（紅色門檻 '+cfg.stallRed+' 分鐘）。';
+  else if(c.s==='stall') why = c.over+' 分鐘沒有新進度（黃色門檻 '+cfg.stallYellow+' 分鐘、紅色門檻 '+cfg.stallRed+' 分鐘）。';
+  else if(c.s==='wait') why = '還沒到預計出發時間（'+yel+'）。';
+  else if(c.s==='run') why = '進行中，進度正常。';
+  else why = '全部完成。';
+  if(c.batch) why += ' 注意：有多站在同一分鐘完成，可能是夥伴批次上傳，時間不一定準。';
+  const hm = ms=>{ const d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); };
+  const dps = a ? (a.dropPoints||[]).map((d,i)=>({d,i})) : [];
+  const doneL = dps.filter(x=>x.d.status==='completed').sort((x,y)=> new Date(x.d.completedAt||0) - new Date(y.d.completedAt||0));
+  const restL = dps.filter(x=>x.d.status!=='completed');
+  const row = (x)=>{
+    const d = x.d, nm = escapeHtml(dpLabel(d)) + (d.channelId ? '　<small style="color:var(--soft);">'+escapeHtml(channelName(d.channelId))+'</small>' : '');
+    if(d.status==='completed') return '<div class="wr-st done"><b>✔</b><span>'+nm+'</span><em>'+(d.completedAt?hm(new Date(d.completedAt).getTime()):'')+'</em></div>';
+    if(d.issueReason) return '<div class="wr-st iss"><b>⚠</b><span>'+nm+'<br><small>'+escapeHtml(d.issueReason)+'</small></span><em>未完成</em></div>';
+    return '<div class="wr-st pend"><b>○</b><span>'+nm+'</span><em>待完成</em></div>';
+  };
+  const W = wrState(); let act = '';
+  if(c.why==='issue' && !c.steady) act = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
+  if(c.why==='issue' && c.steady){ const cur = W.sel[c.id] || '已聯絡店家'; act = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>'; }
+  const tel = c.phone ? '<a href="tel:'+escapeHtml(c.phone)+'">📞 '+escapeHtml(c.phone)+'</a>' : '';
+  return '<button class="x" data-a="close">✕ 關閉</button><h3>'+escapeHtml(c.origin+' '+c.label)+'</h3>'
+    + '<div class="who">'+(c.driver ? '夥伴：'+escapeHtml(c.driver)+tel : '（空缺，沒有夥伴）')+'</div>'
+    + '<div class="why" style="--c:'+WR_COL[c.s]+'"><b>'+wrChip(c)+'</b><br>'+why+(c.resolution?'<br><span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>':'')+'</div>'+act
+    + (dps.length ? '<h4>店點（'+doneL.length+' / '+dps.length+' 站完成）</h4>'+doneL.concat(restL).map(row).join('') : '')
+    + '<button class="go" data-a="goto">'+(c.why==='gap'?'前往週期任務清單排人':'前往週期任務清單看這一趟')+'</button>';
+}
 function wrBuild(){
   const cfg = wrCfg(), cards = wrCompute();
   const cnt = { done:0, run:0, wait:0, late:0, stall:0, hot:0, bat:0 };
@@ -1647,7 +1697,20 @@ function wrUpdate(){
   document.getElementById('wrClock').textContent = pad(now.getHours())+':'+pad(now.getMinutes());
   document.getElementById('wrDate').textContent = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（週${'日一二三四五六'[now.getDay()]}）`+(W.err?'　⚠️ 已看到／已處理的標記暫時無法同步':'');
   const set = (id, html)=>{ const el = document.getElementById(id); if(el && W.cache[id]!==html){ el.innerHTML = html; W.cache[id] = html; return true; } return false; };
+  W.cards = b.cards;
   set('wrKp', b.kpHtml); set('wrNeed', b.needHtml);
+  const dtw = document.getElementById('wrDt');
+  if(dtw){
+    const dc = W.detail ? b.cards.find(x=>x.key===W.detail) : null;
+    if(!dc){ W.detail = null; dtw.style.display = 'none'; dtw.innerHTML = ''; W.cache.wrDt = ''; }
+    else {
+      dtw.style.display = 'block';
+      if(!(document.activeElement && dtw.contains(document.activeElement) && /SELECT/.test(document.activeElement.tagName))){
+        const html = '<div class="wr-dtbg" data-a="close"></div><div class="wr-dt">'+wrDetailHtml(dc)+'</div>';
+        if(W.cache.wrDt!==html){ const keep = dtw.querySelector('.wr-dt'), top = keep ? keep.scrollTop : 0; dtw.innerHTML = html; W.cache.wrDt = html; const nd2 = dtw.querySelector('.wr-dt'); if(nd2) nd2.scrollTop = top; }
+      }
+    }
+  }
   const bar = document.getElementById('wrBar'); if(bar) bar.style.width = b.pct+'%';
   const pc = document.getElementById('wrPct'); if(pc) pc.textContent = b.pctHtml;
   const boardEl = document.getElementById('wrBoard');
@@ -1718,7 +1781,7 @@ async function renderWarRoom(c){
         <div class="wr-btns"><button class="wr-btn" id="wrMute"></button><button class="wr-btn" id="wrFull"></button></div></div></div>
       <div class="wr-lg"><span>⚪ 待出發</span><span>🔵 進行中（圓點緩慢呼吸）</span><span>🟢 完成</span><span>🟡 注意（慢速脈動，超過門檻自動升級）</span><span>🔴 要處理（快閃→按「已看到」→紅框常亮→按「已處理」才消失）</span><span>🟣 時間存疑</span></div>
       <div class="wr-kp" id="wrKp"></div><div class="wr-bar"><i id="wrBar"></i></div><div class="wr-pct" id="wrPct"></div>
-      <div class="wr-main"><div id="wrBoard"></div><div class="wr-need"><h3>需要處理</h3><div id="wrNeed"></div></div></div></div>`;
+      <div class="wr-main"><div id="wrBoard"></div><div class="wr-need"><h3>需要處理</h3><div id="wrNeed"></div></div></div><div id="wrDt" style="display:none;"></div></div>`;
     const root = document.getElementById('wrRoot');
     const muteBtn = document.getElementById('wrMute');
     const showMute = ()=>{ muteBtn.textContent = root.classList.contains('mute') ? '🔇 靜音模式：開' : '🔔 靜音模式：關'; };
@@ -1727,10 +1790,17 @@ async function renderWarRoom(c){
     document.getElementById('wrFull').onclick = wrToggleFull; wrUpdateFullBtn();
     root.addEventListener('change', e=>{ const id = e.target.getAttribute && e.target.getAttribute('data-sel'); if(id) W.sel[id] = e.target.value; });
     root.addEventListener('click', e=>{
-      const t = e.target, a = t.getAttribute && t.getAttribute('data-a'); if(!a) return;
+      const t = e.target, a = t.getAttribute && t.getAttribute('data-a');
+      if(!a){
+        const card = t.closest && t.closest('.c[data-key]');
+        if(card && !t.closest('button,select,a')){ W.detail = card.getAttribute('data-key'); wrUpdate(); }
+        return;
+      }
       const id = t.getAttribute('data-id');
       if(a==='ack') wrMark(id, 'ack');
       if(a==='res'){ const sel = t.parentNode.querySelector('select'); wrMark(id, 'res', sel ? sel.value : '已處理'); }
+      if(a==='close'){ W.detail = null; wrUpdate(); }
+      if(a==='goto'){ W.detail = null; wrLeaveFull(); state.weekOffset = 0; state._mDay = todayStr(); goTab('schedule'); }
     });
   }
   wrUpdate();
