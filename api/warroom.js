@@ -53,7 +53,7 @@ module.exports = async (req, res) => {
   try {
     const [todayRes, histRes, originsRes, routesRes, channelsRes, driversRes] = await Promise.all([
       supabase.from('assignments')
-        .select('id, trip_date, route_id, driver_id, status, assignment_drop_points(status, completed_at, issue_reason, sequence_no, code, address, channel_id)')
+        .select('id, trip_date, route_id, driver_id, status, departed_at, assignment_drop_points(status, completed_at, issue_reason, sequence_no, code, address, channel_id)')
         .eq('trip_date', today).eq('published', true).neq('status', 'cancelled'),
       live ? none : supabase.from('assignments').select('id, trip_date, route_id, status').in('trip_date', [d7, d14]).eq('published', true).neq('status', 'cancelled'),
       live ? none : supabase.from('origins').select('id, address, label, status'),
@@ -70,7 +70,7 @@ module.exports = async (req, res) => {
       marks = m.data || [];
     }
     const assignments = (todayRes.data || []).map(a => ({
-      id: a.id, date: a.trip_date, routeId: a.route_id, driverId: a.driver_id || null, status: a.status,
+      id: a.id, date: a.trip_date, routeId: a.route_id, driverId: a.driver_id || null, status: a.status, departedAt: a.departed_at || null,
       dropPoints: (a.assignment_drop_points || []).slice().sort((x, y) => x.sequence_no - y.sequence_no).map(p => ({
         status: p.status, completedAt: p.completed_at, label: p.code || p.address || '', channelId: p.channel_id, issueReason: p.issue_reason || null
       }))

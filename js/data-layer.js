@@ -79,6 +79,7 @@ function mapAssignment(row) {
     issueNote: row.issue_note || '',
     runNo: row.run_no,
     completedAt: row.completed_at,
+    departedAt: row.departed_at || null,
     payrollFareSnapshot: row.payroll_fare_snapshot != null ? Number(row.payroll_fare_snapshot) : null,
     extraPay: Number(row.extra_pay || 0),
     paidAmount: Number(row.paid_amount || 0), paidDate: row.paid_date || null, paidMethod: row.paid_method || null,
@@ -1514,7 +1515,7 @@ async function markAssignmentDeparted(assignmentId) {
   const { error } = await supabase.from('assignments').update({ status: 'in_progress' }).eq('id', assignmentId);
   if (error) throw new Error('更新狀態失敗：' + error.message);
   const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a) a.status = 'in_progress';
+  if (a) { a.status = 'in_progress'; if (!a.departedAt) a.departedAt = new Date().toISOString(); } // 資料庫的觸發器 set_departed_at 才是正式記錄時間的地方
 }
 
 // issueNote 有值代表「尚有店點未拍照回報」時夥伴填寫的原因說明，跟 demo 的

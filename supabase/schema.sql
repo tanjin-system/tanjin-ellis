@@ -1156,3 +1156,10 @@ create or replace function wr_ping() returns trigger language plpgsql security d
 create trigger trg_wr_ping_assignments after insert or update or delete on assignments for each statement execute function wr_ping();
 create trigger trg_wr_ping_dps after insert or update or delete on assignment_drop_points for each statement execute function wr_ping();
 create trigger trg_wr_ping_marks after insert or update or delete on war_room_marks for each statement execute function wr_ping();
+
+-- PART 29：出發時間（2026-10-12）
+-- assignments.departed_at：夥伴按「出發」（status 變成 in_progress）的那一刻，由觸發器自動寫入，不靠前端（舊版畫面也一樣會記錄）。
+-- 戰情室用它判斷「出發後太久沒完成第一站」，並顯示「幾點出發」。
+alter table assignments add column if not exists departed_at timestamptz;
+create or replace function set_departed_at() returns trigger language plpgsql as $$ begin if new.status = 'in_progress' and old.status is distinct from 'in_progress' and new.departed_at is null then new.departed_at := now(); end if; return new; end; $$;
+create trigger trg_set_departed_at before update on assignments for each row execute function set_departed_at();

@@ -1552,9 +1552,17 @@ function wrCompute(){
     if(issues > m.resolved){ s = 'hot'; why = 'issue'; steady = m.acked >= issues; }
     else if(a.status==='completed') s = 'done';
     else if(!done.length){
-      // 夥伴已經按了「出發」（status = in_progress）就是進行中，不再算「待出發／逾時未出發」
-      if(a.status === 'in_progress') s = 'run';
-      else {
+      // 夥伴已經按了「出發」（status = in_progress）就是進行中，不再算「待出發／逾時未出發」；
+      // 有出發時間的話，出發後太久沒完成第一站，照「停滯」的門檻算（黃／紅）
+      if(a.status === 'in_progress'){
+        s = 'run';
+        const dm = a.departedAt ? new Date(a.departedAt).getTime() : NaN;
+        if(!isNaN(dm)){
+          const idle = (nowMs - dm)/60000;
+          if(idle >= cfg.stallRed){ s = 'hot'; why = 'stall'; over = Math.round(idle); }
+          else if(idle >= cfg.stallYellow){ s = 'stall'; over = Math.round(idle); }
+        }
+      } else {
         const y = wrMin(shiftPm ? cfg.pmYellow : cfg.amYellow), r = wrMin(shiftPm ? cfg.pmRed : cfg.amRed);
         if(nowMin >= r){ s = 'hot'; why = 'late'; over = nowMin - y; }
         else if(nowMin >= y){ s = 'late'; over = nowMin - y; }
@@ -1567,7 +1575,7 @@ function wrCompute(){
       else s = 'run';
     }
     const dr = state.data.drivers.find(x=>x.id===a.driverId);
-    return { key:a.id, id:a.id, route, origin: route ? originLabel(route.originAddr) : '（未知任務起點）', label: wrLabel(route),
+    return { key:a.id, id:a.id, departedMs: a.departedAt ? new Date(a.departedAt).getTime() : null, route, origin: route ? originLabel(route.originAddr) : '（未知任務起點）', label: wrLabel(route),
       driver: dr ? dr.name : '未指派', phone: dr ? (dr.phone||'') : '', n:dps.length, doneN:done.length, issues, s, why, over, steady, lastMs, batch,
       resolution: (issues && m.resolved>=issues) ? m.resolution : '', resolvedTxt: m.resolved>0 && m.resolution ? m.resolution : '' };
   });
@@ -1597,6 +1605,7 @@ function wrLabel(route){
   if(og && t.indexOf(og)===0) t = t.slice(og.length);
   return t.trim() || routeDisplayName(route.name);
 }
+function wrClock(ms){ const d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); }
 function wrChip(c){
   if(c.s==='hot'){
     if(c.why==='gap') return '🔴 沒人排';
@@ -1613,6 +1622,7 @@ function wrCardHtml(c, anim){
   let m;
   if(c.why==='gap') m = '今天這個班次沒有排夥伴';
   else if(c.s==='wait'||c.s==='late'||(c.s==='hot'&&c.why==='late')) m = '還沒有完成的店點（共 '+c.n+' 站）';
+  else if(c.doneN===0 && c.departedMs && c.why!=='issue') m = wrClock(c.departedMs)+' 出發，還沒有完成任何一站（共 '+c.n+' 站）';
   else m = c.doneN+' / '+c.n+' 站'+(c.lastMs?'　最近 '+wrHM(new Date(c.lastMs).getHours()*60+new Date(c.lastMs).getMinutes()):'');
   if(c.resolution) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>';
   else if(c.s==='done' && c.resolvedTxt) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolvedTxt)+'</span>';
@@ -1637,10 +1647,10 @@ function wrDetailHtml(c){
   else if(c.why==='issue') why = c.issues+(state._wrExternal ? ' 站回報了未完成原因（見下方店點）。' : ' 站回報了未完成原因，需要你確認處理。');
   else if(c.s==='hot' && c.why==='late') why = '已超過預計出發時間 '+c.over+' 分鐘（紅色門檻 '+red+'），還沒有完成任何一站。';
   else if(c.s==='late') why = '已超過預計出發時間 '+c.over+' 分鐘，還沒有完成任何一站（'+yel+' 變黃色、'+red+' 變紅色）。';
-  else if(c.s==='hot' && c.why==='stall') why = c.over+' 分鐘沒有新進度（紅色門檻 '+cfg.stallRed+' 分鐘）。';
-  else if(c.s==='stall') why = c.over+' 分鐘沒有新進度（黃色門檻 '+cfg.stallYellow+' 分鐘、紅色門檻 '+cfg.stallRed+' 分鐘）。';
+  else if(c.s==='hot' && c.why==='stall') why = (c.doneN ? c.over+' 分鐘沒有新進度' : '出發後 '+c.over+' 分鐘還沒有完成任何一站')+'（紅色門檻 '+cfg.stallRed+' 分鐘）。';
+  else if(c.s==='stall') why = (c.doneN ? c.over+' 分鐘沒有新進度' : '出發後 '+c.over+' 分鐘還沒有完成任何一站')+'（黃色門檻 '+cfg.stallYellow+' 分鐘、紅色門檻 '+cfg.stallRed+' 分鐘）。';
   else if(c.s==='wait') why = '還沒到預計出發時間（'+yel+'）。';
-  else if(c.s==='run') why = c.doneN ? '進行中，進度正常。' : '夥伴已出發，還沒有完成任何一站。';
+  else if(c.s==='run') why = c.doneN ? '進行中，進度正常。' : (c.departedMs ? '夥伴 '+wrClock(c.departedMs)+' 出發，還沒有完成任何一站。' : '夥伴已出發，還沒有完成任何一站。');
   else why = '全部完成。';
   if(c.batch) why += ' 注意：有多站在同一分鐘完成，可能是夥伴批次上傳，時間不一定準。';
   const hm = ms=>{ const d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); };
@@ -1767,7 +1777,7 @@ async function wrExtLoad(live){
     if(!r.ok) throw new Error('HTTP '+r.status);
     const p = await r.json();
     state._wrExternalDead = null;
-    const mapA = a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.driverId||null, status:a.status, published:true, isSupport:false,
+    const mapA = a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.driverId||null, status:a.status, departedAt:a.departedAt||null, published:true, isSupport:false,
       dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.issueReason||null, code:d.label||('第 '+(i+1)+' 站'), address:'', channelId:d.channelId })) });
     if(p.live && state.data){
       state.data.settings.warroomConfig = p.config;
