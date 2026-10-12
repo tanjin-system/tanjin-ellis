@@ -1552,10 +1552,14 @@ function wrCompute(){
     if(issues > m.resolved){ s = 'hot'; why = 'issue'; steady = m.acked >= issues; }
     else if(a.status==='completed') s = 'done';
     else if(!done.length){
-      const y = wrMin(shiftPm ? cfg.pmYellow : cfg.amYellow), r = wrMin(shiftPm ? cfg.pmRed : cfg.amRed);
-      if(nowMin >= r){ s = 'hot'; why = 'late'; over = nowMin - y; }
-      else if(nowMin >= y){ s = 'late'; over = nowMin - y; }
-      else s = 'wait';
+      // 夥伴已經按了「出發」（status = in_progress）就是進行中，不再算「待出發／逾時未出發」
+      if(a.status === 'in_progress') s = 'run';
+      else {
+        const y = wrMin(shiftPm ? cfg.pmYellow : cfg.amYellow), r = wrMin(shiftPm ? cfg.pmRed : cfg.amRed);
+        if(nowMin >= r){ s = 'hot'; why = 'late'; over = nowMin - y; }
+        else if(nowMin >= y){ s = 'late'; over = nowMin - y; }
+        else s = 'wait';
+      }
     } else {
       const idle = lastMs ? (nowMs - lastMs)/60000 : 0;
       if(idle >= cfg.stallRed){ s = 'hot'; why = 'stall'; over = Math.round(idle); }
@@ -1636,7 +1640,7 @@ function wrDetailHtml(c){
   else if(c.s==='hot' && c.why==='stall') why = c.over+' 分鐘沒有新進度（紅色門檻 '+cfg.stallRed+' 分鐘）。';
   else if(c.s==='stall') why = c.over+' 分鐘沒有新進度（黃色門檻 '+cfg.stallYellow+' 分鐘、紅色門檻 '+cfg.stallRed+' 分鐘）。';
   else if(c.s==='wait') why = '還沒到預計出發時間（'+yel+'）。';
-  else if(c.s==='run') why = '進行中，進度正常。';
+  else if(c.s==='run') why = c.doneN ? '進行中，進度正常。' : '夥伴已出發，還沒有完成任何一站。';
   else why = '全部完成。';
   if(c.batch) why += ' 注意：有多站在同一分鐘完成，可能是夥伴批次上傳，時間不一定準。';
   const hm = ms=>{ const d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); };
@@ -1705,6 +1709,7 @@ function wrUpdate(){
       }
     }
   }
+  const lv = document.getElementById('wrLiveTxt'); if(lv && state._wrExternal) lv.textContent = state._wrLive ? '即時更新中' : '每 30 秒更新（即時連線中斷）';
   const bar = document.getElementById('wrBar'); if(bar) bar.style.width = b.pct+'%';
   const pc = document.getElementById('wrPct'); if(pc) pc.textContent = b.pctHtml;
   const boardEl = document.getElementById('wrBoard');
@@ -1752,18 +1757,27 @@ async function wrBackupRefresh(){
 }
 // ---------- 戰情室外部連結（不登入、唯讀、給大螢幕）：網址 /?wr=<token> ----------
 // 外部畫面拿得到「路線、進度、夥伴姓名、店點名稱／通路、未完成原因」，但沒有夥伴電話、金額、照片（見 api/warroom.js）。
-async function wrExtLoad(){
+async function wrExtLoad(live){
   const W = wrState();
   try{
-    const r = await fetch('/api/warroom?token='+encodeURIComponent(state._wrExternal), { cache:'no-store' });
+    // live：只抓「今天的任務與標記」（很小）；3 秒一格的 t 讓同時開的幾個螢幕共用同一份邊緣快取，不會各自打資料庫
+    const url = '/api/warroom?token='+encodeURIComponent(state._wrExternal) + (live && state.data ? '&live=1&t='+Math.floor(Date.now()/3000) : '');
+    const r = await fetch(url, { cache:'no-store' });
     if(r.status===404 || r.status===400){ const j = await r.json().catch(()=>({})); state._wrExternalDead = j.error || '連結無效或已停用'; return; }
     if(!r.ok) throw new Error('HTTP '+r.status);
     const p = await r.json();
     state._wrExternalDead = null;
-    state.data = { settings:{ warroomConfig:p.config }, assignmentsWindowStart:p.windowStart,
-      drivers:(p.drivers||[]).map(d=>({ id:d.id, name:d.name, phone:'' })), origins:p.origins, routes:p.routes, channels:p.channels||[], dropPoints:[],
-      assignments:p.assignments.map(a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.driverId||null, status:a.status, published:true, isSupport:false,
-        dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.issueReason||null, code:d.label||('第 '+(i+1)+' 站'), address:'', channelId:d.channelId })) })) };
+    const mapA = a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.driverId||null, status:a.status, published:true, isSupport:false,
+      dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.issueReason||null, code:d.label||('第 '+(i+1)+' 站'), address:'', channelId:d.channelId })) });
+    if(p.live && state.data){
+      state.data.settings.warroomConfig = p.config;
+      state.data.assignments = state.data.assignments.filter(a=>a.date!==p.today).concat(p.assignments.map(mapA));
+    } else {
+      state.data = { settings:{ warroomConfig:p.config }, assignmentsWindowStart:p.windowStart,
+        drivers:(p.drivers||[]).map(d=>({ id:d.id, name:d.name, phone:'' })), origins:p.origins, routes:p.routes, channels:p.channels||[], dropPoints:[],
+        assignments:p.assignments.map(mapA) };
+      state._wrCatalogAt = Date.now();
+    }
     W.marks = new Map(p.marks.map(m=>[m.assignmentId, { acked:m.acked, resolved:m.resolved, resolution:'' }]));
     W.err = false;
   }catch(e){ W.err = true; console.error('戰情室外部連結載入失敗', e); }
@@ -1788,12 +1802,31 @@ async function bootWarRoomExternal(token){
     renderWarRoom(c); return true;
   };
   show();
+  // 即時：資料庫一有異動（夥伴按出發、完成店點、主控換人…）會對公開頻道 wr-ping 廣播一個「空」訊號（見 schema PART 28，
+  // 訊息裡沒有任何資料），這裡收到就只抓一次「今天的任務」（約 3 秒內合併成一次）。斷線時退回每 30 秒抓一次。
+  let lastLive = 0, pend = null, dead = false;
+  const refreshLive = async ()=>{
+    if(document.hidden || dead) return;
+    lastLive = Date.now();
+    await wrExtLoad(Date.now()-(state._wrCatalogAt||0) < 600000);
+    if(!show()){ dead = true; return; }
+  };
+  const onPing = ()=>{ clearTimeout(pend); pend = setTimeout(refreshLive, Math.max(500, 3000-(Date.now()-lastLive))); };
+  try{
+    state._wrRt = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth:{ persistSession:false, autoRefreshToken:false } });
+    state._wrRt.channel('wr-ping').on('broadcast', { event:'ping' }, onPing).subscribe(status=>{
+      state._wrLive = status==='SUBSCRIBED';
+      if(state._wrLive) refreshLive(); // 連上（或重連）時補抓一次，不漏掉斷線期間的變動
+      if(typeof wrUpdate==='function') wrUpdate();
+    });
+  }catch(e){ console.error('即時連線建立失敗，改用定時更新', e); }
   const loop = ()=>{
-    const h = new Date().getHours();
+    const h = new Date().getHours(), day = h>=5 && h<21;
+    // 即時連線正常時只是保險（每 5 分鐘、夜間每 10 分鐘）；連線中斷時每 30 秒（夜間每 5 分鐘）
     setTimeout(async ()=>{
-      if(!document.hidden){ await wrExtLoad(); if(!show()) return; }
-      loop();
-    }, (h>=5 && h<21) ? 60000 : 300000);
+      if(!document.hidden && !dead){ await refreshLive(); }
+      if(!dead) loop();
+    }, state._wrLive ? (day ? 300000 : 600000) : (day ? 30000 : 300000));
   };
   loop();
 }
@@ -1827,7 +1860,7 @@ async function renderWarRoom(c){
     W.cache = {};
     c.innerHTML = `<div class="wr${mute?' mute':''}" id="wrRoot">
       <div class="wr-top"><div><div class="wr-t">碳金<span>戰情室</span></div><div class="wr-sub" id="wrDate"></div></div>
-        <div class="wr-right"><div><div class="wr-clock" id="wrClock"></div><div class="wr-live">即時更新中</div></div>
+        <div class="wr-right"><div><div class="wr-clock" id="wrClock"></div><div class="wr-live" id="wrLiveTxt">即時更新中</div></div>
         <div class="wr-btns"><button class="wr-btn" id="wrMute"></button><button class="wr-btn" id="wrFull"></button></div></div></div>
       <div class="wr-lg"><span>⚪ 待出發</span><span>🔵 進行中（圓點緩慢呼吸）</span><span>🟢 完成</span><span>🟡 注意（慢速脈動，超過門檻自動升級）</span><span>🔴 要處理（快閃→按「已看到」→紅框常亮→按「已處理」才消失）</span><span>🟣 時間存疑</span></div>
       <div class="wr-kp" id="wrKp"></div><div class="wr-bar"><i id="wrBar"></i></div><div class="wr-pct" id="wrPct"></div>

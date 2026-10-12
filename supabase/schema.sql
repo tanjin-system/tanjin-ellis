@@ -1147,3 +1147,12 @@ create policy driver_own on push_subscriptions for all to app_driver using (driv
 create table if not exists push_log (key text primary key, created_at timestamptz not null default now());
 alter table push_log enable row level security;
 alter table settings add column if not exists vapid_public text, add column if not exists vapid_private text;
+
+-- PART 28：戰情室外部連結「即時」（2026-10-12）
+-- 任務、店點、戰情室標記一有異動，就對公開的 Realtime 廣播頻道 wr-ping 送出一個「空」訊號（沒有任何資料），
+-- 戰情室外部連結收到後才抓一次今天的任務（見 api/warroom.js 的 live=1），不用一直輪詢，也比輪詢快。
+-- 語句層級觸發器（一個語句只廣播一次，批次寫入不會連發）；廣播失敗只吞掉錯誤，不會影響原本的寫入。
+create or replace function wr_ping() returns trigger language plpgsql security definer set search_path = public as $$ begin begin perform realtime.send('{}'::jsonb, 'ping', 'wr-ping', false); exception when others then null; end; return null; end; $$;
+create trigger trg_wr_ping_assignments after insert or update or delete on assignments for each statement execute function wr_ping();
+create trigger trg_wr_ping_dps after insert or update or delete on assignment_drop_points for each statement execute function wr_ping();
+create trigger trg_wr_ping_marks after insert or update or delete on war_room_marks for each statement execute function wr_ping();

@@ -47,16 +47,19 @@ module.exports = async (req, res) => {
   }
 
   const today = taipeiToday(), d7 = addDays(today, -7), d14 = addDays(today, -14);
+  // live=1：只要「今天的任務與標記」（資料一變動就會抓一次，所以要小）；路線／起點／通路／夥伴名單幾乎不變，只在載入時與每 10 分鐘抓一次
+  const live = !!req.query.live;
+  const none = Promise.resolve({ data: null, error: null });
   try {
     const [todayRes, histRes, originsRes, routesRes, channelsRes, driversRes] = await Promise.all([
       supabase.from('assignments')
         .select('id, trip_date, route_id, driver_id, status, assignment_drop_points(status, completed_at, issue_reason, sequence_no, code, address, channel_id)')
         .eq('trip_date', today).eq('published', true).neq('status', 'cancelled'),
-      supabase.from('assignments').select('id, trip_date, route_id, status').in('trip_date', [d7, d14]).eq('published', true).neq('status', 'cancelled'),
-      supabase.from('origins').select('id, address, label, status'),
-      supabase.from('routes').select('id, name, seq, shift, status, origins(address), route_versions(start_date, end_date)'),
-      supabase.from('channels').select('id, name'),
-      supabase.from('drivers').select('id, name')
+      live ? none : supabase.from('assignments').select('id, trip_date, route_id, status').in('trip_date', [d7, d14]).eq('published', true).neq('status', 'cancelled'),
+      live ? none : supabase.from('origins').select('id, address, label, status'),
+      live ? none : supabase.from('routes').select('id, name, seq, shift, status, origins(address), route_versions(start_date, end_date)'),
+      live ? none : supabase.from('channels').select('id, name'),
+      live ? none : supabase.from('drivers').select('id, name')
     ]);
     for (const r of [todayRes, histRes, originsRes, routesRes, channelsRes, driversRes]) if (r.error) throw new Error(r.error.message);
     const ids = (todayRes.data || []).map(a => a.id);
@@ -72,7 +75,8 @@ module.exports = async (req, res) => {
         status: p.status, completedAt: p.completed_at, label: p.code || p.address || '', channelId: p.channel_id, issueReason: p.issue_reason || null
       }))
     })).concat((histRes.data || []).map(a => ({ id: a.id, date: a.trip_date, routeId: a.route_id, driverId: null, status: a.status, dropPoints: [] })));
-    res.setHeader('Cache-Control', 'public, s-maxage=45, stale-while-revalidate=15');
+    res.setHeader('Cache-Control', live ? 'public, s-maxage=2' : 'public, s-maxage=45, stale-while-revalidate=15');
+    if (live) return res.status(200).json({ live: true, today, config: settings.warroom_config || null, assignments, marks: marks.map(m => ({ assignmentId: m.assignment_id, acked: m.acked_count || 0, resolved: m.resolved_count || 0 })) });
     return res.status(200).json({
       today, windowStart: d14, config: settings.warroom_config || null,
       origins: (originsRes.data || []).map(o => ({ id: o.id, address: o.address, label: o.label || '', status: o.status })),
