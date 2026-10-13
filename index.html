@@ -19,7 +19,6 @@
 <meta name="apple-mobile-web-app-title" content="信興｜碳金 Hub">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap');
@@ -6187,67 +6186,185 @@ function channelSummaryPanelHtml(report){
       </table>
     </div>`;
 }
-// ---- Excel（.xlsx）匯出：跟畫面用同一份資料（computeChannelBillingReport／
-// mergedRunRows），保證數字一致；萬一系統算錯，這份檔案可以直接在Excel裡手動修正金額。----
-function addAOASheet(wb, sheetName, aoa, merges){
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  if(merges && merges.length) ws['!merges'] = merges;
-  let safeName = sheetName.replace(/[\\/?*\[\]:]/g,'_').slice(0,31);
-  let name = safeName, i=1;
-  while(wb.SheetNames.includes(name)){ name = safeName.slice(0,28) + '_' + (++i); }
-  XLSX.utils.book_append_sheet(wb, ws, name);
+// ---- 請款單 Excel（跟 PDF 同樣的版型）----
+// SheetJS 社群版不支援儲存格樣式（底色、框線、字型），做不出跟 PDF 一樣的外觀，所以請款單 Excel 改用 ExcelJS（按下載時才載入）。
+// 內容與 PDF 完全共用同一份資料與同一個「要顯示的出發點」選擇；金額都是數字（有 $ 格式），可以直接在 Excel 手動調整。
+let _excelJsP = null;
+function loadExcelJS(){
+  if(window.ExcelJS) return Promise.resolve();
+  if(_excelJsP) return _excelJsP;
+  _excelJsP = new Promise((res, rej)=>{
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    sc.onload = ()=>res(); sc.onerror = ()=>{ _excelJsP = null; rej(new Error('Excel 元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _excelJsP;
 }
-function buildChannelSummarySheet(wb, report){
-  const { channel, start, end, segRows, adjustments, grand, originWithTax } = report;
-  const aoa = [];
-  aoa.push(['信興行銷有限公司']);
-  aoa.push([`${channel.name}｜物流費用請款總覽（${start}~${end}）`]);
-  aoa.push(['請款期間','物流費']);
-  segRows.forEach(s=> aoa.push([`${s.start}~${s.end}`, s.amount]));
-  adjustments.forEach(x=> aoa.push([x.note, x.amount]));
-  aoa.push(['未稅合計', grand.untaxed]);
-  aoa.push(['稅額', grand.tax]);
-  aoa.push(['含稅合計', grand.withTax]);
-  aoa.push([]);
-  aoa.push(['各區費用總覽（依供應商／任務起點）']);
-  aoa.push(['供應商','任務數','配送店次','未稅','稅額','含稅']);
-  originWithTax.forEach(o=> aoa.push([originLabel(o.originAddr), o.tripCount, o.storeCount, o.untaxed, o.tax, o.withTax]));
-  const merges = [{ s:{r:0,c:0}, e:{r:0,c:5} }, { s:{r:1,c:0}, e:{r:1,c:5} }, { s:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／任務起點）'), c:0}, e:{r:aoa.findIndex(r=>r[0]==='各區費用總覽（依供應商／任務起點）'), c:5} }];
-  addAOASheet(wb, `${channel.name}請款總覽`, aoa, merges);
-}
-function buildMergedDetailSheets(wb, channelIds, mergedByOrigin, start, end){
-  const channelNamesJoined = channelIds.map(channelName).join('、');
-  Object.keys(mergedByOrigin).forEach(addr=>{
-    const list = mergedByOrigin[addr];
-    const dAoa = [];
-    dAoa.push([`${originLabel(addr)}｜配送明細（${start}~${end}，已選通路：${channelNamesJoined}）`]);
-    dAoa.push(['生效區間','天數','時段','車次','配送路線', ...channelIds.map(cid=>`${channelName(cid)}店數`), '總店數','公里','單日總金額', ...channelIds.map(cid=>`${channelName(cid)}佔比`), '期間合計', ...channelIds.map(cid=>`${channelName(cid)}請款`)]);
-    list.forEach(r=>{
-      const totalStores = channelIds.reduce((s,cid)=> s+(r.storeCounts[cid]||0), 0);
-      const storeCounts = channelIds.map(cid=> r.storeCounts[cid]||0);
-      const pcts = channelIds.map(cid=> r.dailyTotal? Number(((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1)) : 0);
-      const periodAmts = channelIds.map(cid=> Math.round((r.byChannel[cid]||0)*r.dayCount));
-      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
-      dAoa.push([period, r.dayCount, r.route.shift==='AM'?'上午':'下午', seqToR(stripWeekdayLabel(r.route.seq)), r.dropLabel, ...storeCounts, totalStores, r.km??'', Math.round(r.dailyTotal), ...pcts, Math.round(r.dailyTotal*r.dayCount), ...periodAmts]);
+async function buildBillingWorkbook(reports, merged, channelIds, start, end){
+  await loadExcelJS();
+  const wb = new ExcelJS.Workbook();
+  wb.creator = '信興行銷有限公司'; wb.created = new Date();
+  const FONT = '微軟正黑體';
+  const multi = channelIds.length > 1;
+  const chNames = reports.map(r=>r.channel.name).join('、');
+  const ORANGE = 'FFE0902E', GRAY_H = 'FFEDEFF2', GRAY_L = 'FFBBBBBB', GRAY_D = 'FF888888', STRIPE = 'FFF7F8FA', TOT = 'FFFFF3DC', GRAND = 'FFFFE2A6', REMIT = 'FFFFFBF1';
+  const thin = c=>({ style:'thin', color:{ argb:c } });
+  const NUM = '"$"#,##0', NUMS = '+"$"#,##0;-"$"#,##0';
+  const colL = n=>{ let s=''; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; };
+  const fill = argb=>({ type:'pattern', pattern:'solid', fgColor:{ argb } });
+  const ws0 = (name)=>{ // 工作表名稱不可重複、不可超過 31 字、不可含 \ / ? * [ ] :
+    let base = name.replace(/[\\/?*\[\]:]/g,'_').slice(0,28), n = base, i = 1;
+    while(wb.worksheets.some(w=>w.name===n)) n = base + '_' + (++i);
+    return wb.addWorksheet(n, { pageSetup:{ paperSize:9, orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, margins:{ left:.4, right:.4, top:.5, bottom:.5, header:.3, footer:.3 } },
+      headerFooter:{ oddFooter:'&C第 &P 頁，共 &N 頁' }, views:[{ showGridLines:false }] });
+  };
+  // 把一段範圍（可已合併）的每個儲存格都套上框線／底色（合併儲存格只套在左上角框線會缺邊）
+  const paint = (ws, r1, c1, r2, c2, st)=>{
+    for(let r=r1; r<=r2; r++) for(let c=c1; c<=c2; c++){
+      const cell = ws.getCell(r, c);
+      if(st.border) cell.border = Object.assign({}, cell.border||{}, st.border(r,c,r1,c1,r2,c2));
+      if(st.fill) cell.fill = st.fill;
+    }
+  };
+  const boxBorder = (color, style='thin')=>(r,c,r1,c1,r2,c2)=>({ top: thin(color), bottom: thin(color), left: thin(color), right: thin(color) });
+  const heading = (ws, row, c2, text)=>{
+    ws.mergeCells(row, 1, row, c2);
+    const cell = ws.getCell(row, 1);
+    cell.value = text; cell.font = { name:FONT, size:14, bold:true, color:{ argb:'FF1B2129' } };
+    cell.alignment = { vertical:'middle', indent:1 };
+    cell.border = { left:{ style:'thick', color:{ argb:ORANGE } } };
+    ws.getRow(row).height = 26;
+  };
+  const textLen = str=>[...String(str||'')].reduce((n,ch)=> n + (/[⺀-鿿＀-￯]/.test(ch) ? 2 : 1), 0);
+
+  // ===== 工作表 1：請款單（標題、各通路請款總覽、各區總覽、匯款資訊）=====
+  const ws = ws0('請款單');
+  ws.columns = [{ width:28 }, { width:16 }, { width:16 }, { width:18 }, { width:18 }, { width:18 }];
+  const LASTC = 6;
+  let r = 1;
+  ws.mergeCells(r, 1, r, LASTC);
+  Object.assign(ws.getCell(r,1), { value:'信興行銷有限公司', font:{ name:FONT, size:24, bold:true }, alignment:{ horizontal:'center', vertical:'middle' } });
+  ws.getRow(r).height = 40; r++;
+  ws.mergeCells(r, 1, r, LASTC);
+  Object.assign(ws.getCell(r,1), { value:`物流費用請款單　｜　通路：${chNames}　｜　請款區間：${start} ~ ${end}　｜　製表日期：${todayStr()}`, font:{ name:FONT, size:11, color:{ argb:'FF444444' } }, alignment:{ horizontal:'center', vertical:'middle', wrapText:true } });
+  ws.getRow(r).height = 24; r += 2;
+  const lastRowBorder = (row, c1, c2)=>{ for(let c=c1; c<=c2; c++){ const cell = ws.getCell(row, c); cell.border = Object.assign({}, cell.border||{}, { bottom:{ style:'medium', color:{ argb:'FF666666' } } }); } };
+  reports.forEach(rp=>{
+    heading(ws, r, LASTC, `${rp.channel.name}｜物流費用請款總覽（${rp.start} ~ ${rp.end}）`); r++;
+    // 請款期間／物流費（兩欄式：左 A:C、右 D:F）
+    const hdr = (row, labels, spans)=>{ // spans: [[c1,c2],...]
+      labels.forEach((t,i)=>{ const [a,b] = spans[i]; if(b>a) ws.mergeCells(row, a, row, b); const cell = ws.getCell(row, a); cell.value = t; cell.font = { name:FONT, size:12, bold:true }; cell.alignment = { vertical:'middle', horizontal: (i>0 ? 'right' : 'left'), indent:1 }; paint(ws, row, a, row, b, { fill:fill(GRAY_H), border:boxBorder(GRAY_D) }); });
+      ws.getRow(row).height = 24;
+    };
+    hdr(r, ['請款期間','物流費'], [[1,3],[4,6]]); r++;
+    const segs = rp.segRows.filter(x=>Math.round(x.amount)!==0);
+    const lines = (segs.length ? segs : rp.segRows).map(x=>({ label:`${x.start} ~ ${x.end}`, amt:Math.round(x.amount), signed:false }))
+      .concat(rp.adjustments.map(x=>({ label:x.note, amt:Math.round(x.amount), signed:true })));
+    lines.forEach((ln,i)=>{
+      ws.mergeCells(r,1,r,3); ws.mergeCells(r,4,r,6);
+      Object.assign(ws.getCell(r,1), { value:ln.label, font:{ name:FONT, size:12 }, alignment:{ vertical:'middle', indent:1 } });
+      Object.assign(ws.getCell(r,4), { value:ln.amt, numFmt: ln.signed ? NUMS : NUM, font:{ name:'Consolas', size:13, bold:true }, alignment:{ horizontal:'right', vertical:'middle', indent:1 } });
+      paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L), fill: i%2 ? fill(STRIPE) : undefined });
+      ws.getRow(r).height = 22; r++;
     });
-    addAOASheet(wb, `${originLabel(addr)}配送明細`, dAoa, [{ s:{r:0,c:0}, e:{r:0,c:dAoa[1].length-1} }]);
+    [['未稅合計', rp.grand.untaxed, TOT, 14], ['稅額', rp.grand.tax, TOT, 14], ['含稅合計', rp.grand.withTax, GRAND, 17]].forEach(([label, v, bg, size], i, arr)=>{
+      ws.mergeCells(r,1,r,3); ws.mergeCells(r,4,r,6);
+      Object.assign(ws.getCell(r,1), { value:label, font:{ name:FONT, size, bold:true }, alignment:{ vertical:'middle', indent:1 } });
+      Object.assign(ws.getCell(r,4), { value:Math.round(v), numFmt:NUM, font:{ name:'Consolas', size, bold:true }, alignment:{ horizontal:'right', vertical:'middle', indent:1 } });
+      paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L), fill:fill(bg) });
+      ws.getRow(r).height = size > 15 ? 30 : 26;
+      if(i === arr.length-1) lastRowBorder(r, 1, LASTC);
+      r++;
+    });
+    r++;
+    heading(ws, r, LASTC, '各區費用總覽（依供應商／任務起點）'); r++;
+    hdr(r, ['供應商','任務數','配送店次','未稅','稅額','含稅'], [[1,1],[2,2],[3,3],[4,4],[5,5],[6,6]]); r++;
+    if(rp.originWithTax.length){
+      rp.originWithTax.forEach((o,i)=>{
+        const vals = [originLabel(o.originAddr), o.tripCount, o.storeCount, Math.round(o.untaxed), Math.round(o.tax), Math.round(o.withTax)];
+        vals.forEach((v,ci)=>{ const cell = ws.getCell(r, ci+1); cell.value = v; if(ci>=3) cell.numFmt = NUM; cell.font = ci===0 ? { name:FONT, size:12 } : { name:'Consolas', size:13, bold:true }; cell.alignment = { vertical:'middle', horizontal: ci===0 ? 'left' : 'right', indent:1 }; });
+        paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L), fill: i%2 ? fill(STRIPE) : undefined });
+        ws.getRow(r).height = 22; r++;
+      });
+    } else {
+      ws.mergeCells(r,1,r,LASTC); Object.assign(ws.getCell(r,1), { value:'此區間無相關任務', font:{ name:FONT, size:12 }, alignment:{ indent:1 } }); paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L) }); r++;
+    }
+    lastRowBorder(r-1, 1, LASTC);
+    r += 2;
   });
+  // 匯款資訊（橘色框）
+  const r0 = r;
+  ws.mergeCells(r,1,r,LASTC); Object.assign(ws.getCell(r,1), { value:'匯款資訊', font:{ name:FONT, size:14, bold:true }, alignment:{ vertical:'middle', indent:1 } }); ws.getRow(r).height = 26; r++;
+  [['銀　　行', `${BILLING_REMIT.bank}　${BILLING_REMIT.branch}`, false], ['戶　　名', BILLING_REMIT.holder, false], ['帳　　號', BILLING_REMIT.account, true]].forEach(([k,v,big])=>{
+    ws.mergeCells(r,2,r,LASTC);
+    Object.assign(ws.getCell(r,1), { value:k, font:{ name:FONT, size:12, color:{ argb:'FF555555' } }, alignment:{ vertical:'middle', indent:1 } });
+    Object.assign(ws.getCell(r,2), { value:v, font: big ? { name:'Consolas', size:18, bold:true } : { name:FONT, size:13 }, alignment:{ vertical:'middle' } });
+    ws.getRow(r).height = big ? 30 : 24; r++;
+  });
+  const r1 = r-1;
+  paint(ws, r0, 1, r1, LASTC, { fill:fill(REMIT) });
+  for(let rr=r0; rr<=r1; rr++) for(let c=1; c<=LASTC; c++){
+    const cell = ws.getCell(rr, c), b = {};
+    if(rr===r0) b.top = { style:'medium', color:{ argb:ORANGE } };
+    if(rr===r1) b.bottom = { style:'medium', color:{ argb:ORANGE } };
+    if(c===1) b.left = { style:'medium', color:{ argb:ORANGE } };
+    if(c===LASTC) b.right = { style:'medium', color:{ argb:ORANGE } };
+    cell.border = Object.assign({}, cell.border||{}, b);
+  }
+
+  // ===== 之後每個出發點一張工作表：配送明細 =====
+  Object.keys(merged).forEach(addr=>{
+    const list = merged[addr];
+    const w = ws0(`${originLabel(addr)}配送明細`);
+    const heads = ['生效區間','天數','時段','車次','配送路線'];
+    const widths = [14, 7, 8, 8, 58];
+    if(multi) channelIds.forEach(cid=>{ heads.push(`${channelName(cid)}店數`); widths.push(11); }); else { heads.push('店數'); widths.push(8); }
+    heads.push('公里','單日金額','期間合計'); widths.push(8, 14, 15);
+    if(multi) channelIds.forEach(cid=>{ heads.push(`${channelName(cid)}期間合計`); widths.push(16); });
+    w.columns = widths.map(x=>({ width:x }));
+    const N = heads.length;
+    let rr = 1;
+    heading(w, rr, N, `${originLabel(addr)}｜配送明細（已選通路：${chNames}）`); rr++;
+    heads.forEach((t,ci)=>{
+      const cell = w.getCell(rr, ci+1); cell.value = t; cell.font = { name:FONT, size:12, bold:true };
+      const numCol = ci>=5;
+      cell.alignment = { vertical:'middle', horizontal: (ci===1 || numCol) ? 'right' : 'left', indent:1, wrapText:true };
+    });
+    paint(w, rr, 1, rr, N, { fill:fill(GRAY_H), border:boxBorder(GRAY_D) });
+    w.getRow(rr).height = 30; const headRow = rr; rr++;
+    list.forEach((x,i)=>{
+      const period = x.dateStart===x.dateEnd ? x.dateStart : `${x.dateStart}\n${x.dateEnd}`;
+      const stops = (x.dropLabel||'—').split('➔').join(' → ');
+      const vals = [period, x.dayCount, x.route.shift==='AM'?'上午':'下午', seqToR(stripWeekdayLabel(x.route.seq)), stops];
+      if(multi) channelIds.forEach(cid=> vals.push(`${x.storeCounts[cid]||0}\n${x.dailyTotal ? ((x.byChannel[cid]||0)/x.dailyTotal*100).toFixed(1) : '0.0'}%`));
+      else vals.push(channelIds.reduce((sum,cid)=> sum+(x.storeCounts[cid]||0), 0));
+      vals.push(x.km ?? '—', Math.round(x.dailyTotal), Math.round(x.dailyTotal*x.dayCount));
+      if(multi) channelIds.forEach(cid=> vals.push(Math.round((x.byChannel[cid]||0)*x.dayCount)));
+      vals.forEach((v,ci)=>{
+        const cell = w.getCell(rr, ci+1); cell.value = v;
+        const numLike = ci===1 || ci>=5;
+        cell.alignment = { vertical:'top', horizontal: numLike ? 'right' : 'left', indent:1, wrapText:true };
+        cell.font = ci===4 ? { name:FONT, size:11 } : numLike ? { name:'Consolas', size:12, bold:true } : { name:FONT, size:11 };
+        if(typeof v === 'number' && ci >= (multi ? 5 + channelIds.length : 6) + 1) cell.numFmt = NUM;
+      });
+      paint(w, rr, 1, rr, N, { border:boxBorder(GRAY_L), fill: i%2 ? fill(STRIPE) : undefined });
+      // 列高：配送路線文字會自動換行，Excel 不會替合併外的換行自動算列高，這裡估算
+      const lines = Math.max(x.dateStart===x.dateEnd ? 1 : 2, Math.ceil(textLen(stops) / (widths[4]-2)), multi ? 2 : 1);
+      w.getRow(rr).height = Math.max(24, lines * 17 + 8);
+      rr++;
+    });
+    for(let c=1; c<=N; c++){ const cell = w.getCell(rr-1, c); cell.border = Object.assign({}, cell.border||{}, { bottom:{ style:'medium', color:{ argb:'FF666666' } } }); }
+    w.views = [{ showGridLines:false, state:'frozen', ySplit:headRow }];
+    w.pageSetup.printTitlesRow = `${headRow}:${headRow}`;
+  });
+  return wb;
 }
-// channelIds 只有一個時，該通路的總覽沿用抓取範圍(start~end)；勾選多個通路時，
-// 每個通路的總覽改用自己在「通路管理」設定的週期（自然月／自訂區間），
-// 不會被抓取範圍污染——跟畫面渲染的 ownPeriodFor() 邏輯保持一致。
-function exportBillingExcel(channelIds, monthStr, start, end, assignmentsList = state.data.assignments){
-  const wb = XLSX.utils.book_new();
-  channelIds.forEach(cid=>{
-    const channel = state.data.channels.find(ch=>ch.id===cid);
-    if(!channel) return;
-    const own = channelIds.length===1 ? {start, end} : defaultPeriod(channel, monthStr);
-    const report = computeChannelBillingReport(cid, own.start, own.end, assignmentsList);
-    if(report) buildChannelSummarySheet(wb, report);
-  });
-  const merged = mergedRunRows(channelIds, start, end, assignmentsList);
-  buildMergedDetailSheets(wb, channelIds, merged, start, end);
-  XLSX.writeFile(wb, `請款單_${start}_${end}.xlsx`);
+async function downloadBillingExcel(reports, merged, channelIds, start, end){
+  const wb = await buildBillingWorkbook(reports, merged, channelIds, start, end);
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `請款單_${start}_${end}.xlsx`;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
 }
 function renderBilling(c){
   // 這個畫面查出來的任務資料只存在這個變數（畫面本身的區域狀態），不寫回
@@ -6380,11 +6497,11 @@ function renderBilling(c){
         </div>
       </div>
       ${(()=>{
-        // 請款單 PDF 要顯示哪些出發點：金額合計是 $0 的預設不顯示（勾選框可以自己改），只影響 PDF，不影響畫面與 Excel。
+        // 請款單 PDF／Excel 要顯示哪些出發點：金額合計是 $0 的預設不顯示（勾選框可以自己改），只影響 PDF 與下載的 Excel，不影響畫面。
         const addrs = Object.keys(merged);
         if(!addrs.length) return '';
         const ov = state._billingOriginOverride || {};
-        return `<div class="panel no-print" style="margin-top:10px;"><div style="font-size:13px; font-weight:600; margin-bottom:6px;">請款單 PDF 要顯示的出發點</div>
+        return `<div class="panel no-print" style="margin-top:10px;"><div style="font-size:13px; font-weight:600; margin-bottom:6px;">請款單 PDF／Excel 要顯示的出發點</div>
           <div style="display:flex; flex-wrap:wrap; gap:6px 16px;">${addrs.map(addr=>{
             const total = merged[addr].reduce((sum,r)=> sum + r.dailyTotal*r.dayCount, 0);
             const on = addr in ov ? ov[addr] : Math.round(total) > 0;
@@ -6393,22 +6510,33 @@ function renderBilling(c){
       })()}
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
         <button class="btn amber" id="printBilling">產生請款單（列印/另存PDF）</button>
-        <button class="btn ghost" id="exportBillingXlsx">下載Excel（.xlsx，可手動調整金額）</button>
+        <button class="btn ghost" id="exportBillingXlsx">下載Excel（跟 PDF 同版型，金額可手動調整）</button>
       </div>`;
     document.querySelectorAll('.pdfOrigin').forEach(cb=>{
       cb.onchange = ()=>{ state._billingOriginOverride = state._billingOriginOverride || {}; state._billingOriginOverride[cb.value] = cb.checked; };
     });
-    document.getElementById('printBilling').onclick = ()=>{
+    // PDF 與 Excel 共用「要顯示的出發點」選擇：兩邊內容完全一樣
+    const pickOrigins = what=>{
       const boxes = [...document.querySelectorAll('.pdfOrigin')];
       const picked = new Set(boxes.filter(b=>b.checked).map(b=>b.value));
       const hiddenWithMoney = boxes.filter(b=>!b.checked && Number(b.dataset.total)>0).map(b=>originLabel(b.value));
-      if(boxes.length && !picked.size){ alert('請至少勾選一個要顯示的出發點'); return; }
-      if(hiddenWithMoney.length && !confirm(`「${hiddenWithMoney.join('、')}」有請款金額，不顯示的話，PDF 上的明細加總會跟請款總額對不起來。\n\n確定要隱藏嗎？`)) return;
+      if(boxes.length && !picked.size){ alert('請至少勾選一個要顯示的出發點'); return null; }
+      if(hiddenWithMoney.length && !confirm(`「${hiddenWithMoney.join('、')}」有請款金額，不顯示的話，${what}上的明細加總會跟請款總額對不起來。\n\n確定要隱藏嗎？`)) return null;
       const mergedPick = {}; Object.keys(merged).forEach(a=>{ if(!boxes.length || picked.has(a)) mergedPick[a] = merged[a]; });
       const reportsPick = reports.map(rp=> ({ ...rp, originWithTax: rp.originWithTax.filter(o=> !boxes.length || picked.has(o.originAddr)) }));
-      exportPrintable(`請款單_${start}_${end}`, billingPrintHtml(reportsPick, mergedPick, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
+      return { mergedPick, reportsPick };
     };
-    document.getElementById('exportBillingXlsx').onclick = ()=> exportBillingExcel(channelIds, monthStr, start, end, billingAssignments);
+    document.getElementById('printBilling').onclick = ()=>{
+      const p = pickOrigins('PDF'); if(!p) return;
+      exportPrintable(`請款單_${start}_${end}`, billingPrintHtml(p.reportsPick, p.mergedPick, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
+    };
+    document.getElementById('exportBillingXlsx').onclick = async ev=>{
+      const p = pickOrigins('Excel'); if(!p) return;
+      const btn = ev.target; btn.disabled = true;
+      try{ await downloadBillingExcel(p.reportsPick, p.mergedPick, channelIds, start, end); }
+      catch(e){ console.error(e); toast(e.message || 'Excel 產生失敗', { type:'error' }); }
+      btn.disabled = false;
+    };
   }
   document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
   document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
