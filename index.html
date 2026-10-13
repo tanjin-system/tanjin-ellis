@@ -2181,6 +2181,8 @@ async function renderHomeAdmin(c){
   const draftWeekCount = state.data.assignments.filter(a=>a.published===false && a.date>=getWeekDates(0)[0]).length;
   // 過了那天還停在「執行中」（夥伴忘了按完成）的任務：不會被算進請款與報酬，要提醒主控處理。
   const stuckTasks = state.data.assignments.filter(a=>a.status==='in_progress' && a.date<today && a.published!==false);
+  // 沒有任何店點的未來任務：夥伴會看到空的行程（例如套用路線更新到一半被中斷）
+  const emptyTrips = state.data.assignments.filter(a=>a.date>=today && a.status!=='cancelled' && !a.isSupport && !(a.dropPoints||[]).length);
   let deferredDue = [];
   try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
   let unsettledNames = [];
@@ -2196,8 +2198,9 @@ async function renderHomeAdmin(c){
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
-      <h3>⏰ 待辦提醒 <span class="rem-count">${[covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
+    ${emptyTrips.length || covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
+      <h3>⏰ 待辦提醒 <span class="rem-count">${[emptyTrips.length,covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
+      ${emptyTrips.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${emptyTrips.length} 趟任務沒有任何店點（夥伴會看到空的行程）：${emptyTrips.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${emptyTrips.length>6?'…':''}。請到週期任務清單刪掉重排，或到路線管理重新套用。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
       ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="slips">前往勞報單</button></div>` : ''}
       ${stuckTasks.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}

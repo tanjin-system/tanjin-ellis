@@ -1200,20 +1200,30 @@ async function regenerateFutureAssignments(routeId, fromDate) {
   const supabase = getSupabase();
   const targets = state.data.assignments.filter(a =>
     a.routeId === routeId && a.date >= fromDate && (a.status === 'scheduled' || a.status === 'in_progress'));
-  let updated = 0;
+  let updated = 0, skipped = 0;
   for (const a of targets) {
     const version = route.versions.find(v => a.date >= v.start && (!v.end || a.date <= v.end));
-    if (!version) continue;
+    if (!version) { skipped++; continue; }
     const dropPointIds = version.dropPointIds || [];
-    const { error: delErr } = await supabase.from('assignment_drop_points').delete().eq('assignment_id', a.id);
-    if (delErr) throw new Error('清除舊店點失敗：' + delErr.message);
-    if (dropPointIds.length) {
-      const rows = dropPointIds.map((dpId, i) => {
-        const dp = state.data.dropPoints.find(x => x.id === dpId);
-        return { assignment_id: a.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
-      });
-      const { error: insErr } = await supabase.from('assignment_drop_points').insert(rows);
-      if (insErr) throw new Error('寫入新店點失敗：' + insErr.message);
+    // 版本裡沒有任何店點（資料不完整）時不動這趟任務：以前會把舊店點刪光，夥伴就看到空的行程
+    if (!dropPointIds.length) { skipped++; continue; }
+    // 先寫入新店點、成功了才刪舊的（以前是先刪後寫，中間失敗或被中斷，這趟就剩下空的）
+    const { data: oldRows, error: oldErr } = await supabase.from('assignment_drop_points').select('id').eq('assignment_id', a.id);
+    if (oldErr) throw new Error('讀取舊店點失敗：' + oldErr.message);
+    const oldIds = (oldRows || []).map(r => r.id);
+    const rows = dropPointIds.map((dpId, i) => {
+      const dp = state.data.dropPoints.find(x => x.id === dpId);
+      return { assignment_id: a.id, source_drop_point_id: dpId, address: dp?.address || '', code: dp?.code || null, channel_id: dp?.channelId || null, sequence_no: i + 1 };
+    });
+    const { data: newRows, error: insErr } = await supabase.from('assignment_drop_points').insert(rows).select('id');
+    if (insErr) throw new Error('寫入新店點失敗（這趟原本的店點沒有被動到）：' + insErr.message);
+    if (oldIds.length) {
+      const { error: delErr } = await supabase.from('assignment_drop_points').delete().in('id', oldIds);
+      if (delErr) {
+        // 舊的刪不掉就把剛寫入的新店點收回，維持原狀，不要留下新舊重複的店點
+        await supabase.from('assignment_drop_points').delete().in('id', (newRows || []).map(r => r.id));
+        throw new Error('清除舊店點失敗（已還原，這趟維持原本的店點）：' + delErr.message);
+      }
     }
     const { error: updErr } = await supabase.from('assignments').update({
       distance_km: version.distanceKm ?? null,
@@ -1228,7 +1238,7 @@ async function regenerateFutureAssignments(routeId, fromDate) {
     const idx = state.data.assignments.findIndex(x => x.id === a.id);
     if (idx >= 0) state.data.assignments[idx] = await fetchAssignment(a.id);
   }
-  return { updated, total: targets.length };
+  return { updated, total: targets.length, skipped };
 }
 
 // ---------------- 任務指派與生命週期 ----------------
