@@ -3326,10 +3326,18 @@ let regionExpandedSet = new Set(); // 使用者手動展開過的地區名稱，
 function ensureDraft(route){
   if(!routeDraft[route.id]){
     const open = (route.versions||[]).find(v=>!v.end);
+    // 已存的拆賬金額／請款總額是「含額外固定費」的最終數字；編輯時分開成「基本」與「額外固定費」兩部分顯示，
+    // 這樣之後改里程或店數、系統重新計算基本金額時，不會把額外固定費蓋掉。
+    const extras = (open?.extraFees||[]).map(x=>({ channelId:x.channelId, amount:Number(x.amount)||0, note:x.note||'' }));
+    const base = open?.billingByChannel ? {...open.billingByChannel} : null;
+    if(base) extras.forEach(x=>{ if(x.channelId in base) base[x.channelId] = (Number(base[x.channelId])||0) - x.amount; });
+    const extraSum = extras.reduce((s,x)=>s+x.amount,0);
     routeDraft[route.id] = {
       order: open ? [...open.dropPointIds] : [], dpSearch: '',
-      distanceKm: open?.distanceKm ?? '', driverFare: open?.driverFare ?? '', billingTotal: open?.billingTotal ?? '',
-      billingByChannel: open?.billingByChannel ? {...open.billingByChannel} : null,
+      distanceKm: open?.distanceKm ?? '', driverFare: open?.driverFare ?? '',
+      billingTotal: (open?.billingTotal ?? '')==='' ? '' : (Number(open.billingTotal)||0) - extraSum,
+      billingByChannel: base,
+      extraFees: extras,
       splitManuallyEdited: false
     };
   }
@@ -3717,6 +3725,7 @@ function renderRouteDetail(rid){
         <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
         <div style="font-size:12.5px; margin:4px 0;">任務起點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
+        ${(v.extraFees||[]).length ? `<div style="font-size:12px; margin-top:4px; color:var(--ink-soft);">額外固定費：${(v.extraFees||[]).map(x=>`${escapeHtml(channelName(x.channelId))} $${money(x.amount)}${x.note?`（${escapeHtml(x.note)}）`:''}`).join('、')}（已含在請款總額內）</div>` : ''}
         <div style="font-size:12.5px; margin:8px 0 0;">夥伴費用 <strong>$${money(v.driverFare||0)}</strong></div>
         ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
         <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
@@ -3792,6 +3801,8 @@ function renderRouteDetail(rid){
         <div class="field"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
       <div id="rvFeeHint" style="font-size:12px; color:var(--ink-soft); margin:2px 0 6px;"></div>
+      <label style="margin-top:8px; display:block;">額外固定費（另計：不受里程、店數影響，每跑一趟加收；例如某家店另有一筆固定物流費）</label>
+      <div id="rvExtra" style="margin:4px 0 8px;"></div>
       <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與夥伴結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
       <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
@@ -3909,6 +3920,7 @@ function renderRouteDetail(rid){
       if(dp) ids.add(dp.channelId);
     });
     if(draft.billingByChannel) Object.keys(draft.billingByChannel).forEach(cid=>ids.add(cid));
+    (draft.extraFees||[]).forEach(x=>{ if(x.channelId) ids.add(x.channelId); });
     return Array.from(ids);
   }
   function renderSplitInputs(){
@@ -3949,7 +3961,9 @@ function renderRouteDetail(rid){
     const sum = cids.reduce((s,cid)=> s + (Number(draft.billingByChannel?.[cid])||0), 0);
     const billingTotal = Number(draft.billingTotal)||0;
     sumEl.style.color = sum!==billingTotal ? '#B5493A' : 'var(--ink-soft)';
-    sumEl.textContent = `拆賬合計 $${money(sum)}${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}`;
+    const ex = extraTotal();
+    refreshExtraSum();
+    sumEl.textContent = `拆賬合計 $${money(sum)}${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}` + (ex ? `　＋ 額外固定費 $${money(ex)} ＝ 最終請款 $${money(sum+ex)}` : '');
   }
   function renderFeeHint(){
     const el = document.getElementById('rvFeeHint');
@@ -3960,8 +3974,10 @@ function renderRouteDetail(rid){
     }
     const f = calcRouteFees(draft.distanceKm, draft.order.length);
     const same = Number(draft.driverFare)===f.driverFare && Number(draft.billingTotal)===f.billingTotal;
+    const ex = extraTotal();
     el.innerHTML = `計算值：夥伴費用 ${draft.distanceKm}km×${ROUTE_FEE_RATES.driverPerKm}＋${draft.order.length}店×${ROUTE_FEE_RATES.driverPerStore}＝<b>$${money(f.driverFare)}</b>；請款總額 ${draft.distanceKm}km×${ROUTE_FEE_RATES.billingPerKm}＋${draft.order.length}店×${ROUTE_FEE_RATES.billingPerStore}＝<b>$${money(f.billingTotal)}</b>。`
       + (same ? ' ✅ 目前就是計算值。' : ` 目前填的數字跟計算值不同（手動修改的數字，會在里程或店數再變動時被重新計算覆蓋）。 <button class="btn ghost" id="rvApplyFee" style="padding:2px 8px; font-size:11.5px;">套用計算值</button>`);
+    if(ex) el.insertAdjacentHTML('beforeend', `<br>另有額外固定費 <b>$${money(ex)}</b>（見下方），儲存後最終請款總額 ＝ $${money((Number(draft.billingTotal)||0)+ex)}。`);
     const b = el.querySelector('#rvApplyFee');
     if(b) b.onclick = ()=>{
       applyAutoFees(draft);
@@ -3969,6 +3985,33 @@ function renderRouteDetail(rid){
       document.getElementById('rvBilling').value = draft.billingTotal;
       renderSplitInputs(); renderFeeHint();
     };
+  }
+  function extraTotal(){ return (draft.extraFees||[]).reduce((s,x)=> s + (Number(x.amount)||0), 0); }
+  function refreshExtraSum(){
+    const s = document.getElementById('rvExtraSum'); if(!s) return;
+    const ex = extraTotal();
+    s.textContent = ex ? `額外固定費合計 $${money(ex)}；儲存後請款總額 ＝ 基本 $${money(Number(draft.billingTotal)||0)} ＋ 額外 $${money(ex)} ＝ $${money((Number(draft.billingTotal)||0)+ex)}` : '';
+  }
+  function renderExtra(){
+    const el = document.getElementById('rvExtra');
+    if(!el) return;
+    if(!draft.extraFees) draft.extraFees = [];
+    const chOpts = (sel)=> state.data.channels.filter(ch=>ch.status!=='inactive' || ch.id===sel).map(ch=>`<option value="${ch.id}" ${ch.id===sel?'selected':''}>${escapeHtml(ch.name)}</option>`).join('');
+    el.innerHTML = draft.extraFees.map((x,i)=>`<div style="display:flex; gap:8px; align-items:center; margin:4px 0; flex-wrap:wrap;">
+        <select data-exch="${i}" style="max-width:190px;"><option value="">－選擇通路－</option>${chOpts(x.channelId)}</select>
+        <input type="number" data-examt="${i}" value="${x.amount||''}" placeholder="金額（元）" style="max-width:130px;">
+        <input data-exnote="${i}" value="${escapeHtml(x.note||'')}" placeholder="備註（例：興隆門市固定物流費）" style="flex:1; min-width:170px;">
+        <button class="btn ghost" data-exdel="${i}" style="padding:4px 10px;">移除</button>
+      </div>`).join('')
+      + `<button class="btn ghost" data-exadd="1" style="padding:4px 12px; font-size:12.5px;">＋ 新增一筆額外固定費</button>`
+      + `<div id="rvExtraSum" style="font-size:12px; color:var(--ink-soft); margin-top:4px;"></div>`;
+    const sum = refreshExtraSum;
+    sum();
+    el.querySelectorAll('[data-exch]').forEach(s=>{ s.onchange = ()=>{ draft.extraFees[Number(s.dataset.exch)].channelId = s.value; renderSplitInputs(); renderFeeHint(); }; });
+    el.querySelectorAll('[data-examt]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.examt)].amount = Number(s.value)||0; sum(); updateSplitSum(); renderFeeHint(); }; });
+    el.querySelectorAll('[data-exnote]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.exnote)].note = s.value; }; });
+    el.querySelectorAll('[data-exdel]').forEach(b=>{ b.onclick = ()=>{ draft.extraFees.splice(Number(b.dataset.exdel),1); renderExtra(); renderSplitInputs(); renderFeeHint(); }; });
+    el.querySelector('[data-exadd]').onclick = ()=>{ draft.extraFees.push({ channelId:'', amount:0, note:'' }); renderExtra(); };
   }
   ['rvDistance','rvFare','rvBilling'].forEach(id=>{
     const el = document.getElementById(id);
@@ -3985,6 +4028,7 @@ function renderRouteDetail(rid){
       renderFeeHint();
     };
   });
+  renderExtra();
   renderSplitInputs();
   renderFeeHint();
   detailEl.querySelectorAll('[data-savever]').forEach(btn=>{
@@ -4013,13 +4057,18 @@ function renderRouteDetail(rid){
         // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
         // 目前打的數字，避免兩者不小心存成不一致（實際請款/夥伴結算只認拆賬金額，
         // 見 effectiveByChannelForAssignment()，總額欄位只是給人看跟給自動建議拆賬用）。
-        const billingByChannel = routeDraft[rid2].billingByChannel || {};
+        // 額外固定費（例如某家店另有一筆固定物流費）加在對應通路上：存進去的拆賬金額與請款總額是「含額外固定費」的最終數字，
+        // 下游的請款、報酬、報表都不用改；另外把「哪幾筆是額外的」記在 extraFees，編輯時才能分開顯示。
+        const extraFees = (routeDraft[rid2].extraFees||[]).filter(x=>x.channelId && Number(x.amount)).map(x=>({ channelId:x.channelId, amount:Number(x.amount), note:(x.note||'').trim() }));
+        const billingByChannel = { ...(routeDraft[rid2].billingByChannel || {}) };
+        extraFees.forEach(x=>{ billingByChannel[x.channelId] = (Number(billingByChannel[x.channelId])||0) + x.amount; });
         const billingTotal = Object.values(billingByChannel).reduce((s,v)=> s+(Number(v)||0), 0);
         await saveRouteVersion(rid2, effDate, ids, {
           distanceKm: document.getElementById('rvDistance').value,
           driverFare: document.getElementById('rvFare').value,
           billingTotal,
-          billingByChannel
+          billingByChannel,
+          extraFees
         });
         delete routeDraft[rid2];
         // 週期任務清單裡已經排好、還沒完成的未來車次不會自動跟著新版本走（建立當下就

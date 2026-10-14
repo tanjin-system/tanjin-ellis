@@ -57,6 +57,7 @@ function mapRoute(row) {
       driverFare: v.driver_fare != null ? Number(v.driver_fare) : null,
       billingTotal: v.billing_total != null ? Number(v.billing_total) : null,
       billingByChannel: v.billing_by_channel || {},
+      extraFees: Array.isArray(v.extra_fees) ? v.extra_fees : [], // 額外固定費（已經加進 billingByChannel／billingTotal 裡，這裡只是記錄「哪一筆是額外加的」，讓畫面能分開顯示、重算時不被蓋掉）
       dropPointIds: (v.route_version_points || [])
         .slice().sort((a, b) => a.sequence_no - b.sequence_no)
         .map(p => p.drop_point_id)
@@ -1146,7 +1147,8 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
     distance_km: finance?.distanceKm === '' || finance?.distanceKm == null ? null : Number(finance.distanceKm),
     driver_fare: finance?.driverFare === '' || finance?.driverFare == null ? null : Number(finance.driverFare),
     billing_total: finance?.billingTotal === '' || finance?.billingTotal == null ? null : Number(finance.billingTotal),
-    billing_by_channel: billingByChannel
+    billing_by_channel: billingByChannel,
+    extra_fees: (finance && Array.isArray(finance.extraFees)) ? finance.extraFees : []
   };
 
   let version = route.versions.find(v => v.start === newStart);
@@ -1173,6 +1175,7 @@ async function saveRouteVersion(routeId, newStart, dropPointIds, finance) {
   version.driverFare = financePayload.driver_fare;
   version.billingTotal = financePayload.billing_total;
   version.billingByChannel = billingByChannel;
+  version.extraFees = financePayload.extra_fees;
 
   const sorted = [...route.versions].sort((a, b) => a.start.localeCompare(b.start));
   const updates = [];

@@ -1163,3 +1163,9 @@ create trigger trg_wr_ping_marks after insert or update or delete on war_room_ma
 alter table assignments add column if not exists departed_at timestamptz;
 create or replace function set_departed_at() returns trigger language plpgsql as $$ begin if new.status = 'in_progress' and old.status is distinct from 'in_progress' and new.departed_at is null then new.departed_at := now(); end if; return new; end; $$;
 create trigger trg_set_departed_at before update on assignments for each row execute function set_departed_at();
+
+-- PART 30：路線版本的「額外固定費」（2026-10-14）
+-- route_versions.extra_fees（jsonb 陣列，每筆 { channelId, amount, note }）：某個通路在這條路線上每趟另外加收的固定費用
+-- （例如 21Plus 興隆門市另有一筆固定物流費）。billing_by_channel／billing_total 存的是「含額外固定費」的最終數字，
+-- 所以請款、報酬、報表完全不用改；extra_fees 只是讓編輯畫面能把它跟里程、店數算出來的基本金額分開，重新計算時不會被蓋掉。
+alter table route_versions add column if not exists extra_fees jsonb not null default '[]'::jsonb;
