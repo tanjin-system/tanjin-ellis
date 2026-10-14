@@ -1355,6 +1355,13 @@ function isDriverProfileRequiredComplete(d){
 // ---------- 輕量通知（取代 alert 彈窗）----------
 // 操作結果（儲存成功、請先選擇…）改成上方淡出的小通知，不用多按一次「確定」才能繼續；
 // 失敗類訊息停留較久、點一下可關閉。破壞性操作的 confirm() 仍然保留。
+// 收合群組（.fold）的標題點擊：點在內容區（.fold-body）裡的按鈕不該觸發收合。
+// 以前用 e.target.closest('.fold-body') 判斷，但內容區裡的按鈕（例如路線管理展開後的「移除」「加入」店點）
+// 會在自己的 onclick 裡把整塊內容重畫——事件往上傳遞時 e.target 已經從頁面上被拿掉，closest() 找不到
+// .fold-body，就誤判成點到標題而把整個群組收合起來。composedPath() 是「點下去那一刻」的路徑，不受重畫影響。
+function clickedInFoldBody(e){
+  return e.composedPath().some(el=> el && el.classList && el.classList.contains('fold-body'));
+}
 function toast(msg, opts){
   opts = opts || {};
   let host = document.getElementById('toastHost');
@@ -2497,7 +2504,7 @@ function renderDrivers(c){
     }).join('');
     listEl.querySelectorAll('[data-drivergrouptoggle]').forEach(h=>{
       h.onclick = (e)=>{
-        if(e.target.closest('.fold-body')) return;
+        if(clickedInFoldBody(e)) return;
         const key = h.dataset.drivergrouptoggle;
         if(driverGroupExpandedSet.has(key)) driverGroupExpandedSet.delete(key); else driverGroupExpandedSet.add(key);
         renderDriverCards();
@@ -3148,7 +3155,7 @@ function renderDpListBody(){
   }).join('') || (dpOnlyMissing ? '<div class="empty">🎉 沒有未排入路線的店點</div>' : '');
   wrap.querySelectorAll('[data-dptoggle]').forEach(h=>{
     h.onclick = (e)=>{
-      if(e.target.closest('.fold-body')) return;
+      if(clickedInFoldBody(e)) return;
       const id = h.dataset.dptoggle;
       if(dpExpandedChannels.has(id)) dpExpandedChannels.delete(id); else dpExpandedChannels.add(id);
       renderDpListBody();
@@ -3418,7 +3425,7 @@ function renderRouteTable(){
     </div>` : '');
   wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
     h.onclick = (e)=>{
-      if(e.target.closest('.fold-body')) return;
+      if(clickedInFoldBody(e)) return;
       const key = h.dataset.regiontoggle;
       if(regionExpandedSet.has(key)) regionExpandedSet.delete(key); else regionExpandedSet.add(key);
       renderRouteTable();
