@@ -3328,9 +3328,12 @@ function ensureDraft(route){
     const open = (route.versions||[]).find(v=>!v.end);
     // 已存的拆賬金額／請款總額是「含額外固定費」的最終數字；編輯時分開成「基本」與「額外固定費」兩部分顯示，
     // 這樣之後改里程或店數、系統重新計算基本金額時，不會把額外固定費蓋掉。
-    const extras = (open?.extraFees||[]).map(x=>({ channelId:x.channelId, amount:Number(x.amount)||0, note:x.note||'' }));
+    const extras = (open?.extraFees||[]).map(x=>({ channelId:x.channelId, amount:Number(x.amount)||0, note:x.note||'', solo:x.solo!==false }));
     const base = open?.billingByChannel ? {...open.billingByChannel} : null;
-    if(base) extras.forEach(x=>{ if(x.channelId in base) base[x.channelId] = (Number(base[x.channelId])||0) - x.amount; });
+    if(base) extras.forEach(x=>{
+      if(x.channelId in base) base[x.channelId] = (Number(base[x.channelId])||0) - x.amount;
+      if(x.solo && Math.abs(Number(base[x.channelId])||0) < 0.5) delete base[x.channelId]; // 只收固定費的通路：基本拆款裡沒有它
+    });
     const extraSum = extras.reduce((s,x)=>s+x.amount,0);
     routeDraft[route.id] = {
       order: open ? [...open.dropPointIds] : [], dpSearch: '',
@@ -3725,7 +3728,7 @@ function renderRouteDetail(rid){
         <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
         <div style="font-size:12.5px; margin:4px 0;">任務起點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
-        ${(v.extraFees||[]).length ? `<div style="font-size:12px; margin-top:4px; color:var(--ink-soft);">額外固定費：${(v.extraFees||[]).map(x=>`${escapeHtml(channelName(x.channelId))} $${money(x.amount)}${x.note?`（${escapeHtml(x.note)}）`:''}`).join('、')}（已含在請款總額內）</div>` : ''}
+        ${(v.extraFees||[]).length ? `<div style="font-size:12px; margin-top:4px; color:var(--ink-soft);">額外固定費：${(v.extraFees||[]).map(x=>`${escapeHtml(channelName(x.channelId))} $${money(x.amount)}${x.solo!==false?'（只收固定費）':''}${x.note?`（${escapeHtml(x.note)}）`:''}`).join('、')}（已含在請款總額內）</div>` : ''}
         <div style="font-size:12.5px; margin:8px 0 0;">夥伴費用 <strong>$${money(v.driverFare||0)}</strong></div>
         ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
         <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
@@ -3913,21 +3916,25 @@ function renderRouteDetail(rid){
   // 拆賬金額改成人工輸入：只要admin還沒手動改過任何一格，這裡就依「里程/請款總額」
   // 變動自動重新建議一組預設值（沿用原本依店數比例分攤的公式）方便快速上手；
   // admin只要改過其中一格，就不再自動覆蓋，全部以人工輸入的數字為準存檔。
+  // 「只收固定費」的通路：店數照算進里程費／店數公式，但請款總額的拆款不分給它，它只收那一筆固定費
+  function soloChannels(){ return new Set((draft.extraFees||[]).filter(x=>x.channelId && x.solo!==false && Number(x.amount)).map(x=>x.channelId)); }
   function channelsInDraft(){
-    const ids = new Set();
+    const ids = new Set(), solo = soloChannels();
     draft.order.forEach(dpId=>{
       const dp = state.data.dropPoints.find(x=>x.id===dpId);
       if(dp) ids.add(dp.channelId);
     });
     if(draft.billingByChannel) Object.keys(draft.billingByChannel).forEach(cid=>ids.add(cid));
-    (draft.extraFees||[]).forEach(x=>{ if(x.channelId) ids.add(x.channelId); });
+    (draft.extraFees||[]).forEach(x=>{ if(x.channelId && x.solo===false) ids.add(x.channelId); });
+    solo.forEach(cid=>ids.delete(cid)); // 「只收固定費」的通路不參與基本拆款
     return Array.from(ids);
   }
   function renderSplitInputs(){
     const el = document.getElementById('rvSplitInputs');
     if(!el) return;
     if(!draft.splitManuallyEdited){
-      const suggested = computeChannelSplitByStoreCount(draft.order, draft.billingTotal);
+      const solo = soloChannels();
+      const suggested = computeChannelSplitByStoreCount(draft.order.filter(id=>{ const d = state.data.dropPoints.find(x=>x.id===id); return !(d && solo.has(d.channelId)); }), draft.billingTotal);
       draft.billingByChannel = suggested;
     }
     const cids = channelsInDraft();
@@ -3990,7 +3997,7 @@ function renderRouteDetail(rid){
   function refreshExtraSum(){
     const s = document.getElementById('rvExtraSum'); if(!s) return;
     const ex = extraTotal();
-    s.textContent = ex ? `額外固定費合計 $${money(ex)}；儲存後請款總額 ＝ 基本 $${money(Number(draft.billingTotal)||0)} ＋ 額外 $${money(ex)} ＝ $${money((Number(draft.billingTotal)||0)+ex)}` : '';
+    s.textContent = ex ? `額外固定費合計 $${money(ex)}；儲存後請款總額 ＝ 基本 $${money(Number(draft.billingTotal)||0)}（拆給上面的通路）＋ 固定費 $${money(ex)} ＝ $${money((Number(draft.billingTotal)||0)+ex)}` : '';
   }
   function renderExtra(){
     const el = document.getElementById('rvExtra');
@@ -4001,17 +4008,19 @@ function renderRouteDetail(rid){
         <select data-exch="${i}" style="max-width:190px;"><option value="">－選擇通路－</option>${chOpts(x.channelId)}</select>
         <input type="number" data-examt="${i}" value="${x.amount||''}" placeholder="金額（元）" style="max-width:130px;">
         <input data-exnote="${i}" value="${escapeHtml(x.note||'')}" placeholder="備註（例：興隆門市固定物流費）" style="flex:1; min-width:170px;">
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; margin:0; color:var(--ink);" title="勾選：請款總額只拆給其他通路，這個通路只收這筆固定費；不勾：這個通路也照店數分攤總額，再另外加這筆"><input type="checkbox" data-exsolo="${i}" ${x.solo!==false?'checked':''} style="width:auto;"> 只收固定費（不參與拆款）</label>
         <button class="btn ghost" data-exdel="${i}" style="padding:4px 10px;">移除</button>
       </div>`).join('')
       + `<button class="btn ghost" data-exadd="1" style="padding:4px 12px; font-size:12.5px;">＋ 新增一筆額外固定費</button>`
       + `<div id="rvExtraSum" style="font-size:12px; color:var(--ink-soft); margin-top:4px;"></div>`;
     const sum = refreshExtraSum;
     sum();
-    el.querySelectorAll('[data-exch]').forEach(s=>{ s.onchange = ()=>{ draft.extraFees[Number(s.dataset.exch)].channelId = s.value; renderSplitInputs(); renderFeeHint(); }; });
-    el.querySelectorAll('[data-examt]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.examt)].amount = Number(s.value)||0; sum(); updateSplitSum(); renderFeeHint(); }; });
+    el.querySelectorAll('[data-exch]').forEach(s=>{ s.onchange = ()=>{ draft.extraFees[Number(s.dataset.exch)].channelId = s.value; renderSplitInputs(); renderFeeHint(); refreshExtraSum(); }; });
+    el.querySelectorAll('[data-examt]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.examt)].amount = Number(s.value)||0; renderSplitInputs(); sum(); renderFeeHint(); }; });
+    el.querySelectorAll('[data-exsolo]').forEach(s=>{ s.onchange = ()=>{ draft.extraFees[Number(s.dataset.exsolo)].solo = s.checked; renderSplitInputs(); renderFeeHint(); }; });
     el.querySelectorAll('[data-exnote]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.exnote)].note = s.value; }; });
     el.querySelectorAll('[data-exdel]').forEach(b=>{ b.onclick = ()=>{ draft.extraFees.splice(Number(b.dataset.exdel),1); renderExtra(); renderSplitInputs(); renderFeeHint(); }; });
-    el.querySelector('[data-exadd]').onclick = ()=>{ draft.extraFees.push({ channelId:'', amount:0, note:'' }); renderExtra(); };
+    el.querySelector('[data-exadd]').onclick = ()=>{ draft.extraFees.push({ channelId:'', amount:0, note:'', solo:true }); renderExtra(); };
   }
   ['rvDistance','rvFare','rvBilling'].forEach(id=>{
     const el = document.getElementById(id);
@@ -4059,8 +4068,11 @@ function renderRouteDetail(rid){
         // 見 effectiveByChannelForAssignment()，總額欄位只是給人看跟給自動建議拆賬用）。
         // 額外固定費（例如某家店另有一筆固定物流費）加在對應通路上：存進去的拆賬金額與請款總額是「含額外固定費」的最終數字，
         // 下游的請款、報酬、報表都不用改；另外把「哪幾筆是額外的」記在 extraFees，編輯時才能分開顯示。
-        const extraFees = (routeDraft[rid2].extraFees||[]).filter(x=>x.channelId && Number(x.amount)).map(x=>({ channelId:x.channelId, amount:Number(x.amount), note:(x.note||'').trim() }));
-        const billingByChannel = { ...(routeDraft[rid2].billingByChannel || {}) };
+        const extraFees = (routeDraft[rid2].extraFees||[]).filter(x=>x.channelId && Number(x.amount)).map(x=>({ channelId:x.channelId, amount:Number(x.amount), note:(x.note||'').trim(), solo:x.solo!==false }));
+        // 「只收固定費」的通路：最終請款就是那幾筆固定費，不含基本拆款；其他通路是你手動輸入（或系統建議）的拆款金額
+        const soloIds = new Set(extraFees.filter(x=>x.solo).map(x=>x.channelId));
+        const billingByChannel = {};
+        Object.entries(routeDraft[rid2].billingByChannel || {}).forEach(([cid,v])=>{ if(!soloIds.has(cid)) billingByChannel[cid] = v; });
         extraFees.forEach(x=>{ billingByChannel[x.channelId] = (Number(billingByChannel[x.channelId])||0) + x.amount; });
         const billingTotal = Object.values(billingByChannel).reduce((s,v)=> s+(Number(v)||0), 0);
         await saveRouteVersion(rid2, effDate, ids, {
