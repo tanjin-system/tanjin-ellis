@@ -17,9 +17,6 @@
 <meta name="theme-color" content="#F3E7CF">
 <script>try{ if(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.setAttribute('data-theme','dark'); }catch(e){}</script>
 <meta name="apple-mobile-web-app-title" content="信興｜碳金 Hub">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap');
   :root{
@@ -595,6 +592,21 @@ function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURICom
 // 一般圖片，所以另外載入heic2any這個函式庫（在瀏覽器端把HEIC真的解碼
 // 轉成JPEG），這樣才能真正做到縮圖壓縮，不會佔用太多Storage空間；
 // 不是HEIC的檔案完全不受影響，一樣走原本的<img>/canvas流程。
+// 這三個函式庫只有「產生PDF」（主控）與「HEIC照片轉檔」（夥伴上傳照片）才用得到，以前每次開任何頁面都同步載入（合計約 1.9MB，
+// 載完才會開始畫畫面），夥伴手機尤其慢；改成要用才載入，主控登入後閒置時先預載好 PDF 用的兩個，按下去不用等。
+const _libP = {};
+function loadLib(url){
+  if(_libP[url]) return _libP[url];
+  _libP[url] = new Promise((res, rej)=>{
+    const sc = document.createElement('script'); sc.src = url;
+    sc.onload = ()=>res(); sc.onerror = ()=>{ delete _libP[url]; rej(new Error('元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _libP[url];
+}
+const PDF_LIBS = ['https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'];
+const HEIC_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js';
+function loadPdfLibs(){ return Promise.all(PDF_LIBS.map(loadLib)); }
 function looksLikeHeic(file){
   const type = (file.type||'').toLowerCase();
   if(type.includes('heic') || type.includes('heif')) return true;
@@ -606,6 +618,7 @@ function looksLikeHeic(file){
 // 收），只有連FileReader讀檔案本身都失敗才真的視為失敗。
 async function compressImageFile(file, maxDim=1000, quality=0.6){
   let workingFile = file;
+  if(looksLikeHeic(file)){ try{ await loadLib(HEIC_LIB); }catch(e){ console.error('HEIC 轉檔元件載入失敗，改用原始檔案', e); } }
   if(looksLikeHeic(file) && typeof heic2any === 'function'){
     try{
       const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality });
@@ -762,6 +775,7 @@ async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
 // opts（選填，請款單用）：fixedWidth＝固定頁面寬度（不讓寬表格撐大、字被縮小）、repeatHeader＝跨頁的表格
 // 每一頁都重複表頭、pageNumbers＝頁尾加頁碼；內容裡有 .pdf-break 的元素會強制從那裡換頁。
 function exportPrintable(title, bodyHtml, heading, opts){
+  if(!(window.html2canvas && window.jspdf)){ loadPdfLibs().then(()=>exportPrintable(title, bodyHtml, heading, opts)).catch(e=>alert(e.message)); return; }
   opts = opts || {};
   if(heading===undefined) heading = title;
   const previewWin = window.open('', '_blank');
@@ -949,6 +963,7 @@ function exportPanelPrint(panelEl, title, heading, opts){
 // 勞報單後面（也是各自佔一頁）。
 async function exportPayrollPortraitPdf(slipHtmls, filename){
   if(!slipHtmls || !slipHtmls.length){ alert('沒有可產生的勞報單內容'); return; }
+  try{ await loadPdfLibs(); }catch(e){ alert(e.message); return; }
   const previewWin = window.open('', '_blank');
   if(previewWin){
     previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
@@ -7961,6 +7976,7 @@ function showApp(){
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
   startRealtimeSync(handleLiveEvent);
   if(typeof pushAutoSync==='function') pushAutoSync();
+  if(state.role==='admin') (window.requestIdleCallback || (f=>setTimeout(f, 2500)))(()=>{ loadPdfLibs().catch(()=>{}); });
 }
 // renderLoginGate() 的正式版實作在 js/auth.js（呼叫 /api/auth-driver、/api/auth-admin，
 // 不再直接比對 state.data 裡的明文PIN/代碼；此時 state.data 根本還沒載入）。

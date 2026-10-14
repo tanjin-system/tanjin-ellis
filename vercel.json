@@ -78,5 +78,8 @@
       "path": "/api/push?op=cron",
       "schedule": "0 10 * * *"
     }
+  ],
+  "regions": [
+    "sin1"
   ]
 }

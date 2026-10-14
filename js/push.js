@@ -45,7 +45,13 @@ async function pushAutoSync() {
   try {
     if (!pushSupported() || Notification.permission !== 'granted' || state.adminViewDriver || !(state.role === 'admin' || state.role === 'driver')) return;
     const sub = await pushCurrentSub();
-    if (sub) await pushRegister(sub);
+    if (!sub) return;
+    // 同一個人、同一支手機 12 小時內不重複登記（以前每次打開系統都呼叫一次 API；API 在海外，一次約 1 秒）
+    const key = 'pushSync:' + state.role + ':' + (state.activeDriverId || '') + ':' + sub.endpoint.slice(-24);
+    let last = 0; try { last = Number(localStorage.getItem(key)) || 0; } catch (e) {}
+    if (Date.now() - last < 12 * 3600 * 1000) return;
+    await pushRegister(sub);
+    try { localStorage.setItem(key, String(Date.now())); } catch (e) {}
   } catch (e) { /* 悄悄失敗，使用者開設定頁會看到真實狀態 */ }
 }
 async function pushDisable() {
