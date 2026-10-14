@@ -106,8 +106,11 @@
   .wr-k b{ display:block; font-size:2.3em; font-weight:600; font-family:'IBM Plex Mono',ui-monospace,monospace; line-height:1.1; } .wr-k span{ font-size:.93em; color:var(--soft); }
   .wr-bar{ height:.55em; background:var(--line); border-radius:99px; overflow:hidden; margin:.4em 0 .3em; } .wr-bar i{ display:block; height:100%; background:#3FB37F; transition:width .6s; }
   .wr-pct{ font-size:.86em; color:var(--soft); margin-bottom:1em; }
-  .wr-main{ display:grid; grid-template-columns:1fr 22em; gap:1.3em; align-items:start; }
-  .wr-og{ font-size:1em; color:#9FB0CF; margin:1em 0 .55em; letter-spacing:.08em; font-weight:600; } .wr-og:first-child{ margin-top:0; }
+  .wr-main{ display:block; }
+  /* 各出發點像報紙一樣分欄排列：一欄放不下就接到右邊的下一欄，右邊不再留空；每欄約可放 3 張卡片 */
+  .wr-board{ column-width:42em; column-gap:1.8em; }
+  .wr-grp{ break-inside:avoid; margin:0 0 1.2em; }
+  .wr-og{ font-size:1em; color:#9FB0CF; margin:0 0 .55em; letter-spacing:.08em; font-weight:600; }
   .wr-cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(13.5em,1fr)); gap:.7em; }
   .wr .c{ background:var(--card); border:1px solid var(--line); border-left:5px solid var(--c); border-radius:10px; padding:.7em .85em; }
   .wr .c .r{ display:flex; justify-content:space-between; align-items:baseline; gap:.4em; } .wr .c .r b{ font-weight:600; }
@@ -139,14 +142,14 @@
   @keyframes wrFlash{ 0%{ background:#1F5A3F; transform:scale(1.03); } 100%{ background:#131B2D; transform:none; } }
   .wr.mute .c{ animation:none!important; }
   @media (prefers-reduced-motion:reduce){ .wr .c{ animation:none!important; } }
-  .wr-need{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.85em 1em; position:sticky; top:.8em; } .wr-need h3{ font-size:1.05em; margin:0 0 .4em; color:var(--ink); }
+  .wr-need{ display:none; margin-top:1.1em; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.85em 1em; position:sticky; top:.8em; } .wr-need h3{ font-size:1.05em; margin:0 0 .4em; color:var(--ink); }
   .wr-n{ padding:.55em 0; border-top:1px solid var(--line); font-size:.93em; line-height:1.5; display:flex; gap:.55em; }
   .wr-lg{ display:flex; gap:1em; flex-wrap:wrap; font-size:.86em; color:var(--soft); margin:0 0 1em; }
   .wr-empty{ padding:3em 1em; text-align:center; color:var(--soft); font-size:1.1em; }
   body.wr-full header, body.wr-full nav.tabs, body.wr-full #globalSearchList{ display:none!important; }
   body.wr-full .layout{ min-height:100vh; } body.wr-full main{ padding:0!important; max-width:none; }
   body.wr-full .wr{ border-radius:0; min-height:100vh; font-size:clamp(14px,1.1vw,26px); }
-  @media (max-width:900px){ .wr-kp{ grid-template-columns:repeat(3,1fr); } .wr-main{ grid-template-columns:1fr; } .wr-need{ position:static; } }
+  @media (max-width:900px){ .wr-kp{ grid-template-columns:repeat(3,1fr); } .wr-need{ display:block; position:static; } }
 
   h2.section-title{ font-size:16px; font-weight:600; margin:0 0 4px; }
   p.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
@@ -1701,7 +1704,7 @@ function wrBuild(){
   const kpHtml = kp.map(k=>'<div class="wr-k" style="--c:'+k[2]+'"><b>'+k[1]+'</b><span>'+k[0]+'</span></div>').join('');
   const pctHtml = '站數完成率 '+pct+'%　｜　目前閃爍 '+Math.min(cfg.maxBlink, cand.length)+' 張'+(still?'（另有 '+still+' 張因名額已滿改為常亮）':'（上限 '+cfg.maxBlink+' 張）');
   const ogs = []; cards.forEach(c=>{ if(!ogs.includes(c.origin)) ogs.push(c.origin); });
-  const boardHtml = cards.length ? ogs.map(o=>'<div class="wr-og">'+escapeHtml(o)+'</div><div class="wr-cards">'+cards.filter(c=>c.origin===o).map(c=>wrCardHtml(c, animKeys.has(c.key))).join('')+'</div>').join('')
+  const boardHtml = cards.length ? '<div class="wr-board">'+ogs.map(o=>{ const mine = cards.filter(c=>c.origin===o); return '<div class="wr-grp"><div class="wr-og">'+escapeHtml(o)+'</div><div class="wr-cards">'+mine.map(c=>wrCardHtml(c, animKeys.has(c.key))).join('')+'</div></div>'; }).join('')+'</div>'
     : '<div class="wr-empty">今天沒有排任何任務</div>';
   const nd = [];
   const nm = c=> escapeHtml(c.origin+' '+c.label)+(c.driver?'（'+escapeHtml(c.driver)+'）':'');
