@@ -465,6 +465,11 @@
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
   .modal-box .toolbar{ margin-bottom:10px; }
+  /* 全部夥伴資料：視窗放寬到幾乎整個螢幕；姓名、狀態、帳號、戶名這些短欄位不換行（以前窄螢幕上會被擠成一字一行） */
+  .modal-box.wide{ max-width:min(1700px, 97vw); width:97vw; padding:20px 24px; }
+  .modal-box.wide .tbl-nowrap{ width:100%; min-width:max-content; }
+  .modal-box.wide .tbl-nowrap th, .modal-box.wide .tbl-nowrap td{ white-space:nowrap; padding:10px 14px; }
+  .modal-box.wide .tbl-scroll{ overflow-x:auto; }
   /* 簽名視窗：滿版（橫向簽名板，直拿手機時旋轉90度），見 openSignatureModal() */
   .sig-full{ position:fixed; inset:0; background:#15181D; z-index:300; overflow:hidden; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   #sigStage{ position:absolute; background:var(--panel); transform-origin:0 0; touch-action:none; }
@@ -2630,11 +2635,11 @@ function openAllDriversModal(){
   const host = document.getElementById('allDriversModal');
   host.innerHTML = `
     <div class="modal-backdrop" id="allDriversBackdrop">
-      <div class="modal-box">
+      <div class="modal-box wide">
         <div class="toolbar"><h3 style="margin:0;">全部夥伴資料（${state.data.drivers.length}）</h3>
           <span><button class="btn ghost" id="printAllDrivers">列印</button> <button class="btn ghost" id="closeAllDrivers">關閉</button></span>
         </div>
-        <table>
+        <div class="tbl-scroll"><table class="tbl-nowrap">
           <thead><tr><th>姓名</th><th>身分證字號</th><th>電話</th><th>LINE</th><th>狀態</th><th>車牌</th><th>車型</th><th>載重</th><th>銀行</th><th>分行</th><th>帳號</th><th>戶名</th></tr></thead>
           <tbody>
             ${state.data.drivers.map(d=>`<tr>
@@ -2644,7 +2649,7 @@ function openAllDriversModal(){
               <td>${d.bank.bankName||'—'}</td><td>${d.bank.branch||'—'}</td><td class="mono">${d.bank.account||'—'}</td><td>${d.bank.holder||'—'}</td>
             </tr>`).join('') || `<tr><td colspan="12"><div class="empty">尚無夥伴資料</div></td></tr>`}
           </tbody>
-        </table>
+        </table></div>
       </div>
     </div>
   `;
