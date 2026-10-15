@@ -81,6 +81,7 @@ function mapAssignment(row) {
     runNo: row.run_no,
     completedAt: row.completed_at,
     departedAt: row.departed_at || null,
+    fareManual: !!row.fare_manual, billingManual: !!row.billing_manual,
     payrollFareSnapshot: row.payroll_fare_snapshot != null ? Number(row.payroll_fare_snapshot) : null,
     extraPay: Number(row.extra_pay || 0),
     paidAmount: Number(row.paid_amount || 0), paidDate: row.paid_date || null, paidMethod: row.paid_method || null,
@@ -1228,13 +1229,15 @@ async function regenerateFutureAssignments(routeId, fromDate) {
         throw new Error('清除舊店點失敗（已還原，這趟維持原本的店點）：' + delErr.message);
       }
     }
-    const { error: updErr } = await supabase.from('assignments').update({
-      distance_km: version.distanceKm ?? null,
-      fare: version.driverFare ?? 0,
-      billing_total_snapshot: version.billingTotal ?? null,
-      billing_by_channel_snapshot: version.billingByChannel ?? null
-    }).eq('id', a.id);
-    if (updErr) throw new Error('更新任務資料失敗：' + updErr.message);
+    // 主控在這趟手動改過的費用（fare_manual／billing_manual）以人工為準，重新套用路線時不覆蓋
+    const upd = {};
+    if (!a.fareManual && !a.billingManual) upd.distance_km = version.distanceKm ?? null;
+    if (!a.fareManual) upd.fare = version.driverFare ?? 0;
+    if (!a.billingManual) { upd.billing_total_snapshot = version.billingTotal ?? null; upd.billing_by_channel_snapshot = version.billingByChannel ?? null; }
+    if (Object.keys(upd).length) {
+      const { error: updErr } = await supabase.from('assignments').update(upd).eq('id', a.id);
+      if (updErr) throw new Error('更新任務資料失敗：' + updErr.message);
+    }
     updated++;
   }
   for (const a of targets) {
@@ -1264,6 +1267,7 @@ async function createAssignment(input) {
     trip_date: input.date, route_id: input.routeId, driver_id: input.driverId,
     origin_snapshot: route.originAddr || '',
     fare: fareOverride ?? (version?.driverFare ?? 0),
+    fare_manual: fareOverride != null && fareOverride !== Number(version?.driverFare ?? 0),
     distance_km: version?.distanceKm ?? null,
     billing_total_snapshot: version?.billingTotal ?? null,
     billing_by_channel_snapshot: version?.billingByChannel ?? null,
@@ -1555,10 +1559,19 @@ async function markAssignmentComplete(assignmentId, issueNote) {
 async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billingByChannel }) {
   const total = Object.values(billingByChannel || {}).reduce((s, v) => s + (Number(v) || 0), 0);
   const a = state.data.assignments.find(x => x.id === assignmentId);
+  // 跟路線版本（或公式）算出來的數字不一樣＝人工調整，標記起來：請款以這裡填的為準、重新套用路線時不被蓋掉；
+  // 填回跟路線一樣的數字就自動解除人工標記。
+  const route = a && state.data.routes.find(r => r.id === a.routeId);
+  const ver = route && route.versions.find(v => a.date >= v.start && (!v.end || a.date <= v.end));
+  const baseBilling = (a && versionByChannelForAssignment(a)) || (a ? tripBilling(a.dropPoints, a.distanceKm).byChannel : {});
+  const sameBilling = [...new Set([...Object.keys(baseBilling), ...Object.keys(billingByChannel || {})])]
+    .every(k => (Number(baseBilling[k]) || 0) === (Number((billingByChannel || {})[k]) || 0));
   const payload = {
     fare, distance_km: distanceKm,
     billing_total_snapshot: total,
-    billing_by_channel_snapshot: billingByChannel
+    billing_by_channel_snapshot: billingByChannel,
+    fare_manual: ver ? (Number(fare) || 0) !== (Number(ver.driverFare) || 0) : true,
+    billing_manual: !sameBilling
   };
   // 已完成的任務，報酬是用完成當下凍結的快照（payroll_fare_snapshot）在算，只改 fare 不會動到
   // 夥伴看到的金額。主控在這裡改夥伴費用，就是要這趟的報酬跟著變，所以已完成的一併更新快照；
@@ -1576,6 +1589,7 @@ async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billing
 
   if (a) {
     if ('payroll_fare_snapshot' in payload) a.payrollFareSnapshot = payload.payroll_fare_snapshot;
+    a.fareManual = payload.fare_manual; a.billingManual = payload.billing_manual;
     a.fare = Number(fare) || 0;
     a.distanceKm = distanceKm === '' || distanceKm == null ? null : Number(distanceKm);
     a.billingSnapshot = { totalAmount: total, totalPoints: a.dropPoints.length, byChannel: billingByChannel };

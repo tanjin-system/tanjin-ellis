@@ -1169,3 +1169,42 @@ create trigger trg_set_departed_at before update on assignments for each row exe
 -- （例如 21Plus 興隆門市另有一筆固定物流費）。billing_by_channel／billing_total 存的是「含額外固定費」的最終數字，
 -- 所以請款、報酬、報表完全不用改；extra_fees 只是讓編輯畫面能把它跟里程、店數算出來的基本金額分開，重新計算時不會被蓋掉。
 alter table route_versions add column if not exists extra_fees jsonb not null default '[]'::jsonb;
+
+-- PART 31：單趟「人工調整」旗標（2026-10-15）
+-- 主控在任務詳情手動改了某一趟的夥伴費用／請款金額後，標記為人工（fare_manual／billing_manual）：
+--   * 請款結算：這趟的請款金額一律以人工填的為準（不再被路線版本金額蓋過）。
+--   * 重新套用路線到未來車次：被標記為人工的欄位不會被蓋掉。
+--   * 完成時的自動請款快照：人工的請款金額不會被公式重算覆蓋。
+alter table assignments add column if not exists billing_manual boolean not null default false;
+alter table assignments add column if not exists fare_manual boolean not null default false;
+
+create or replace function compute_trip_billing() returns trigger
+language plpgsql as $$
+declare
+  r record;
+begin
+  if new.status = 'completed' and (old.status is distinct from 'completed') then
+    if not coalesce(new.billing_manual, false) then
+      select * into r from compute_trip_billing_values(new.id, new.distance_km);
+      new.billing_total_snapshot := r.total_amount;
+      new.billing_by_channel_snapshot := r.by_channel;
+    end if;
+    new.payroll_fare_snapshot := new.fare;
+    new.completed_at := coalesce(new.completed_at, now());
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function recompute_trip_billing_snapshot(p_assignment_id uuid) returns void
+language plpgsql as $$
+declare
+  r record;
+  v_distance_km numeric;
+begin
+  select distance_km into v_distance_km from assignments where id = p_assignment_id and status = 'completed' and billing_manual = false;
+  if not found then return; end if;
+  select * into r from compute_trip_billing_values(p_assignment_id, v_distance_km);
+  update assignments set billing_total_snapshot = r.total_amount, billing_by_channel_snapshot = r.by_channel where id = p_assignment_id;
+end;
+$$;

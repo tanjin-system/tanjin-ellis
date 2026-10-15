@@ -1126,13 +1126,21 @@ function findMondayQuoteRoute(route){
 // 這正是請款結算跟路線管理對不起來的原因。只有在路線被刪除、或該版本從未
 // 設定過拆賬金額時，才退回用任務自己的快照／即時試算頂著（夥伴薪資不受
 // 影響，夥伴費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
-function effectiveByChannelForAssignment(a){
+// 路線版本當天的請款金額（沒有人工調整時請款用的數字）；找不到版本金額回傳 null
+function versionByChannelForAssignment(a){
   const route = state.data.routes.find(r=>r.id===a.routeId);
   if(route){
     const quoteRoute = findMondayQuoteRoute(route) || route;
     const v = getActiveVersion(quoteRoute, a.date) || [...(quoteRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
     if(v && v.billingByChannel && Object.keys(v.billingByChannel).length) return v.billingByChannel;
   }
+  return null;
+}
+// 這趟每個通路的請款金額。主控在任務詳情手動改過的（billingManual）一律以人工為準
+function effectiveByChannelForAssignment(a){
+  if(a.billingManual && a.billingSnapshot && a.billingSnapshot.byChannel) return a.billingSnapshot.byChannel;
+  const vb = versionByChannelForAssignment(a);
+  if(vb) return vb;
   return (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
 }
 function channelBillingTotal(channelId, start, end, assignmentsList = state.data.assignments){
@@ -4830,7 +4838,7 @@ function renderWeekGrid(containerId, dates){
     const extra = Number(a.extraPay)||0;
     const extraTag = extra ? ` <b style="color:${extra>0?'var(--ok,#2E7D32)':'var(--danger)'};">${extra>0?'+':'−'}${money(Math.abs(extra))}</b>` : '';
     const paidTag = (Number(a.paidAmount)||0)>0 ? ` <span title="${escapeHtml((a.paidDate||'')+'支付'+(a.paidPeriodStart?'　區間 '+a.paidPeriodStart+'～'+a.paidPeriodEnd:''))}" style="font-size:10px; color:var(--ok,#2E7D32);">✅${a.paidDate?a.paidDate.slice(5).replace('-','/')+'付':'已付'}</span>` : '';
-    const feeLine = (a.fare || a.distanceKm || extra || paidTag) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(a.fare)}・${a.distanceKm||0}km${extraTag}${paidTag}</span>` : '';
+    const feeLine = (a.fare || a.distanceKm || extra || paidTag) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(Number(a.payrollFareSnapshot ?? a.fare)||0)}・${a.distanceKm||0}km${extraTag}${paidTag}</span>` : '';
     return `${driverName(a.driverId)}${tag}${issue}${feeLine}`;
   }
   // 「星期一」／「週二到五」這種分成兩條路線、但在週期任務清單合併成同一格的車次：不能只看
@@ -5171,7 +5179,7 @@ function renderAssignmentDetail(id, box){
         </span>
       </div>
       <p style="font-size:12.5px;">任務起點：${a.origin||'—'}</p>
-      <p style="font-size:12.5px; color:var(--ink-soft);">夥伴費用 $${money(a.fare)} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}（跟隨路線版本，如需調整請到「路線管理」修改該版本）</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">夥伴費用 $${money(a.fare)}${a.fareManual?' <b style="color:var(--amber);">人工</b>':''} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}${a.billingManual?' <b style="color:var(--amber);">人工</b>':''}（${a.fareManual||a.billingManual?'標示「人工」的是你在這一趟手動填的，請款與報酬以它為準、重新套用路線也不會蓋掉；改回跟路線一樣的數字即解除':'跟隨路線版本，如需調整請到「路線管理」修改該版本'}）</p>
       ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>夥伴回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
       ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <span>臨時異動（例如夥伴請假換人）：</span>
@@ -6081,7 +6089,9 @@ function computeChannelBillingReport(channelId, start, end, assignmentsList = st
   const taxMode = channel.taxMode || 'inclusive';
   const grand = untaxWithTax(combined, taxMode);
   const originWithTax = originRows.map(o=> ({ ...o, ...untaxWithTax(o.amount, taxMode) }));
-  return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax };
+  // 各區費用總覽只列「任務」的金額，請款例外調整另外補一列，這樣各列加起來才會等於上方的合計
+  const adjRow = adjTotal ? untaxWithTax(adjTotal, taxMode) : null;
+  return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax, adjRow };
 }
 // 多通路合併配送明細：只計入「已選通路」的店數/金額，未勾選的通路即使共用同一
 // 任務也完全不會出現（避免把其他通路的請款資訊洩漏到對帳用的明細表裡）。
@@ -6233,7 +6243,7 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
     const segs = rp.segRows.filter(x=>Math.round(x.amount)!==0);
     const segRows = (segs.length ? segs : rp.segRows).map(x=>`<tr><td>${x.start} ~ ${x.end}</td><td class="num">${fmt(x.amount)}</td></tr>`).join('');
     const adj = rp.adjustments.map(x=>`<tr><td>${escapeHtml(x.note)}</td><td class="num">${x.amount>=0?'+':'−'}${fmt(Math.abs(x.amount))}</td></tr>`).join('');
-    const orig = rp.originWithTax.map(o=>`<tr><td>${escapeHtml(originLabel(o.originAddr))}</td><td class="num">${o.tripCount}</td><td class="num">${o.storeCount}</td><td class="num">${fmt(o.untaxed)}</td><td class="num">${fmt(o.tax)}</td><td class="num">${fmt(o.withTax)}</td></tr>`).join('');
+    const orig = rp.originWithTax.map(o=>`<tr><td>${escapeHtml(originLabel(o.originAddr))}</td><td class="num">${o.tripCount}</td><td class="num">${o.storeCount}</td><td class="num">${fmt(o.untaxed)}</td><td class="num">${fmt(o.tax)}</td><td class="num">${fmt(o.withTax)}</td></tr>`).join('') + (rp.adjRow ? `<tr><td>請款例外調整</td><td class="num"></td><td class="num"></td><td class="num">${fmt(rp.adjRow.untaxed)}</td><td class="num">${fmt(rp.adjRow.tax)}</td><td class="num">${fmt(rp.adjRow.withTax)}</td></tr>` : '');
     return `<h2>${escapeHtml(rp.channel.name)}｜物流費用請款總覽（${rp.start} ~ ${rp.end}）</h2>
       <table><thead><tr><th>請款期間</th><th class="num">物流費</th></tr></thead><tbody>${segRows}${adj}</tbody>
         <tfoot><tr class="tot"><td>未稅合計</td><td class="num">${fmt(rp.grand.untaxed)}</td></tr><tr class="tot"><td>稅額</td><td class="num">${fmt(rp.grand.tax)}</td></tr><tr class="tot grand"><td>含稅合計</td><td class="num">${fmt(rp.grand.withTax)}</td></tr></tfoot></table>
@@ -6271,7 +6281,7 @@ function billingPrintHtml(reports, merged, channelIds, start, end){
   </div>`;
 }
 function channelSummaryPanelHtml(report){
-  const { channel, start, end, segRows, adjustments, grand, originWithTax } = report;
+  const { channel, start, end, segRows, adjustments, grand, originWithTax, adjRow } = report;
   return `
     <div class="panel">
       <h3 style="margin-top:0;">${channel.name}｜物流費用請款總覽（${start} ~ ${end}）</h3>
@@ -6287,7 +6297,7 @@ function channelSummaryPanelHtml(report){
       <h4 style="margin:14px 0 6px;">各區費用總覽（依供應商／任務起點）</h4>
       <table>
         <thead><tr><th>供應商</th><th>任務數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
-        <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關任務</div></td></tr>'}</tbody>
+        <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關任務</div></td></tr>'}${adjRow ? `<tr><td>請款例外調整</td><td></td><td></td><td class="amount">$${money(adjRow.untaxed)}</td><td class="amount">$${money(adjRow.tax)}</td><td class="amount">$${money(adjRow.withTax)}</td></tr>` : ''}</tbody>
       </table>
     </div>`;
 }
@@ -6393,6 +6403,12 @@ async function buildBillingWorkbook(reports, merged, channelIds, start, end){
       });
     } else {
       ws.mergeCells(r,1,r,LASTC); Object.assign(ws.getCell(r,1), { value:'此區間無相關任務', font:{ name:FONT, size:12 }, alignment:{ indent:1 } }); paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L) }); r++;
+    }
+    if(rp.adjRow){
+      const vals = ['請款例外調整', '', '', Math.round(rp.adjRow.untaxed), Math.round(rp.adjRow.tax), Math.round(rp.adjRow.withTax)];
+      vals.forEach((v,ci)=>{ const cell = ws.getCell(r, ci+1); cell.value = v; if(ci>=3) cell.numFmt = NUM; cell.font = ci===0 ? { name:FONT, size:12 } : { name:'Consolas', size:13, bold:true }; cell.alignment = { vertical:'middle', horizontal: ci===0 ? 'left' : 'right', indent:1 }; });
+      paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L) });
+      ws.getRow(r).height = 22; r++;
     }
     lastRowBorder(r-1, 1, LASTC);
     r += 2;
@@ -6859,8 +6875,8 @@ function renderExport(c){
         <h3 style="margin-top:0;">預覽：${start} ~ ${end}（共 ${rows.length} 筆）</h3>
         <table>
           ${type==='assignments' ? `
-            <thead><tr><th>日期</th><th>路線</th><th>夥伴</th><th>車資</th><th>狀態</th></tr></thead>
-            <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(a.fare)}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+            <thead><tr><th>日期</th><th>路線</th><th>夥伴</th><th>本趟報酬</th><th>狀態</th></tr></thead>
+            <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(tripPay(a))}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
           ` : type==='routeVersions' ? `
             <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>夥伴費用</th><th>請款總額</th><th>店點（當時）</th></tr></thead>
             <tbody>${rows.map(v=>{
@@ -7502,7 +7518,7 @@ async function renderHistory(c){
             <div class="panel" style="margin-top:12px;">
               <div class="toolbar"><strong>${routeName(a.routeId)}</strong><span class="badge locked">已封存</span></div>
               <p style="font-size:12.5px; margin-bottom:4px;">任務起點：${a.origin||'—'}</p>
-              <p style="margin:0 0 8px;"><strong>報酬：$${money(a.fare)}</strong></p>
+              <p style="margin:0 0 8px;"><strong>報酬：$${money(tripPay(a))}</strong>${Number(a.extraPay)?`<span style="font-size:12px; color:var(--ink-soft);">（車資 $${money(Number(a.payrollFareSnapshot ?? a.fare)||0)} ${Number(a.extraPay)>0?'+':'−'} 額外 $${money(Math.abs(Number(a.extraPay)))}）</span>`:''}</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
               ${ownDropPoints(a).map(dp=>{
                 const photoUrls = dpPhotoUrls(dp);
