@@ -46,8 +46,8 @@
   .date-body{ display:none; }
   .date-group.open .date-body{ display:block; }
   .delivery-row{ display:flex; gap:10px; padding:10px 14px; border-top:1px solid var(--border); align-items:center; }
-  .delivery-row[data-full]{ cursor:pointer; }
-  .delivery-row[data-full]:active{ background:#FAF7F1; }
+  .delivery-row[data-photo]{ cursor:pointer; }
+  .delivery-row[data-photo]:active{ background:#FAF7F1; }
   .delivery-info{ flex:1; min-width:0; }
   .delivery-name{ font-weight:600; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .delivery-time{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
@@ -101,15 +101,15 @@ function dateKeyCompare(a, b, todayKey){
 
 // 照片改成「點擊才看」：預設只顯示門店名稱／已送達標籤／送達時間，完全不
 // 放<img>，避免像之前一樣不管客戶有沒有要看，畫面上列出幾筆就下載幾張
-// 照片——這是流量問題的主因之一。有照片的整列才加 data-full+可點擊樣式，
-// 點下去才真的跳出燈箱去下載那一張。
+// 照片——這是流量問題的主因之一。有照片的整列才加 data-photo+可點擊樣式，
+// 點下去才向伺服器要那一張的連結並跳出燈箱（列表不再帶任何照片連結）。
 function rowHtml(it){
-  return it.delivered ? `<div class="delivery-row" ${it.photoUrl?`data-full="${it.photoUrl}"`:''}>
+  return it.delivered ? `<div class="delivery-row" ${it.hasPhoto?`data-photo="${it.id}"`:''}>
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
       <div class="delivery-time">送達時間 ${formatTime(new Date(it.completedAt))}</div>
     </div>
-    <span class="delivered-badge">已送達${it.photoUrl?'・點擊看照片':''}</span>
+    <span class="delivered-badge">已送達${it.hasPhoto?'・點擊看照片':''}</span>
   </div>` : `<div class="delivery-row">
     <div class="delivery-info">
       <div class="delivery-name">${it.name}</div>
@@ -185,10 +185,21 @@ function renderList(filterText){
   content.querySelectorAll('.shift-head').forEach(head=>{
     head.onclick = (e)=>{ e.stopPropagation(); head.closest('.shift-group').classList.toggle('open'); };
   });
-  content.querySelectorAll('.delivery-row[data-full]').forEach(row=>{
-    row.onclick = ()=>{
-      document.getElementById('lightboxImg').src = row.dataset.full;
-      document.getElementById('lightbox').classList.add('open');
+  content.querySelectorAll('.delivery-row[data-photo]').forEach(row=>{
+    row.onclick = async ()=>{
+      if(row.dataset.busy) return;
+      const token = new URLSearchParams(location.search).get('token');
+      const badge = row.querySelector('.delivered-badge');
+      const oldText = badge ? badge.textContent : '';
+      row.dataset.busy = '1'; if(badge) badge.textContent = '載入中…';
+      try{
+        const res = await fetch('/api/client-data?token=' + encodeURIComponent(token) + '&photo=' + encodeURIComponent(row.dataset.photo));
+        const body = await res.json();
+        if(!res.ok || !body.url) throw new Error(body.error || '載入失敗');
+        document.getElementById('lightboxImg').src = body.url;
+        document.getElementById('lightbox').classList.add('open');
+      }catch(e){ alert(e.message || '照片載入失敗，請稍後再試'); }
+      finally{ delete row.dataset.busy; if(badge) badge.textContent = oldText; }
     };
   });
   document.getElementById('lightbox').onclick = ()=> document.getElementById('lightbox').classList.remove('open');

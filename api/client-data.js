@@ -40,6 +40,25 @@ module.exports = async (req, res) => {
   }
   if (!channel) return res.status(404).json({ error: '連結無效或已失效，請跟貨運公司確認最新連結。' });
 
+  // 單張照片：客戶點「看照片」那一刻才替那一張產生有時效的連結（Storage 一次最多只能簽 1000 張，
+  // 以前列表一次全簽，超過 1000 張就整批失敗、客戶什麼照片都看不到；改成點了才簽，列表也變輕）。
+  // 只有「屬於這個通路、沒取消的車趟」的店點拿得到，別的通路的照片 id 一律回 404。
+  if (req.query.photo) {
+    const id = String(req.query.photo);
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: 'Bad request' });
+    const { data: dp, error: dpErr } = await supabase
+      .from('assignment_drop_points')
+      .select('photo_url, assignments!inner(status)')
+      .eq('id', id).eq('channel_id', channel.id).neq('assignments.status', 'cancelled')
+      .maybeSingle();
+    if (dpErr) { console.error('client-data photo lookup failed:', dpErr.message); return res.status(500).json({ error: '伺服器錯誤，請稍後再試' }); }
+    if (!dp || !dp.photo_url) return res.status(404).json({ error: '找不到照片（可能已超過 30 天自動清除）' });
+    const { data: signed, error: signErr } = await supabase.storage.from('assignment-photos').createSignedUrl(dp.photo_url, 10 * 60);
+    if (signErr || !signed || !signed.signedUrl) { console.error('client-data photo sign failed:', signErr && signErr.message); return res.status(404).json({ error: '找不到照片' }); }
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ url: signed.signedUrl });
+  }
+
   // 只回溯最近 30 天（依車趟日期，不是完成時間），避免舊資料無意義地一直曝光；
   // 未來排定的車趟沒有上限，路線管理排多遠、這裡就顯示多遠。
   const since = new Date();
@@ -81,19 +100,6 @@ module.exports = async (req, res) => {
     if (page.length < PAGE_SIZE) break;
   }
 
-  let signedUrls = {};
-  const paths = rows.filter(p => p.photo_url).map(p => p.photo_url);
-  if (paths.length) {
-    const { data: signed, error: signErr } = await supabase.storage
-      .from('assignment-photos')
-      .createSignedUrls(paths, 60 * 60);
-    if (signErr) {
-      console.error('client-data sign urls failed:', signErr.message);
-    } else {
-      signed.forEach((s, i) => { if (s.signedUrl) signedUrls[paths[i]] = s.signedUrl; });
-    }
-  }
-
   // 安全上只選 address/code/completed_at/photo_url/trip_date/shift，绝不會帶到
   // fare/distance/billing 等金額欄位，所以無論哪個通路的連結，客戶都看不到夥伴費用，
   // 也看不到共配車趟上其他通路的站點（一律只用 channel_id 篩出這個通路自己的點）。
@@ -105,7 +111,7 @@ module.exports = async (req, res) => {
     shift: p.assignments?.routes?.shift || null,
     delivered: p.status === 'completed',
     completedAt: p.completed_at,
-    photoUrl: p.photo_url ? (signedUrls[p.photo_url] || null) : null
+    hasPhoto: !!p.photo_url
   }));
 
   return res.status(200).json({ channelName: channel.name, items });
