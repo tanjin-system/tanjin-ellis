@@ -215,7 +215,7 @@ async function main(){
     document.title = body.channelName + '配送紀錄查詢';
     const items = body.items || [];
     const deliveredCount = items.filter(it=>it.delivered).length;
-    sub.textContent = `最近60天，共 ${deliveredCount} 筆送達紀錄`;
+    sub.textContent = `最近30天，共 ${deliveredCount} 筆送達紀錄`;
 
     allItems = items;
     if(items.length){
@@ -244,7 +244,7 @@ async function refreshData(){
     if(!res.ok) return;
     const items = body.items || [];
     const deliveredCount = items.filter(it=>it.delivered).length;
-    document.getElementById('channelSub').textContent = `最近60天，共 ${deliveredCount} 筆送達紀錄`;
+    document.getElementById('channelSub').textContent = `最近30天，共 ${deliveredCount} 筆送達紀錄`;
     allItems = items;
     renderList(currentSearch);
   }catch(e){ /* 背景刷新失敗就靜默維持原本畫面 */ }

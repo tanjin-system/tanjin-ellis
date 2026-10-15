@@ -40,10 +40,10 @@ module.exports = async (req, res) => {
   }
   if (!channel) return res.status(404).json({ error: '連結無效或已失效，請跟貨運公司確認最新連結。' });
 
-  // 只回溯最近 60 天（依車趟日期，不是完成時間），避免舊資料無意義地一直曝光；
+  // 只回溯最近 30 天（依車趟日期，不是完成時間），避免舊資料無意義地一直曝光；
   // 未來排定的車趟沒有上限，路線管理排多遠、這裡就顯示多遠。
   const since = new Date();
-  since.setDate(since.getDate() - 60);
+  since.setDate(since.getDate() - 30);
   const sinceStr = `${since.getFullYear()}-${pad(since.getMonth() + 1)}-${pad(since.getDate())}`;
 
   // 這裡故意用「這個通路在路線管理裡的每一個店點」單一查詢，不再依 completed/
