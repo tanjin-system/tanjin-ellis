@@ -3730,6 +3730,7 @@ function bindVersionFix(container, route){
           const tot = Object.values(map).reduce((sum,n)=>sum+(Number(n)||0),0), old = Number(v.billingTotal)||0;
           if(!confirm(`修正「${v.start} 起」這個版本的拆賬？\n\n請款總額 $${money(old)} → $${money(tot)}（每趟${tot>=old?'增加':'減少'} $${money(Math.abs(tot-old))}）。\n這個版本期間有 ${nTrips} 趟已完成的任務，請款合計約${tot>=old?'增加':'減少'} $${money(Math.abs(tot-old)*nTrips)}。\n夥伴薪資不變；請款結算與首頁利潤會自動重算。\n\n如果這段期間的請款單已經開給客戶，建議改用請款結算的「調整項」補差額。`)) return;
           await updateVersionSplit(route.id, v.id, map);
+          delete routeDraft[route.id]; // 草稿是舊金額拆出來的，丟掉讓編輯畫面依新金額重建
           toast('已更新拆賬金額，請款結算會自動重算。', { type:'ok' });
           renderContent();
         }catch(e){ toast(e.message, { type:'error' }); }

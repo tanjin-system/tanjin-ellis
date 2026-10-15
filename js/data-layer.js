@@ -967,10 +967,17 @@ async function updateVersionSplit(routeId, versionId, byChannel) {
   const clean = {};
   Object.entries(byChannel || {}).forEach(([cid, amt]) => { const n = Number(amt); if (!isFinite(n) || n < 0) throw new Error('拆賬金額要是 0 以上的數字'); clean[cid] = n; });
   const total = Object.values(clean).reduce((sum, n) => sum + n, 0);
+  // 手動改最終金額後，「額外固定費備忘」要跟著對齊，否則之後開版本編輯畫面會把基本金額算錯：
+  // 只收固定費的通路，額外固定費＝它現在的整個金額；其他通路的額外固定費不能超過它現在的金額；變成 0 的就移除。
+  const extras = (v.extraFees || []).map(x => {
+    const cur = Number(clean[x.channelId]) || 0;
+    const amount = x.solo === false ? Math.min(Number(x.amount) || 0, cur) : cur;
+    return Object.assign({}, x, { amount });
+  }).filter(x => x.amount > 0);
   const supabase = getSupabase();
-  const { error } = await supabase.from('route_versions').update({ billing_by_channel: clean, billing_total: total }).eq('id', v.id);
+  const { error } = await supabase.from('route_versions').update({ billing_by_channel: clean, billing_total: total, extra_fees: extras }).eq('id', v.id);
   if (error) throw new Error('儲存拆賬失敗：' + error.message);
-  v.billingByChannel = clean; v.billingTotal = total;
+  v.billingByChannel = clean; v.billingTotal = total; v.extraFees = extras;
 }
 
 // 儲存新路線版本前：這條路線從生效日起有哪些「已完成」的任務。這些任務是用舊內容跑完的，
