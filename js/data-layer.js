@@ -159,7 +159,9 @@ function mapStatement(row) {
 function mapBillingAdjustment(row) {
   return {
     id: row.id, channelId: row.channel_id, periodStart: row.period_start, periodEnd: row.period_end,
-    note: row.note, amount: Number(row.amount)
+    note: row.note, amount: Number(row.amount),
+    // 建立（登打）那天，台灣時間
+    createdDate: row.created_at ? new Date(new Date(row.created_at).getTime() + 8*3600*1000).toISOString().slice(0,10) : null
   };
 }
 

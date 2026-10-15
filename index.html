@@ -1280,10 +1280,13 @@ function computeProfitDaily(){
     const rev = Object.entries(byChannel).reduce((sum,[cid,v])=> activeCh.has(cid) ? sum+(Number(v)||0) : sum, 0);
     const b = bucket(a.date); b.revenue += rev; b.expense += tripPay(a); b.trips++;
   });
-  // 請款結算的例外調整：併入「請款期間結束日」那天的請款金額（期間還沒結束就算今天），首頁不特別列出
+  // 請款結算的例外調整：併入「備註開頭寫的日期」那天的請款金額（例如「10/14 合味樣品」→ 10/14）；
+  // 備註沒寫日期（或不是本月）就用登打那天；都不在本月範圍內就算 1 號／今天。首頁不特別列出。
   monthBillingAdjustments(monthStr).forEach(x=>{
-    const d = x.periodEnd > today ? today : x.periodEnd;
-    bucket(d < start ? start : d).revenue += Number(x.amount) || 0;
+    const m = /^\s*(\d{1,2})\/(\d{1,2})/.exec(x.note||'');
+    let d = m ? `${monthStr.slice(0,4)}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}` : '';
+    if(!d || d.slice(0,7)!==monthStr) d = x.createdDate || today;
+    bucket(d < start ? start : d > today ? today : d).revenue += Number(x.amount) || 0;
   });
   state.data.adjustments.forEach(adj=>{
     if(adj.month!==monthStr || adj.type==='advance' || adj.type==='reimbursement') return;
@@ -1305,7 +1308,7 @@ function profitDailyHtml(){
     <tbody>${rows.map(r=>`<tr><td>${r.date.slice(5).replace('-','/')}（${WD[new Date(r.date+'T00:00:00').getDay()]}）</td><td class="amount">${r.trips}</td><td class="amount">${fmt(r.revenue)}</td><td class="amount">${fmt(r.expense)}</td>${profitCell(r.revenue-r.expense)}</tr>`).join('')}
     <tr style="font-weight:700; background:#F4F3EF;"><td>本月合計</td><td class="amount">${sum.trips}</td><td class="amount">${fmt(sum.revenue)}</td><td class="amount">${fmt(sum.expense)}</td>${profitCell(sum.revenue-sum.expense)}</tr></tbody>
   </table></div>
-  <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0;">每天的數字是當天完成的任務；加減項依調整項日期歸入（沒填日期的算在 1 號）；請款結算的「例外調整」併入請款期間結束日那天的請款總額（期間未結束算今天）。僅供參考。</p>`;
+  <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0;">每天的數字是當天完成的任務；加減項依調整項日期歸入（沒填日期的算在 1 號）；請款結算的「例外調整」併入備註開頭日期（沒寫就用登打日）那天的請款總額。僅供參考。</p>`;
 }
 // 請款結算的「例外調整」（人工加減的請款項目，記在「通路＋請款期間」上，沒有日期）：
 // 首頁的本月利潤把「請款期間結束日落在本月」的調整算進本月（例如 7-11 的 9/27～10/26 期間，10/26 結束，算在 10 月）。
