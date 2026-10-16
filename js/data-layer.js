@@ -1627,6 +1627,16 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
 
   if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; dp.completedAt = completedAt; }
+
+  // 資料庫會在第一張照片時自動「出發」、最後一個店點拍完時自動「完成」（見 schema PART 32 auto_progress_assignment），
+  // 這裡把畫面上的任務狀態同步過來，夥伴不用等即時推送才看到。
+  if (assignment && (assignment.status === 'scheduled' || (assignment.dropPoints || []).every(x => x.status === 'completed'))) {
+    const { data: row } = await supabase.from('assignments').select('status, departed_at, completed_at, payroll_fare_snapshot').eq('id', assignmentId).maybeSingle();
+    if (row) {
+      assignment.status = row.status; assignment.departedAt = row.departed_at || null; assignment.completedAt = row.completed_at;
+      if (row.payroll_fare_snapshot != null) assignment.payrollFareSnapshot = Number(row.payroll_fare_snapshot);
+    }
+  }
 }
 
 // 未完成原因：夥伴在單一店點旁邊直接選填，不用等到整趟結束才填一個籠統的

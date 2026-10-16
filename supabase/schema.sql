@@ -1208,3 +1208,34 @@ begin
   update assignments set billing_total_snapshot = r.total_amount, billing_by_channel_snapshot = r.by_channel where id = p_assignment_id;
 end;
 $$;
+
+-- PART 32：自動出發／自動完成（2026-10-16）
+-- 夥伴忘記按「出發」或整趟「完成」時，由資料庫自動補上（不靠前端，舊版畫面也一樣）：
+--   * 這趟第一個店點拍照完成時，如果整趟還是「排定中」，自動變成「進行中」（出發時間由 set_departed_at 觸發器記錄）。
+--   * 所有店點都已完成（有照片）時，自動把整趟標成「已完成」（完成當下凍結報酬／請款快照的觸發器照常執行）。
+--     有「未完成原因」但沒完成的店點不算，這種趟次仍由夥伴自己按完成。
+-- 先鎖住這趟任務那一列，兩張照片同時上傳時才不會互相看不到對方而漏掉自動完成。
+create or replace function auto_progress_assignment() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_status text;
+  v_pending int;
+begin
+  if new.status = 'completed' and old.status is distinct from 'completed' then
+    select status into v_status from assignments where id = new.assignment_id for update;
+    if v_status = 'scheduled' then
+      update assignments set status = 'in_progress' where id = new.assignment_id;
+      v_status := 'in_progress';
+    end if;
+    if v_status = 'in_progress' then
+      select count(*) into v_pending from assignment_drop_points where assignment_id = new.assignment_id and status <> 'completed';
+      if v_pending = 0 then
+        update assignments set status = 'completed' where id = new.assignment_id;
+      end if;
+    end if;
+  end if;
+  return null;
+end;
+$$;
+drop trigger if exists trg_auto_progress on assignment_drop_points;
+create trigger trg_auto_progress after update of status on assignment_drop_points for each row execute function auto_progress_assignment();

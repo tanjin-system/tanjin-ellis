@@ -1629,7 +1629,7 @@ function wrCompute(){
     }
     const dr = state.data.drivers.find(x=>x.id===a.driverId);
     return { key:a.id, id:a.id, departedMs: a.departedAt ? new Date(a.departedAt).getTime() : null, route, origin: route ? originLabel(route.originAddr) : '（未知任務起點）', label: wrLabel(route),
-      driver: dr ? dr.name : '未指派', phone: dr ? (dr.phone||'') : '', n:dps.length, doneN:done.length, issues, s, why, over, steady, lastMs, batch,
+      driverId: a.driverId||null, driver: dr ? dr.name : '未指派', phone: dr ? (dr.phone||'') : '', n:dps.length, doneN:done.length, issues, s, why, over, steady, lastMs, batch,
       resolution: (issues && m.resolved>=issues) ? m.resolution : '', resolvedTxt: m.resolved>0 && m.resolution ? m.resolution : '' };
   });
   // 沒人排的空格：今天完全沒有任務（假日／休息日）就不提示，免得整片紅。
@@ -1724,6 +1724,7 @@ function wrDetailHtml(c){
     + '<div class="who">'+(c.driver ? '夥伴：'+escapeHtml(c.driver)+tel : '（空缺，沒有夥伴）')+'</div>'
     + '<div class="why" style="--c:'+WR_COL[c.s]+'"><b>'+wrChip(c)+'</b><br>'+why+(c.resolution?'<br><span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>':'')+'</div>'+act
     + (dps.length ? '<h4>店點（'+doneL.length+' / '+dps.length+' 站完成）</h4>'+doneL.concat(restL).map(row).join('') : '')
+    + ((!ro && c.id && c.driverId && c.s!=='done') ? '<button class="go" data-a="remind" data-id="'+c.id+'">🔔 提醒夥伴（推播）</button>' : '')
     + (ro ? '' : '<button class="go" data-a="goto">'+(c.why==='gap'?'前往週期任務清單排人':'前往週期任務清單看這一趟')+'</button>');
 }
 function wrBuild(){
@@ -1947,12 +1948,35 @@ async function renderWarRoom(c){
       if(a==='ack') wrMark(id, 'ack');
       if(a==='res'){ const sel = t.parentNode.querySelector('select'); wrMark(id, 'res', sel ? sel.value : '已處理'); }
       if(a==='close'){ W.detail = null; wrUpdate(); }
+      if(a==='remind') wrRemind(id, t);
       if(a==='goto'){ W.detail = null; wrLeaveFull(); state.weekOffset = 0; state._mDay = todayStr(); goTab('schedule'); }
     });
   }
   wrUpdate();
   await wrLoadMarks(true);
   if(document.getElementById('wrRoot')) wrUpdate();
+}
+// 戰情室「提醒夥伴」：對這趟的夥伴推播一則提醒（沒出發→提醒出發；有進度→提醒拍照回報）。
+// 通知內容只放路線與站數，不放店名。同一趟 5 分鐘內只能提醒一次，避免連按。
+async function wrRemind(id, btn){
+  const W = wrState(); W.remindAt = W.remindAt || {};
+  const a = state.data.assignments.find(x=>x.id===id);
+  if(!a || !a.driverId) return;
+  if(Date.now() - (W.remindAt[id]||0) < 5*60*1000){ toast('剛剛已經提醒過了，5 分鐘後再試。', { type:'error' }); return; }
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  const label = route ? wrLabel(route) : '今天的任務';
+  const dps = a.dropPoints||[], left = dps.filter(d=>d.status!=='completed').length;
+  const started = !!a.departedAt || dps.some(d=>d.status==='completed');
+  const msg = started
+    ? { title: '請拍照回報進度', body: label+' 還有 '+left+' 站沒有回報，請拍照上傳；送不到請選擇未完成原因。' }
+    : { title: '該出發囉', body: label+' 請按「出發」，並在每一站拍照回報。' };
+  if(btn) btn.disabled = true;
+  try{
+    const r = await pushApi('send', { messages:[{ to:{ driverId:a.driverId }, kind:'reminder', tag:'wr-remind-'+id, url:'/?go=today', title:msg.title, body:msg.body }] });
+    W.remindAt[id] = Date.now();
+    toast(r && r.sent ? '已提醒 '+driverName(a.driverId) : driverName(a.driverId)+' 沒有開啟通知，無法推播，請改用電話聯絡。', { type: r && r.sent ? 'ok' : 'error' });
+  }catch(e){ toast('提醒失敗：'+e.message, { type:'error' }); }
+  if(btn) btn.disabled = false;
 }
 function goTab(id){ switchTab(id); }
 // ---------- 公告管理（主控發布，全體夥伴首頁看得到） ----------
