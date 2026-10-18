@@ -8275,11 +8275,20 @@ document.getElementById('logoutBtn').onclick = ()=>{
 //    尚未配送完成」這類即時面板自動跟上最新狀態；其他分頁刻意不自動
 //    重繪，使用者切換分頁時自然就會拿到最新資料。
 let __bootPageSignature = null;
+// 判斷「現在這份頁面」跟「伺服器上最新的」是不是同一份：改用 HEAD 請求比對 ETag，
+// 不用像以前那樣每次都把整份 index.html（600KB+）抓下來才能算雜湊——每 5 分鐘、
+// 每次切回分頁都要做這個檢查，開著不關的手機／戰情室螢幕累積起來流量很可觀，
+// 改成 HEAD 之後這個檢查幾乎不耗流量。極少數環境可能拿不到 ETag（例如被中間的代理
+// 伺服器濾掉），退回舊的整頁比對方式，不影響「有新版時提醒重新整理」這個功能本身。
 async function computePageSignature(){
   try{
-    const res = await fetch(location.pathname || '/', { cache: 'no-store' });
+    const res = await fetch(location.pathname || '/', { method:'HEAD', cache:'no-store' });
     if(!res.ok) return null;
-    const text = await res.text();
+    const etag = res.headers.get('etag');
+    if(etag) return etag;
+    const res2 = await fetch(location.pathname || '/', { cache: 'no-store' });
+    if(!res2.ok) return null;
+    const text = await res2.text();
     let hash = 0;
     for(let i=0;i<text.length;i++){ hash = (hash*31 + text.charCodeAt(i)) | 0; }
     return hash;
