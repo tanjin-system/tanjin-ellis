@@ -6743,6 +6743,35 @@ async function decryptBackupBlob(file, pass){
   catch(e){ throw new Error('密碼錯誤，或檔案已損毀'); }
 }
 
+// ---- 操作紀錄：錢與權限相關的異動（資料庫觸發器自動寫入，沒有人能從畫面修改或刪除）----
+const AUDIT_TABLE_LABEL = { billing_adjustments:'請款例外調整', adjustments:'夥伴報酬調整／預支', trip_pay_adjustments:'單趟額外金額', statements:'勞報單', route_versions:'路線版本', channels:'通路', assignments:'任務費用／請款', drivers:'夥伴資料' };
+const AUDIT_FIELD_LABEL = { fare:'夥伴費用', payroll_fare_snapshot:'報酬快照', billing_total_snapshot:'請款總額快照', billing_by_channel_snapshot:'各通路請款快照', extra_pay:'額外金額', paid_amount:'已付金額', paid_date:'付款日', paid_method:'付款方式', fare_manual:'費用人工標記', billing_manual:'請款人工標記', driver_id:'夥伴', published:'已發佈', driver_fare:'夥伴費用', billing_total:'請款總額', billing_by_channel:'各通路拆賬', extra_fees:'額外固定費', start_date:'開始日', end_date:'結束日', distance_km:'里程', rate_km:'每公里費率', rate_point:'每站費率', flat_amount:'固定費用', tax_mode:'稅別', status:'狀態', bank_account:'銀行帳號', bank_name:'銀行', bank_branch:'分行', bank_holder:'戶名', id_number:'身分證字號', phone:'電話', access_code:'登入代碼', name:'名稱', trip_total:'任務報酬', adj_total:'加減項', net_amount:'應付', actual_net_amount:'實領', note:'備註', amount:'金額' };
+async function renderAuditBox(box){
+  if(!box) return;
+  let rows;
+  try{
+    const { data, error } = await getSupabase().from('audit_log').select('*').order('at', { ascending:false }).limit(150);
+    if(error) throw new Error(error.message);
+    rows = data || [];
+  }catch(e){ box.innerHTML = '<h3 style="margin-top:0;">操作紀錄</h3><p class="section-sub">載入失敗：' + escapeHtml(e.message) + '</p>'; return; }
+  const short = v=>{ const t = (v !== null && typeof v === 'object') ? JSON.stringify(v) : String(v); return escapeHtml(t.length > 60 ? t.slice(0,60) + '…' : t); };
+  const detail = r=>{
+    const o = r.old_data || {}, n = r.new_data || {}, keys = [...new Set([...Object.keys(o), ...Object.keys(n)])].filter(k=>!['id','created_at'].includes(k));
+    if(r.op === 'UPDATE') return keys.map(k=>`${AUDIT_FIELD_LABEL[k]||k}：${short(o[k])} → ${short(n[k])}`).join('<br>');
+    return keys.filter(k=>['note','amount','name','status','fare','trip_date','channel_id','driver_id'].includes(k)).map(k=>`${AUDIT_FIELD_LABEL[k]||k}：${short((r.op==='DELETE'?o:n)[k])}`).join('　');
+  };
+  const opts = Object.entries(AUDIT_TABLE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+  const draw = filter=>{
+    const list = rows.filter(r=>!filter || r.table_name === filter).slice(0, 100);
+    box.querySelector('#auditList').innerHTML = list.length ? `<div style="overflow-x:auto;"><table><thead><tr><th>時間</th><th>誰</th><th>項目</th><th>動作</th><th>內容</th></tr></thead><tbody>${list.map(r=>`<tr><td style="white-space:nowrap;">${new Date(r.at).toLocaleString('zh-TW', { hour12:false })}</td><td>${escapeHtml(r.actor)}</td><td>${escapeHtml(AUDIT_TABLE_LABEL[r.table_name]||r.table_name)}</td><td>${escapeHtml(r.op==='INSERT'?'新增':r.op==='DELETE'?'刪除':'修改')}</td><td style="font-size:12px;">${detail(r)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">沒有紀錄</div>';
+  };
+  box.innerHTML = `<h3 style="margin-top:0;">操作紀錄</h3>
+    <p class="section-sub">錢與權限相關的異動（請款調整、報酬調整與預支、勞報單、路線版本金額、通路費率、單趟費用與請款金額、付款標記、夥伴個資欄位異動）由資料庫自動記錄，無法從畫面修改或刪除；夥伴個資只記「改了哪個欄位」，不記內容。最近 100 筆：</p>
+    <div class="field" style="max-width:260px;"><label>只看</label><select id="auditFilter"><option value="">全部</option>${opts}</select></div><div id="auditList"></div>`;
+  draw('');
+  box.querySelector('#auditFilter').onchange = e=> draw(e.target.value);
+}
+
 // ---- 主控登入安全面板（更改密碼、兩步驟驗證）----
 async function adminSecApi(op, body){
   const auth = getStoredAuth();
@@ -6816,6 +6845,7 @@ function renderSettings(c){
     <h2 class="section-title">系統設定</h2>
     <p class="section-sub">主控登入安全：密碼以加密雜湊保存（連你自己也看不到原文），可再開啟兩步驟驗證。新裝置登入或連續登入失敗，你的手機會收到推播通知。</p>
     <div class="panel" id="adminSecBox"><h3 style="margin-top:0;">主控登入安全</h3><p class="section-sub" style="margin:0;">載入中…</p></div>
+    <div class="panel" id="auditBox"><h3 style="margin-top:0;">操作紀錄</h3><p class="section-sub" style="margin:0;">載入中…</p></div>
     <div class="panel"><h3 style="margin-top:0;">這支手機的通知</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
     <div class="panel">
       <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
@@ -6896,6 +6926,7 @@ function renderSettings(c){
     try{ await saveWarroomConfig(null); renderSettings(c); alert('已恢復預設值。'); }catch(err){ alert(err.message); }
   };
   renderAdminSecurityBox(document.getElementById('adminSecBox'));
+  renderAuditBox(document.getElementById('auditBox'));
   document.getElementById('decGo').onclick = async ()=>{
     const f = document.getElementById('decFile').files[0], pass = document.getElementById('decPass').value;
     if(!f || !pass){ alert('請選擇備份檔並輸入密碼'); return; }

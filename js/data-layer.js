@@ -2416,7 +2416,7 @@ const BACKUP_TABLES = [
   ['adjustments', 'id'], ['billing_adjustments', 'id'], ['statements', 'id'], ['trip_pay_adjustments', 'id'],
   ['fuel_claims', 'id'], ['announcements', 'id'], ['announcement_recipients', ['announcement_id', 'driver_id']], ['notifications', 'id'],
   ['stop_delegations', 'id'], ['settle_skips', ['driver_id', 'statement_month']], ['schedule_rollovers', 'week_start'], ['war_room_marks', 'assignment_id'],
-  ['catalog_meta', 'id']
+  ['catalog_meta', 'id'], ['audit_log', 'id']
 ];
 async function fetchAllRowsRaw(table, orderCol) {
   const supabase = getSupabase();

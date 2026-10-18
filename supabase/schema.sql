@@ -1293,3 +1293,102 @@ end;
 $$;
 drop trigger if exists trg_check_access_code on drivers;
 create trigger trg_check_access_code before insert or update of access_code on drivers for each row execute function check_driver_access_code();
+
+-- PART 35：操作紀錄（稽核軌跡）（2026-10-18）
+-- 只增不改：只有觸發器（security definer）能寫入，主控只能讀，沒有任何人能從前端改或刪。
+-- 記錄的是「錢與權限相關」的異動：請款調整、報酬調整／預支、勞報單、路線版本金額、通路費率、
+-- 單趟費用與請款金額、已付款標記、夥伴個資與代碼異動（個資只記「改了哪個欄位」，不記內容）。
+create table if not exists audit_log (
+  id bigserial primary key,
+  at timestamptz not null default now(),
+  actor text not null,
+  table_name text not null,
+  op text not null,
+  row_id text,
+  summary text,
+  old_data jsonb,
+  new_data jsonb
+);
+create index if not exists idx_audit_log_at on audit_log (at desc);
+alter table audit_log enable row level security;
+revoke all on audit_log from anon, authenticated, app_driver, public;
+revoke all on audit_log from app_admin;
+grant select on audit_log to app_admin;
+drop policy if exists admin_read on audit_log;
+create policy admin_read on audit_log for select to app_admin using (true);
+
+create or replace function audit_row() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  claims jsonb := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb, '{}'::jsonb);
+  who text;
+  o jsonb := case when tg_op in ('UPDATE','DELETE') then to_jsonb(old) else null end;
+  n jsonb := case when tg_op in ('UPDATE','INSERT') then to_jsonb(new) else null end;
+  rid text := coalesce((coalesce(n, o)) ->> 'id', (coalesce(n, o)) ->> 'assignment_id');
+  k text;
+  changed text[] := '{}';
+  od jsonb := '{}'::jsonb;
+  nd jsonb := '{}'::jsonb;
+  watch text[];
+  summ text;
+  masked constant text[] := array['bank_name','bank_branch','bank_account','bank_holder','id_number','phone','access_code'];
+begin
+  who := case claims ->> 'role'
+    when 'app_admin' then '主控'
+    when 'app_driver' then '夥伴:' || coalesce((select name from drivers where id = nullif(claims ->> 'driver_id','')::uuid), '?')
+    else '系統／後端' end;
+
+  -- 各表只看「要追蹤的欄位」；UPDATE 時沒有任何追蹤欄位改變就不記
+  watch := case tg_table_name
+    when 'assignments' then array['fare','payroll_fare_snapshot','billing_total_snapshot','billing_by_channel_snapshot','extra_pay','paid_amount','paid_date','paid_method','fare_manual','billing_manual','driver_id','published']
+    when 'route_versions' then array['driver_fare','billing_total','billing_by_channel','extra_fees','start_date','end_date','distance_km']
+    when 'channels' then array['rate_km','rate_point','flat_amount','tax_mode','status','period_type','start_day','end_day','formula_type','name']
+    when 'drivers' then array['bank_name','bank_branch','bank_account','bank_holder','id_number','phone','access_code','status','name']
+    when 'statements' then array['status','trip_total','adj_total','net_amount','actual_net_amount','tax_amount','nhi_amount','period_start','period_end','pay_date']
+    else null end;
+
+  if tg_op = 'UPDATE' then
+    if watch is not null then
+      foreach k in array watch loop
+        if (o -> k) is distinct from (n -> k) then changed := changed || k; od := od || jsonb_build_object(k, o -> k); nd := nd || jsonb_build_object(k, n -> k); end if;
+      end loop;
+      if array_length(changed, 1) is null then return null; end if;
+      -- 完成任務時系統自動算的請款／薪資快照不算「人工異動」，不記
+      if tg_table_name = 'assignments' and (o ->> 'status') is distinct from (n ->> 'status') then return null; end if;
+    else
+      if o = n then return null; end if;
+      od := o; nd := n;
+    end if;
+    summ := case when watch is not null then '改了：' || array_to_string(changed, '、') else '更新' end;
+  elsif tg_op = 'INSERT' then
+    nd := case when tg_table_name = 'drivers' then jsonb_build_object('name', n ->> 'name') else n end; summ := '新增';
+  else
+    od := case when tg_table_name = 'drivers' then jsonb_build_object('name', o ->> 'name') else o end; summ := '刪除';
+  end if;
+
+  -- 趟次新增／刪除很頻繁（排班、複製、批量刪除）：只留追蹤欄位與日期、路線，不存整列
+  if tg_table_name = 'assignments' and tg_op <> 'UPDATE' then
+    od := (select coalesce(jsonb_object_agg(key, value), '{}'::jsonb) from jsonb_each(od) where key = any (watch || array['trip_date','route_id']));
+    nd := (select coalesce(jsonb_object_agg(key, value), '{}'::jsonb) from jsonb_each(nd) where key = any (watch || array['trip_date','route_id']));
+  end if;
+  -- 夥伴個資與代碼：只記「改了哪些欄位」，內容一律遮掉
+  if tg_table_name = 'drivers' then
+    od := (select coalesce(jsonb_object_agg(key, case when key = any (masked) then to_jsonb('***'::text) else value end), '{}'::jsonb) from jsonb_each(od));
+    nd := (select coalesce(jsonb_object_agg(key, case when key = any (masked) then to_jsonb('***'::text) else value end), '{}'::jsonb) from jsonb_each(nd));
+  end if;
+  if tg_table_name = 'channels' then od := od - 'access_token'; nd := nd - 'access_token'; end if;
+
+  insert into audit_log (actor, table_name, op, row_id, summary, old_data, new_data)
+  values (who, tg_table_name, tg_op, rid, summ, nullif(od, '{}'::jsonb), nullif(nd, '{}'::jsonb));
+  return null;
+end;
+$$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['billing_adjustments','adjustments','trip_pay_adjustments','statements','route_versions','channels','assignments','drivers'] loop
+    execute format('drop trigger if exists trg_audit on %I', t);
+    execute format('create trigger trg_audit after insert or update or delete on %I for each row execute function audit_row()', t);
+  end loop;
+end $$;
