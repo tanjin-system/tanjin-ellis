@@ -58,17 +58,25 @@ module.exports = async (req, res) => {
   else if (legacy && legacy.admin_pin) { pinOk = sec.safeEqualStr(legacy.admin_pin, pin); legacyMigrate = pinOk; }
   if (!pinOk) return fail('密碼錯誤');
 
-  // 2) 兩步驟驗證（有開啟才檢查）
-  let newLastStep = null, usedRecovery = null;
+  // 2) 兩步驟驗證（有開啟才檢查）——這台裝置先前驗證過、還在信任期內的話，直接跳過，不用再輸入驗證碼
+  let newLastStep = null, usedRecovery = null, trustedDevices = null, issueTrustToken = false;
+  const trustToken = typeof body.trustToken === 'string' ? body.trustToken.trim() : '';
   if (st && st.totp_enabled && st.totp_secret) {
-    const code = typeof body.totp === 'string' ? body.totp.trim() : '';
-    if (!code) return res.status(401).json({ error: '請輸入兩步驟驗證碼', needTotp: true });
-    const step = sec.verifyTotp(st.totp_secret, code, st.totp_last_step);
-    if (step != null) newLastStep = step;
-    else {
-      const h = sec.hashRecovery(code);
-      if ((st.recovery_hashes || []).includes(h)) usedRecovery = h;
-      else return fail('驗證碼錯誤', 401).then(r => r);
+    const { matchIndex, list } = sec.matchTrustToken(trustToken, st.trusted_devices);
+    trustedDevices = list; // 先把過期的濾掉，不管有沒有信任成功都要寫回去
+    if (matchIndex >= 0) {
+      list[matchIndex] = Object.assign({}, list[matchIndex], { exp: sec.trustExpiry() }); // 這台裝置今天又用了，續期 30 天
+    } else {
+      const code = typeof body.totp === 'string' ? body.totp.trim() : '';
+      if (!code) return res.status(401).json({ error: '請輸入兩步驟驗證碼', needTotp: true });
+      const step = sec.verifyTotp(st.totp_secret, code, st.totp_last_step);
+      if (step != null) newLastStep = step;
+      else {
+        const h = sec.hashRecovery(code);
+        if ((st.recovery_hashes || []).includes(h)) usedRecovery = h;
+        else return fail('驗證碼錯誤', 401).then(r => r);
+      }
+      issueTrustToken = true; // 剛才是真的驗證碼（或復原碼）過的，發一組新的信任憑證給這台裝置
     }
   }
 
@@ -77,6 +85,14 @@ module.exports = async (req, res) => {
   const upd = {};
   if (newLastStep != null) upd.totp_last_step = newLastStep;
   if (usedRecovery) upd.recovery_hashes = (st.recovery_hashes || []).filter(x => x !== usedRecovery);
+  let newTrustToken = null;
+  if (trustedDevices) {
+    if (issueTrustToken) {
+      newTrustToken = sec.newTrustToken();
+      trustedDevices = trustedDevices.concat([{ h: sec.hashTrustToken(newTrustToken), exp: sec.trustExpiry() }]).slice(-20);
+    }
+    upd.trusted_devices = trustedDevices;
+  }
   const deviceHash = typeof body.deviceId === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(body.deviceId) ? sec.sha256(body.deviceId) : null;
   const known = (st && st.known_devices) || [];
   const isNewDevice = !deviceHash || !known.includes(deviceHash);
@@ -85,7 +101,7 @@ module.exports = async (req, res) => {
   if (Object.keys(upd).length) {
     const row = Object.assign({ id: 1 }, upd);
     const { error: upErr } = await supabase.from('admin_security').upsert(row, { onConflict: 'id' });
-    if (upErr) console.error('admin_security update failed:', upErr.message);
+    if (upErr) { console.error('admin_security update failed:', upErr.message); newTrustToken = null; } // 沒寫進去就不要發給前端一組假的信任憑證
     else if (legacyMigrate) await supabase.from('settings').update({ admin_pin: '' }).eq('id', 1); // 雜湊寫入成功才清掉明文
   }
   if (isNewDevice) {
@@ -93,5 +109,5 @@ module.exports = async (req, res) => {
   }
 
   const token = jwt.sign({ role: 'app_admin' }, process.env.SUPABASE_JWT_SECRET, { expiresIn: '12h' });
-  return res.status(200).json({ token, weakPin: pin.length < 8, totpEnabled: !!(st && st.totp_enabled) });
+  return res.status(200).json({ token, weakPin: pin.length < 8, totpEnabled: !!(st && st.totp_enabled), trustToken: newTrustToken || undefined });
 };

@@ -44,14 +44,28 @@ function getDeviceId() {
   } catch (e) { return null; }
 }
 
+// 「記住這台裝置 30 天」：通過一次完整的密碼＋兩步驟驗證後，伺服器會發一組信任憑證，存在這支手機／
+// 這台電腦的瀏覽器裡；30 天內同一台裝置登入只要密碼，伺服器比對到還沒過期就直接放行、不用再輸驗證碼
+// （見 api/auth-admin.js）。只存在瀏覽器本機，換裝置、清過瀏覽器資料、或主控自己在「系統設定」按
+// 「清除已信任裝置」都會讓它失效。
+const ADMIN_TRUST_KEY = 'fleet_admin_trust';
+function getAdminTrustToken() { try { return localStorage.getItem(ADMIN_TRUST_KEY) || ''; } catch (e) { return ''; } }
+function setAdminTrustToken(t) { try { if (t) localStorage.setItem(ADMIN_TRUST_KEY, t); } catch (e) { /* 存不進去（例如無痕模式）就每次都要輸驗證碼，不影響登入本身 */ } }
+function clearAdminTrustToken() { try { localStorage.removeItem(ADMIN_TRUST_KEY); } catch (e) { /* 忽略 */ } }
+
 async function loginAsAdmin(pin, totp) {
   const res = await fetch('/api/auth-admin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin, totp: totp || undefined, deviceId: getDeviceId() })
+    body: JSON.stringify({ pin, totp: totp || undefined, deviceId: getDeviceId(), trustToken: getAdminTrustToken() || undefined })
   });
   const body = await res.json();
-  if (!res.ok) { const err = new Error(body.error || '登入失敗'); err.needTotp = !!body.needTotp; throw err; }
+  if (!res.ok) {
+    const err = new Error(body.error || '登入失敗'); err.needTotp = !!body.needTotp;
+    if (err.needTotp) clearAdminTrustToken(); // 這台裝置存的信任憑證顯然已經失效（過期或換過裝置），清掉避免下次又白送一次
+    throw err;
+  }
+  if (body.trustToken) setAdminTrustToken(body.trustToken);
   localStorage.setItem(AUTH_STORAGE_KEY, body.token);
   localStorage.setItem(AUTH_ROLE_KEY, 'admin');
   localStorage.removeItem(AUTH_DRIVER_KEY);

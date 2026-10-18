@@ -36,7 +36,8 @@ module.exports = async (req, res) => {
   try {
     const ctx = await load(), st = ctx.st;
     if (op === 'status') {
-      return res.status(200).json({ pinHashed: !!(st && st.pin_hash), totpEnabled: !!(st && st.totp_enabled), recoveryLeft: st ? (st.recovery_hashes || []).length : 0, pinChangedAt: st ? st.pin_changed_at : null, knownDevices: st ? (st.known_devices || []).length : 0 });
+      const trustedAlive = sec.matchTrustToken(null, st && st.trusted_devices).list;
+      return res.status(200).json({ pinHashed: !!(st && st.pin_hash), totpEnabled: !!(st && st.totp_enabled), recoveryLeft: st ? (st.recovery_hashes || []).length : 0, pinChangedAt: st ? st.pin_changed_at : null, knownDevices: st ? (st.known_devices || []).length : 0, trustedDevices: trustedAlive.length });
     }
     // 以下操作都要再輸入一次目前密碼，並套用同一套失敗次數限制
     const ip = getClientIp(req);
@@ -77,13 +78,14 @@ module.exports = async (req, res) => {
       const step = sec.verifyTotp(st.totp_secret, b.code, st.totp_last_step);
       const rec = step == null && (st.recovery_hashes || []).includes(sec.hashRecovery(b.code));
       if (step == null && !rec) { await recordAttempt(supabase, 'admin', ip, false); return res.status(401).json({ error: '驗證碼錯誤' }); }
-      const { error } = await supabase.from('admin_security').update({ totp_enabled: false, totp_secret: null, totp_pending: null, recovery_hashes: [], totp_last_step: null }).eq('id', 1);
+      // 關掉兩步驟驗證的同時，把已信任裝置也清空：之後重新開啟時要全部裝置重新驗證一次，不會有舊裝置悄悄沿用之前的信任記錄。
+      const { error } = await supabase.from('admin_security').update({ totp_enabled: false, totp_secret: null, totp_pending: null, recovery_hashes: [], totp_last_step: null, trusted_devices: [] }).eq('id', 1);
       if (error) throw new Error(error.message);
       return res.status(200).json({ ok: true });
     }
     if (op === 'clear-devices') {
       if (!(await needPin())) return res.status(401).json({ error: '目前密碼錯誤' });
-      await supabase.from('admin_security').upsert({ id: 1, known_devices: [] }, { onConflict: 'id' });
+      await supabase.from('admin_security').upsert({ id: 1, known_devices: [], trusted_devices: [] }, { onConflict: 'id' });
       return res.status(200).json({ ok: true });
     }
     return res.status(400).json({ error: 'Bad request' });

@@ -6789,10 +6789,11 @@ async function renderAdminSecurityBox(box){
     <h3 style="margin-top:0;">主控登入安全</h3>
     ${row(st.pinHashed, st.pinHashed ? '密碼已用加密雜湊保存' + (st.pinChangedAt ? '（' + new Date(st.pinChangedAt).toLocaleDateString('zh-TW') + ' 更改）' : '') : '目前還是舊式保存，下次登入會自動轉成加密雜湊；建議現在就更改一次密碼')}
     ${row(st.totpEnabled, st.totpEnabled ? '兩步驟驗證已開啟（剩餘備用復原碼 ' + st.recoveryLeft + ' 組）' : '兩步驟驗證尚未開啟（強烈建議開啟）')}
+    ${st.totpEnabled ? '<p class="section-sub" style="margin:4px 0 0;">已信任裝置（30 天內登入免輸驗證碼）：' + st.trustedDevices + ' 台。信任期間到了、換裝置、或清過瀏覽器資料都會自動恢復成要輸驗證碼。</p>' : ''}
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
       <button class="btn amber" id="secChgPin">更改密碼</button>
       ${st.totpEnabled ? '<button class="btn ghost" id="secTotpOff">關閉兩步驟驗證</button>' : '<button class="btn amber" id="secTotpOn">開啟兩步驟驗證</button>'}
-      <button class="btn ghost" id="secClrDev">清除「已知裝置」（${st.knownDevices} 台）</button>
+      <button class="btn ghost" id="secClrDev">清除裝置紀錄（已知 ${st.knownDevices}／已信任 ${st.trustedDevices}）</button>
     </div>
     <div id="secForm" style="margin-top:12px;"></div>`;
   const form = box.querySelector('#secForm'), again = ()=> renderAdminSecurityBox(box);
@@ -6832,12 +6833,15 @@ async function renderAdminSecurityBox(box){
     form.innerHTML = input('secCur','目前密碼') + input('secCode','驗證器的 6 位數字（或一組備用復原碼）','text') + '<button class="btn danger" id="secOff2">關閉兩步驟驗證</button>';
     document.getElementById('secOff2').onclick = async ()=>{
       if(!confirm('關閉後，只靠密碼就能登入主控。確定嗎？')) return;
-      try{ await adminSecApi('totp-disable', { current: val('secCur'), code: val('secCode') }); toast('已關閉兩步驟驗證'); again(); }catch(e){ alert(e.message); }
+      try{ await adminSecApi('totp-disable', { current: val('secCur'), code: val('secCode') }); if(typeof clearAdminTrustToken==='function') clearAdminTrustToken(); toast('已關閉兩步驟驗證'); again(); }catch(e){ alert(e.message); }
     };
   };
   box.querySelector('#secClrDev').onclick = ()=>{
-    form.innerHTML = input('secCur','目前密碼') + '<button class="btn amber" id="secClr2">清除（之後每台裝置第一次登入都會通知你）</button>';
-    document.getElementById('secClr2').onclick = async ()=>{ try{ await adminSecApi('clear-devices', { current: val('secCur') }); toast('已清除'); again(); }catch(e){ alert(e.message); } };
+    form.innerHTML = input('secCur','目前密碼') + '<button class="btn amber" id="secClr2">清除（之後每台裝置第一次登入都會通知你；已信任的裝置也要重新輸驗證碼，包含這一台）</button>';
+    document.getElementById('secClr2').onclick = async ()=>{
+      try{ await adminSecApi('clear-devices', { current: val('secCur') }); if(typeof clearAdminTrustToken==='function') clearAdminTrustToken(); toast('已清除'); again(); }
+      catch(e){ alert(e.message); }
+    };
   };
 }
 function renderSettings(c){

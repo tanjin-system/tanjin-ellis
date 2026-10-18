@@ -1500,3 +1500,10 @@ begin
 end $$;
 drop trigger if exists trg_guard_driver_partner on drivers;
 create trigger trg_guard_driver_partner before update on drivers for each row execute function guard_driver_partner();
+
+-- PART 37：主控「記住這台裝置 30 天」（2026-10-18）
+-- 開啟兩步驟驗證後，裝置通過一次完整的密碼＋驗證碼後可以拿到一組信任憑證（存在瀏覽器），
+-- 30 天內這台裝置登入只要密碼、不用再輸驗證碼；換裝置、清過瀏覽器資料、或超過 30 天沒用，
+-- 一樣會被要求重新輸入驗證碼。伺服器只存這組憑證的雜湊＋到期時間（見 admin_security.trusted_devices），
+-- 瀏覽器端的原始值外洩才有用、資料庫外洩沒用。詳細邏輯在 lib/adminSecurity.js／api/auth-admin.js。
+alter table admin_security add column if not exists trusted_devices jsonb not null default '[]'::jsonb;
