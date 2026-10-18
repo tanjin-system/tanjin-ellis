@@ -3,3 +3,8 @@ node_modules/
 .vercel/
 .DS_Store
 .claude/
+# 備份壓縮檔、資安測試報告：可能含個資或內部資訊，不要提交
+*.zip
+資安測試報告*.md
+*備份*.json*
+*.enc

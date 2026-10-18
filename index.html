@@ -537,7 +537,7 @@
   <main id="content"></main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script src="js/supabase-client.js"></script>
 <script src="js/data-layer.js"></script>
 <script src="js/auth.js"></script>
@@ -602,11 +602,14 @@ function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURICom
 // 不是HEIC的檔案完全不受影響，一樣走原本的<img>/canvas流程。
 // 這三個函式庫只有「產生PDF」（主控）與「HEIC照片轉檔」（夥伴上傳照片）才用得到，以前每次開任何頁面都同步載入（合計約 1.9MB，
 // 載完才會開始畫畫面），夥伴手機尤其慢；改成要用才載入，主控登入後閒置時先預載好 PDF 用的兩個，按下去不用等。
+// 外部程式庫一律鎖定版本＋完整性雜湊（SRI）：CDN 上的檔案只要有任何一個位元組不同，瀏覽器就拒絕執行。
+// 更新程式庫版本時，要同步重新計算雜湊（openssl dgst -sha384 -binary 檔案 | openssl base64 -A）。
+const LIB_SRI = {"https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js": "sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H", "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js": "sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk", "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js": "sha384-OTofQ0MEeiSgh62havBcemCIK0gqj809wX6UA0uPISNMRnR6NZyCdGzX3SbLrgwL", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css": "sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js": "sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH", "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js": "sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz"};
 const _libP = {};
 function loadLib(url){
   if(_libP[url]) return _libP[url];
   _libP[url] = new Promise((res, rej)=>{
-    const sc = document.createElement('script'); sc.src = url;
+    const sc = document.createElement('script'); sc.src = url; if(LIB_SRI[url]){ sc.integrity = LIB_SRI[url]; sc.crossOrigin = 'anonymous'; }
     sc.onload = ()=>res(); sc.onerror = ()=>{ delete _libP[url]; rej(new Error('元件載入失敗，請檢查網路後再試')); };
     document.head.appendChild(sc);
   });
@@ -3578,8 +3581,8 @@ function loadLeaflet(){
   if(window.L) return Promise.resolve();
   if(_leafletP) return _leafletP;
   _leafletP = new Promise((res, rej)=>{
-    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css'; document.head.appendChild(css);
-    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css'; css.integrity = LIB_SRI[css.href]; css.crossOrigin = 'anonymous'; document.head.appendChild(css);
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js'; sc.integrity = LIB_SRI[sc.src]; sc.crossOrigin = 'anonymous';
     sc.onload = ()=>res(); sc.onerror = ()=>{ _leafletP = null; rej(new Error('地圖元件載入失敗，請檢查網路後再試')); };
     document.head.appendChild(sc);
   });
@@ -6339,7 +6342,7 @@ function loadExcelJS(){
   if(window.ExcelJS) return Promise.resolve();
   if(_excelJsP) return _excelJsP;
   _excelJsP = new Promise((res, rej)=>{
-    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; sc.integrity = LIB_SRI[sc.src]; sc.crossOrigin = 'anonymous';
     sc.onload = ()=>res(); sc.onerror = ()=>{ _excelJsP = null; rej(new Error('Excel 元件載入失敗，請檢查網路後再試')); };
     document.head.appendChild(sc);
   });
@@ -6720,6 +6723,26 @@ function formatBytes(bytes){
   const mb = bytes/1024/1024;
   return mb<1024 ? `${mb.toFixed(1)} MB` : `${(mb/1024).toFixed(2)} GB`;
 }
+// ---- 備份檔加密／解密：AES-256-GCM，金鑰由密碼經 PBKDF2-SHA256（300,000 次）推導，全程在瀏覽器完成，密碼不會送出去 ----
+// 檔案格式：'TJBK1' + 鹽(16) + IV(12) + 密文（含驗證標籤）
+async function backupKeyFromPass(pass, salt){
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name:'PBKDF2', salt, iterations:300000, hash:'SHA-256' }, base, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+}
+async function encryptBackupBlob(blob, pass){
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await backupKeyFromPass(pass, salt);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, await blob.arrayBuffer()));
+  return new Blob([new TextEncoder().encode('TJBK1'), salt, iv, ct], { type:'application/octet-stream' });
+}
+async function decryptBackupBlob(file, pass){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if(buf.length < 33 || new TextDecoder().decode(buf.slice(0,5)) !== 'TJBK1') throw new Error('這不是系統產生的加密備份檔');
+  const key = await backupKeyFromPass(pass, buf.slice(5,21));
+  try{ return new Blob([await crypto.subtle.decrypt({ name:'AES-GCM', iv: buf.slice(21,33) }, key, buf.slice(33))]); }
+  catch(e){ throw new Error('密碼錯誤，或檔案已損毀'); }
+}
+
 // ---- 主控登入安全面板（更改密碼、兩步驟驗證）----
 async function adminSecApi(op, body){
   const auth = getStoredAuth();
@@ -6827,7 +6850,12 @@ function renderSettings(c){
       <h3 style="margin-top:0;">資料備份</h3>
       <p class="section-sub">Supabase 免費方案沒有自動備份，請<b>每週</b>下載一次完整備份，存在你自己的電腦或雲端硬碟。備份包含資料庫所有資料表的完整內容（含所有歷史趟次、勞報單、請款調整），不含照片與夥伴證件檔案。<b>檔案裡有身分證字號、銀行帳號等個資，請妥善保管，不要傳給別人。</b></p>
       <p class="section-sub" id="backupLast" style="margin-top:0;">${state.data.settings.lastBackupAt ? '上次備份：'+new Date(state.data.settings.lastBackupAt).toLocaleString('zh-TW') : '還沒有備份紀錄'}</p>
+      <div class="field" style="max-width:360px;"><label>備份加密密碼（選填，強烈建議）</label><input id="backupPass" type="password" autocomplete="new-password" placeholder="填了就會把備份檔加密；忘記密碼就無法還原"></div>
       <button class="btn amber" id="fullBackup">下載完整備份</button> <span id="fullBackupMsg" class="section-sub"></span>
+      <details style="margin-top:12px;"><summary style="cursor:pointer;">解密備份檔</summary>
+        <p class="section-sub">選一個加密過的備份檔（.enc），輸入當初設定的密碼，會在這台電腦上解開並下載原本的備份檔（不會上傳到任何地方）。</p>
+        <input type="file" id="decFile" accept=".enc" style="max-width:360px;"> <input type="password" id="decPass" placeholder="備份加密密碼" style="max-width:240px;" autocomplete="off"> <button class="btn ghost" id="decGo">解密並下載</button>
+      </details>
     </div>
   `;
   fetchUsageStats().then(({dbSizeBytes, storageBuckets, storageTotalBytes})=>{
@@ -6868,6 +6896,17 @@ function renderSettings(c){
     try{ await saveWarroomConfig(null); renderSettings(c); alert('已恢復預設值。'); }catch(err){ alert(err.message); }
   };
   renderAdminSecurityBox(document.getElementById('adminSecBox'));
+  document.getElementById('decGo').onclick = async ()=>{
+    const f = document.getElementById('decFile').files[0], pass = document.getElementById('decPass').value;
+    if(!f || !pass){ alert('請選擇備份檔並輸入密碼'); return; }
+    try{
+      const out = await decryptBackupBlob(f, pass);
+      const url = URL.createObjectURL(out), a = document.createElement('a');
+      a.href = url; a.download = f.name.replace(/\.enc$/, '') || '備份.json.gz'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=> URL.revokeObjectURL(url), 5000);
+      toast('已解密並下載', { type:'ok' });
+    }catch(e){ alert(e.message); }
+  };
   document.getElementById('fullBackup').onclick = async ()=>{
     const btn = document.getElementById('fullBackup'), msg = document.getElementById('fullBackupMsg');
     btn.disabled = true; msg.textContent = '準備中…';
@@ -6881,12 +6920,17 @@ function renderSettings(c){
         blob = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
         name += '.json.gz';
       } else { blob = new Blob([json], { type:'application/json' }); name += '.json'; }
+      const pass = (document.getElementById('backupPass').value || '');
+      if(pass){
+        if(pass.length < 8){ alert('備份加密密碼至少 8 個字元'); msg.textContent = ''; btn.disabled = false; return; }
+        blob = await encryptBackupBlob(blob, pass); name += '.enc';
+      }
       const url = URL.createObjectURL(blob), a = document.createElement('a');
       a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(()=> URL.revokeObjectURL(url), 5000);
       if(!errors.length){ await recordBackupDone(); const l = document.getElementById('backupLast'); if(l) l.textContent = '上次備份：'+new Date(state.data.settings.lastBackupAt).toLocaleString('zh-TW'); }
       const total = Object.values(counts).reduce((x,y)=>x+y,0);
-      msg.textContent = `已下載（${total.toLocaleString()} 筆資料，${(blob.size/1024/1024).toFixed(1)} MB）`;
+      msg.textContent = `已下載${pass?'（已加密）':'（未加密，請妥善保管）'}：${total.toLocaleString()} 筆資料，${(blob.size/1024/1024).toFixed(1)} MB`;
     }catch(err){ msg.textContent = ''; alert('備份失敗：' + err.message); }
     btn.disabled = false;
   };
