@@ -479,11 +479,17 @@ async function fetchAssignment(id) {
 
 // ---------------- 夥伴 ----------------
 
+// 夥伴登入代碼：6 位數字（用瀏覽器的安全亂數）。舊版 4 碼太容易被猜到，登入時會被要求換成 6 碼以上。
+function randomAccessCode() {
+  const a = new Uint32Array(1); crypto.getRandomValues(a);
+  return String(100000 + (a[0] % 900000));
+}
+
 async function createDriver(input) {
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers').insert({
     name: input.name, phone: input.phone || null, line_user_id: input.lineId || null,
-    access_code: String(Math.floor(1000 + Math.random() * 9000)),
+    access_code: randomAccessCode(),
     vehicle_plate: input.plate || null, vehicle_type: input.vtype || null, vehicle_load: input.vload || null,
     bank_name: input.bankName || null, bank_branch: input.branch || null,
     bank_account: input.account || null, bank_holder: input.holder || null,
@@ -498,7 +504,7 @@ async function createDriver(input) {
 
 async function regenerateDriverAccessCode(driverId) {
   const supabase = getSupabase();
-  const newCode = String(Math.floor(1000 + Math.random() * 9000));
+  const newCode = randomAccessCode();
   const { data, error } = await supabase.from('drivers').update({ access_code: newCode, force_code_reset: true }).eq('id', driverId).select().single();
   if (error) throw new Error('重新產生代碼失敗：' + error.message);
   const driver = state.data.drivers.find(d => d.id === driverId);
@@ -509,6 +515,7 @@ async function regenerateDriverAccessCode(driverId) {
 // 只有本人（driver_id 來自 JWT）能改自己這一列的 access_code/force_code_reset，
 // 改完就把 force_code_reset 清成 false，之後登入不會再被強制要求重設。
 async function changeMyAccessCode(driverId, newCode) {
+  if (!/^[0-9]{6,12}$/.test(String(newCode))) throw new Error('新代碼請設定 6～12 碼數字');
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers')
     .update({ access_code: newCode, force_code_reset: false })
@@ -2353,12 +2360,6 @@ async function confirmSignature(statementId) {
 
 // ---------------- 系統設定 ----------------
 
-async function updateAdminPin(pin) {
-  const supabase = getSupabase();
-  const { error } = await supabase.from('settings').update({ admin_pin: pin }).eq('id', 1);
-  if (error) throw new Error('更新PIN碼失敗：' + error.message);
-  state.data.settings.adminPin = pin;
-}
 
 // ---------- 戰情室：門檻設定與「已看到／已處理」標記 ----------
 // 門檻存在 settings.warroom_config（jsonb，null＝用預設值）；標記存在 war_room_marks（每趟任務一列，

@@ -6720,14 +6720,79 @@ function formatBytes(bytes){
   const mb = bytes/1024/1024;
   return mb<1024 ? `${mb.toFixed(1)} MB` : `${(mb/1024).toFixed(2)} GB`;
 }
+// ---- 主控登入安全面板（更改密碼、兩步驟驗證）----
+async function adminSecApi(op, body){
+  const auth = getStoredAuth();
+  const r = await fetch('/api/admin-security?op=' + op, { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + (auth ? auth.token : '') }, body: JSON.stringify(body || {}) });
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(j.error || ('操作失敗（' + r.status + '）'));
+  return j;
+}
+async function renderAdminSecurityBox(box){
+  if(!box) return;
+  let st;
+  try{ st = await adminSecApi('status'); }catch(e){ box.innerHTML = '<h3 style="margin-top:0;">主控登入安全</h3><p class="section-sub">載入失敗：' + escapeHtml(e.message) + '</p>'; return; }
+  const row = (ok, text)=> `<div style="margin:4px 0;">${ok?'✅':'⚠️'} ${text}</div>`;
+  box.innerHTML = `
+    <h3 style="margin-top:0;">主控登入安全</h3>
+    ${row(st.pinHashed, st.pinHashed ? '密碼已用加密雜湊保存' + (st.pinChangedAt ? '（' + new Date(st.pinChangedAt).toLocaleDateString('zh-TW') + ' 更改）' : '') : '目前還是舊式保存，下次登入會自動轉成加密雜湊；建議現在就更改一次密碼')}
+    ${row(st.totpEnabled, st.totpEnabled ? '兩步驟驗證已開啟（剩餘備用復原碼 ' + st.recoveryLeft + ' 組）' : '兩步驟驗證尚未開啟（強烈建議開啟）')}
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+      <button class="btn amber" id="secChgPin">更改密碼</button>
+      ${st.totpEnabled ? '<button class="btn ghost" id="secTotpOff">關閉兩步驟驗證</button>' : '<button class="btn amber" id="secTotpOn">開啟兩步驟驗證</button>'}
+      <button class="btn ghost" id="secClrDev">清除「已知裝置」（${st.knownDevices} 台）</button>
+    </div>
+    <div id="secForm" style="margin-top:12px;"></div>`;
+  const form = box.querySelector('#secForm'), again = ()=> renderAdminSecurityBox(box);
+  const input = (id, label, type)=> `<div class="field" style="max-width:340px;"><label>${label}</label><input id="${id}" type="${type||'password'}" autocomplete="off"></div>`;
+  const val = id=> (document.getElementById(id)||{}).value || '';
+  box.querySelector('#secChgPin').onclick = ()=>{
+    form.innerHTML = input('secCur','目前密碼') + input('secNew','新密碼（至少 8 個字元，建議用一句好記的長句子）') + input('secNew2','再輸入一次新密碼') + '<button class="btn amber" id="secSave">儲存新密碼</button>';
+    document.getElementById('secSave').onclick = async ()=>{
+      if(val('secNew') !== val('secNew2')){ alert('兩次輸入的新密碼不一致'); return; }
+      try{ await adminSecApi('set-pin', { current: val('secCur'), next: val('secNew') }); toast('主控密碼已更新，下次登入請用新密碼。', { type:'ok' }); again(); }
+      catch(e){ alert(e.message); }
+    };
+  };
+  const on = box.querySelector('#secTotpOn');
+  if(on) on.onclick = async ()=>{
+    try{
+      const r = await adminSecApi('totp-begin');
+      form.innerHTML = `<p class="section-sub">在驗證器 App（Google Authenticator、1Password、Mac／iPhone 的「密碼」App 都可以）新增一個項目，選「輸入設定金鑰」，貼上下面這串金鑰（類型選「依時間」）：</p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="secKey" readonly value="${r.secret}" style="max-width:380px;"><button class="btn ghost" id="secCopy">複製</button></div>
+        <p class="section-sub" style="margin-top:10px;">加好之後，輸入驗證器顯示的 6 位數字確認：</p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input id="secCode" inputmode="numeric" maxlength="6" style="max-width:140px;" autocomplete="off"><button class="btn amber" id="secConfirm">確認並開啟</button></div>`;
+      document.getElementById('secCopy').onclick = async ()=>{ try{ await navigator.clipboard.writeText(r.secret); toast('已複製金鑰'); }catch(e){ document.getElementById('secKey').select(); } };
+      document.getElementById('secConfirm').onclick = async ()=>{
+        try{
+          const j = await adminSecApi('totp-confirm', { code: val('secCode') });
+          form.innerHTML = `<p style="font-weight:600; color:var(--danger);">請現在就把下面 8 組備用復原碼存到安全的地方（例如密碼管理器）。手機遺失時，用其中一組（每組只能用一次）才登得進來；離開這個畫面就不會再顯示。</p>
+            <pre class="mono" style="background:var(--bg-soft,#f6f3ee); padding:10px; border-radius:6px; line-height:1.9;">${j.recoveryCodes.join('\n')}</pre>
+            <button class="btn ghost" id="secRcCopy">複製</button> <button class="btn amber" id="secRcDone">我已存好</button>`;
+          document.getElementById('secRcCopy').onclick = async ()=>{ try{ await navigator.clipboard.writeText(j.recoveryCodes.join('\n')); toast('已複製'); }catch(e){} };
+          document.getElementById('secRcDone').onclick = again;
+        }catch(e){ alert(e.message); }
+      };
+    }catch(e){ alert(e.message); }
+  };
+  const off = box.querySelector('#secTotpOff');
+  if(off) off.onclick = ()=>{
+    form.innerHTML = input('secCur','目前密碼') + input('secCode','驗證器的 6 位數字（或一組備用復原碼）','text') + '<button class="btn danger" id="secOff2">關閉兩步驟驗證</button>';
+    document.getElementById('secOff2').onclick = async ()=>{
+      if(!confirm('關閉後，只靠密碼就能登入主控。確定嗎？')) return;
+      try{ await adminSecApi('totp-disable', { current: val('secCur'), code: val('secCode') }); toast('已關閉兩步驟驗證'); again(); }catch(e){ alert(e.message); }
+    };
+  };
+  box.querySelector('#secClrDev').onclick = ()=>{
+    form.innerHTML = input('secCur','目前密碼') + '<button class="btn amber" id="secClr2">清除（之後每台裝置第一次登入都會通知你）</button>';
+    document.getElementById('secClr2').onclick = async ()=>{ try{ await adminSecApi('clear-devices', { current: val('secCur') }); toast('已清除'); again(); }catch(e){ alert(e.message); } };
+  };
+}
 function renderSettings(c){
   c.innerHTML = `
     <h2 class="section-title">系統設定</h2>
-    <p class="section-sub">主控PIN碼用於登入時驗證身份，請妥善保管，不要告訴夥伴。</p>
-    <div class="panel">
-      <div class="field" style="max-width:200px;"><label>主控PIN碼</label><input id="setPin" value="${state.data.settings.adminPin}"></div>
-      <button class="btn amber" id="savePin">儲存</button>
-    </div>
+    <p class="section-sub">主控登入安全：密碼以加密雜湊保存（連你自己也看不到原文），可再開啟兩步驟驗證。新裝置登入或連續登入失敗，你的手機會收到推播通知。</p>
+    <div class="panel" id="adminSecBox"><h3 style="margin-top:0;">主控登入安全</h3><p class="section-sub" style="margin:0;">載入中…</p></div>
     <div class="panel"><h3 style="margin-top:0;">這支手機的通知</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
     <div class="panel">
       <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
@@ -6802,12 +6867,7 @@ function renderSettings(c){
     if(!confirm('把戰情室門檻恢復成預設值？')) return;
     try{ await saveWarroomConfig(null); renderSettings(c); alert('已恢復預設值。'); }catch(err){ alert(err.message); }
   };
-  document.getElementById('savePin').onclick = async ()=>{
-    const pin = document.getElementById('setPin').value.trim();
-    if(!pin){ alert('PIN碼不能空白'); return; }
-    try{ await updateAdminPin(pin); alert('已更新主控PIN碼。'); }
-    catch(err){ alert(err.message); }
-  };
+  renderAdminSecurityBox(document.getElementById('adminSecBox'));
   document.getElementById('fullBackup').onclick = async ()=>{
     const btn = document.getElementById('fullBackup'), msg = document.getElementById('fullBackupMsg');
     btn.disabled = true; msg.textContent = '準備中…';

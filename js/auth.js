@@ -31,14 +31,27 @@ function setupPwToggle(input, btn) {
   };
 }
 
-async function loginAsAdmin(pin) {
+// 這台裝置的隨機代號（只用來判斷「是不是新裝置登入」，新裝置登入時主控會收到推播通知）
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem('fleet_device_id');
+    if (!id || !/^[A-Za-z0-9_-]{16,64}$/.test(id)) {
+      const b = new Uint8Array(24); crypto.getRandomValues(b);
+      id = btoa(String.fromCharCode.apply(null, b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      localStorage.setItem('fleet_device_id', id);
+    }
+    return id;
+  } catch (e) { return null; }
+}
+
+async function loginAsAdmin(pin, totp) {
   const res = await fetch('/api/auth-admin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin })
+    body: JSON.stringify({ pin, totp: totp || undefined, deviceId: getDeviceId() })
   });
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error || '登入失敗');
+  if (!res.ok) { const err = new Error(body.error || '登入失敗'); err.needTotp = !!body.needTotp; throw err; }
   localStorage.setItem(AUTH_STORAGE_KEY, body.token);
   localStorage.setItem(AUTH_ROLE_KEY, 'admin');
   localStorage.removeItem(AUTH_DRIVER_KEY);
@@ -80,9 +93,13 @@ function renderLoginGate(message) {
     <div class="field">
       <label id="loginCodeLabel">登入代碼</label>
       <div class="pw-wrap">
-        <input id="loginCode" type="password" inputmode="numeric" maxlength="12">
+        <input id="loginCode" type="password" inputmode="numeric" maxlength="64">
         <button type="button" class="pw-toggle" id="loginCodeToggle" tabindex="-1">顯示</button>
       </div>
+    </div>
+    <div class="field" id="loginTotpWrap" style="display:none;">
+      <label>兩步驟驗證碼（驗證器 App 的 6 位數字，或一組備用復原碼）</label>
+      <input id="loginTotp" type="text" inputmode="text" autocomplete="one-time-code" maxlength="16">
     </div>
     <div id="loginError" style="color:var(--danger); font-size:12.5px; margin-bottom:8px; display:none;"></div>
     <button class="btn amber" id="loginSubmit" style="width:100%;">登入</button>
@@ -103,7 +120,7 @@ function renderLoginGate(message) {
   const applyRoleInputMode = () => {
     forgotNote.style.display = 'none';
     if (roleSel.value === 'admin') {
-      codeLabel.textContent = '主控PIN碼';
+      codeLabel.textContent = '主控密碼';
       codeInput.removeAttribute('inputmode');
       codeInput.removeAttribute('maxlength');
       forgotWrap.style.display = 'none';
@@ -125,10 +142,16 @@ function renderLoginGate(message) {
     errEl.style.display = 'none';
     if (!code) return;
     try {
-      if (role === 'admin') await loginAsAdmin(code);
+      let adminBody = null;
+      if (role === 'admin') adminBody = await loginAsAdmin(code, (document.getElementById('loginTotp').value || '').trim());
       else await loginAsDriver(code);
       await bootApp();
+      if (adminBody && adminBody.weakPin && typeof toast === 'function') toast('你的主控密碼少於 8 個字元，建議到「系統設定」換成更長的密碼。', { type: 'warn' });
     } catch (e) {
+      if (e.needTotp) {
+        document.getElementById('loginTotpWrap').style.display = 'block';
+        const t = document.getElementById('loginTotp'); if (t) t.focus();
+      }
       errEl.textContent = e.message;
       errEl.style.display = 'block';
     }
@@ -140,7 +163,7 @@ function renderLoginGate(message) {
 // 系統其他任何畫面。設定成功後不直接放行——退回登入畫面，強制夥伴實際用新代碼
 // 重新登入一次（確認新代碼真的能用），登入成功後 bootApp() 會自動導向「我的資料」
 // （見 index.html 的 renderNav()：夥伴本人資料未填妥時一律鎖定在該頁)。
-const DRIVER_CODE_MIN_LEN = 4;
+const DRIVER_CODE_MIN_LEN = 6;
 const DRIVER_CODE_MAX_LEN = 12;
 
 function renderForceCodeResetGate(driverId, driverName) {
@@ -150,7 +173,7 @@ function renderForceCodeResetGate(driverId, driverName) {
   gate.style.display = 'block';
   gate.innerHTML = `
     <h2 class="section-title">設定新的登入代碼</h2>
-    <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入（或代碼被主控重設後）需要自訂一組新的登入代碼才能繼續使用。</p>
+    <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入、代碼被主控重設，或目前的代碼少於 6 碼時，需要自訂一組新的登入代碼（至少 6 碼數字）才能繼續使用。請不要用生日、手機號碼或 123456 這類容易被猜到的數字。</p>
     <div class="field">
       <label>新登入代碼（請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼數字）</label>
       <div class="pw-wrap">
@@ -176,7 +199,7 @@ function renderForceCodeResetGate(driverId, driverName) {
     const c2 = document.getElementById('newCode2').value.trim();
     errEl.style.display = 'none';
     if (!c1) { errEl.textContent = '請輸入新代碼'; errEl.style.display = 'block'; return; }
-    if (c1.length < DRIVER_CODE_MIN_LEN || c1.length > DRIVER_CODE_MAX_LEN) {
+    if (!/^[0-9]+$/.test(c1) || c1.length < DRIVER_CODE_MIN_LEN || c1.length > DRIVER_CODE_MAX_LEN) {
       errEl.textContent = `新代碼請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼數字`;
       errEl.style.display = 'block';
       return;

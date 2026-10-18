@@ -1265,3 +1265,31 @@ grant select (id,name,period_type,start_day,end_day,status,formula_type,tax_mode
 -- （anon 本來就沒有任何列層級政策可以讀，收回不影響功能）。之後新增有敏感欄位的表，也要記得做同樣的事。
 -- 還原：grant select on assignments, route_versions, channels to anon;
 revoke select on assignments, route_versions, channels from anon;
+
+-- PART 34：登入安全強化（2026-10-18）
+-- 1) admin_security：主控密碼雜湊、兩步驟驗證金鑰、備用復原碼、已知裝置。沒有對任何前端角色開放，只有 service role（api/*.js）讀寫。
+create table if not exists admin_security (
+  id int primary key default 1 check (id = 1),
+  pin_hash text,
+  pin_changed_at timestamptz,
+  totp_secret text,
+  totp_pending text,
+  totp_enabled boolean not null default false,
+  totp_last_step bigint,
+  recovery_hashes text[] not null default '{}',
+  known_devices text[] not null default '{}'
+);
+alter table admin_security enable row level security;
+revoke all on admin_security from anon, authenticated, app_admin, app_driver, public;
+-- 2) 夥伴登入代碼：新設定或更改時必須是 6～12 碼數字（舊的 4 碼維持原樣，直到夥伴下次登入被要求更換）
+create or replace function check_driver_access_code() returns trigger language plpgsql as $$
+begin
+  if (tg_op = 'INSERT' or new.access_code is distinct from old.access_code)
+     and new.access_code is not null and new.access_code !~ '^[0-9]{6,12}$' then
+    raise exception '登入代碼要是 6～12 碼數字';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_check_access_code on drivers;
+create trigger trg_check_access_code before insert or update of access_code on drivers for each row execute function check_driver_access_code();
