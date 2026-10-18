@@ -1392,3 +1392,111 @@ begin
     execute format('create trigger trg_audit after insert or update or delete on %I for each row execute function audit_row()', t);
   end loop;
 end $$;
+
+-- PART 36：關閉「夥伴帳號繼承匿名身分較寬權限」的漏洞（2026-10-18）
+-- 根因：Supabase 預設把 public schema 所有資料表的完整存取權授予 anon／authenticated 角色，
+-- 而 app_driver 是 anon 的成員（繼承其權限）。前面各處針對 app_driver 的欄位層級授權
+-- （例如 assignments 只給 status/has_issue/issue_note）本意是限制寫入範圍，但因為繼承自 anon
+-- 的「整張表完整權限」疊加在上面，實際生效的是「較寬」的那一份——等於欄位限制形同虛設。
+-- 修法：收回 anon／authenticated 對 public schema 所有表的預設權限（它們本來就沒有任何列層級
+-- 政策能讀到資料，收回不影響任何功能），並把預設權限規則也一併改掉，避免之後新增的表又被
+-- Supabase 自動補回這份寬權限。之後夥伴、主控各自能做什麼，完全只看本檔案其他地方明寫的
+-- grant／RLS 政策。
+revoke all on all tables in schema public from anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on tables from anon, authenticated;
+
+-- 幾個原本被這份寬權限「順便」蓋過去、現在需要補回的正常功能權限：
+grant select on catalog_meta to app_admin, app_driver;
+grant select, insert, update, delete on announcement_recipients to app_admin;
+grant delete on notifications to app_admin;
+alter function bump_catalog_version() security definer set search_path = public;
+
+-- 應用層以外再加一道資料庫層防呆（即使有人繞過網頁、直接呼叫資料庫 API 也擋得住）：
+-- 1) 趟次狀態只能照 排定→進行中→完成 的順序走，且標記完成前所有店點必須已完成或已填未完成原因。
+create or replace function guard_assignment_partner() returns trigger
+language plpgsql as $$
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '') <> 'app_driver' then return new; end if;
+  if new.status is distinct from old.status then
+    if not ((old.status = 'scheduled' and new.status in ('in_progress','completed')) or (old.status = 'in_progress' and new.status = 'completed')) then
+      raise exception '趟次狀態不能這樣改';
+    end if;
+    if new.status = 'completed'
+       and exists (select 1 from assignment_drop_points p where p.assignment_id = old.id and p.status <> 'completed' and p.issue_reason is null and p.helper_id is null)
+       and not (coalesce(new.has_issue, false) and length(btrim(coalesce(new.issue_note, ''))) > 0) then
+      raise exception '還有店點沒有完成，請拍照或選擇未完成原因，並在備註說明';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_guard_assignment_partner on assignments;
+create trigger trg_guard_assignment_partner before update on assignments for each row execute function guard_assignment_partner();
+
+-- 2) 店點完成需要真的有照片、照片/附件路徑必須屬於這一趟、已上傳的送達照片不能被清掉、完成時間一律由伺服器現在的時間寫入（不接受夥伴端送來的時間）。
+create or replace function guard_drop_point_partner() returns trigger
+language plpgsql as $$
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '') <> 'app_driver' then return new; end if;
+  if old.status = 'completed' and new.status <> 'completed' then raise exception '已完成的店點不能改回未完成'; end if;
+  if old.photo_url is not null and new.photo_url is null then raise exception '不能移除送達照片'; end if;
+  if new.photo_url is distinct from old.photo_url and new.photo_url is not null and new.photo_url not like old.assignment_id::text || '/%' then
+    raise exception '照片路徑不屬於這個任務';
+  end if;
+  if new.status = 'completed' and old.status is distinct from 'completed' then
+    if new.photo_url is null then raise exception '店點完成需要送達照片'; end if;
+    new.completed_at := now();
+  elsif new.photo_url is distinct from old.photo_url then
+    new.completed_at := now();
+  else
+    new.completed_at := old.completed_at;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_guard_drop_point_partner on assignment_drop_points;
+create trigger trg_guard_drop_point_partner before update on assignment_drop_points for each row execute function guard_drop_point_partner();
+
+-- 3) 補充附件的路徑必須屬於對應的店點／任務。
+create or replace function guard_media_partner() returns trigger
+language plpgsql as $$
+declare aid uuid;
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '') <> 'app_driver' then return new; end if;
+  select assignment_id into aid from assignment_drop_points where id = new.assignment_drop_point_id;
+  if aid is null or new.media_url not like aid::text || '/%' then raise exception '附件路徑不屬於這個任務'; end if;
+  return new;
+end $$;
+drop trigger if exists trg_guard_media_partner on assignment_drop_point_media;
+create trigger trg_guard_media_partner before insert on assignment_drop_point_media for each row execute function guard_media_partner();
+
+-- 4) 勞報單狀態只能照 待回簽→已簽→已確認 走，簽名檔路徑要屬於這份勞報單，已確認的不能再改，夥伴不能自己把狀態改回「未簽名」。
+create or replace function guard_statement_partner() returns trigger
+language plpgsql as $$
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '') <> 'app_driver' then return new; end if;
+  if old.status = 'confirmed' then raise exception '這份勞報單已鎖定，不能再修改'; end if;
+  if new.status = 'signed' then
+    if new.signature_url is null or new.signature_url not like old.id::text || '.%' then raise exception '請先簽名'; end if;
+    new.signed_at := now();
+  elsif new.status = 'confirmed' then
+    if old.status <> 'signed' or new.signature_url is distinct from old.signature_url then raise exception '需要先簽名才能確認'; end if;
+    new.signed_at := old.signed_at;
+  else
+    raise exception '不能把勞報單改回未簽名，請聯絡主控退回';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_guard_statement_partner on statements;
+create trigger trg_guard_statement_partner before update on statements for each row execute function guard_statement_partner();
+
+-- 5) 「尚未自訂新代碼」的旗標，夥伴只能在「同時真的換了一組新代碼」時才能解除，不能單獨把旗標關掉卻沿用舊代碼。
+create or replace function guard_driver_partner() returns trigger
+language plpgsql as $$
+begin
+  if coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '') <> 'app_driver' then return new; end if;
+  if old.force_code_reset and not new.force_code_reset and new.access_code is not distinct from old.access_code then
+    raise exception '請先設定新的登入代碼';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_guard_driver_partner on drivers;
+create trigger trg_guard_driver_partner before update on drivers for each row execute function guard_driver_partner();

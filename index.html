@@ -2458,17 +2458,17 @@ function renderDrivers(c){
       </div>
       <div data-etapage="basic">
         <div class="grid3">
-          <div class="field"><label>姓名</label><input id="eName" value="${d.name}"></div>
-          <div class="field"><label>電話</label><input id="ePhone" value="${d.phone||''}"></div>
-          <div class="field"><label>LINE User ID</label><input id="eLine" value="${d.lineId||''}"></div>
+          <div class="field"><label>姓名</label><input id="eName" value="${escapeHtml(d.name)}"></div>
+          <div class="field"><label>電話</label><input id="ePhone" value="${escapeHtml(d.phone||'')}"></div>
+          <div class="field"><label>LINE User ID</label><input id="eLine" value="${escapeHtml(d.lineId||'')}"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>身分證字號（可提供勞報人員）</label><input id="eIdNumber" value="${d.idNumber||''}"></div>
+          <div class="field"><label>身分證字號（可提供勞報人員）</label><input id="eIdNumber" value="${escapeHtml(d.idNumber||'')}"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>車牌</label><input id="ePlate" value="${d.vehicle.plate||''}"></div>
-          <div class="field"><label>車型</label><input id="eVType" value="${d.vehicle.type||''}"></div>
-          <div class="field"><label>載重(kg)</label><input id="eVLoad" type="number" value="${d.vehicle.load||''}"></div>
+          <div class="field"><label>車牌</label><input id="ePlate" value="${escapeHtml(d.vehicle.plate||'')}"></div>
+          <div class="field"><label>車型</label><input id="eVType" value="${escapeHtml(d.vehicle.type||'')}"></div>
+          <div class="field"><label>載重(kg)</label><input id="eVLoad" type="number" value="${escapeHtml(String(d.vehicle.load||''))}"></div>
         </div>
         <div class="field" style="max-width:160px;"><label>狀態</label>
           <select id="eStatus"><option value="active" ${d.status==='active'?'selected':''}>在職</option><option value="inactive" ${d.status!=='active'?'selected':''}>停用</option></select>
@@ -2489,10 +2489,10 @@ function renderDrivers(c){
       </div>
       <div data-etapage="finance" hidden>
         <div class="grid4">
-          <div class="field"><label>銀行</label><input id="eBankName" value="${d.bank.bankName||''}"></div>
-          <div class="field"><label>分行</label><input id="eBranch" value="${d.bank.branch||''}"></div>
-          <div class="field"><label>帳號</label><input id="eAccount" value="${d.bank.account||''}"></div>
-          <div class="field"><label>戶名</label><input id="eHolder" value="${d.bank.holder||''}"></div>
+          <div class="field"><label>銀行</label><input id="eBankName" value="${escapeHtml(d.bank.bankName||'')}"></div>
+          <div class="field"><label>分行</label><input id="eBranch" value="${escapeHtml(d.bank.branch||'')}"></div>
+          <div class="field"><label>帳號</label><input id="eAccount" value="${escapeHtml(d.bank.account||'')}"></div>
+          <div class="field"><label>戶名</label><input id="eHolder" value="${escapeHtml(d.bank.holder||'')}"></div>
         </div>
       </div>
       <div style="display:flex; gap:8px; margin-top:10px;">
@@ -2510,7 +2510,7 @@ function renderDrivers(c){
         <div>
           <div class="driver-card-name">${d.name} <span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></div>
           <div class="driver-card-sub">
-            電話：${d.phone||'—'}　車牌：${d.vehicle.plate||'—'}<br>
+            電話：${escapeHtml(d.phone||'—')}　車牌：${escapeHtml(d.vehicle.plate||'—')}<br>
             登入代碼：<span class="mono">${d.accessCode}</span>
             ${d.unionInsured ? (d.unionProofPath ? '<span class="badge completed" style="margin-left:6px;">已投保職業工會</span>' : '<span class="badge pending" style="margin-left:6px;">工會：已勾選・缺證明圖檔</span>') : ''}
             ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
@@ -2701,10 +2701,10 @@ function openAllDriversModal(){
           <thead><tr><th>姓名</th><th>身分證字號</th><th>電話</th><th>LINE</th><th>狀態</th><th>車牌</th><th>車型</th><th>載重</th><th>銀行</th><th>分行</th><th>帳號</th><th>戶名</th></tr></thead>
           <tbody>
             ${state.data.drivers.map(d=>`<tr>
-              <td>${d.name}</td><td class="mono">${d.idNumber||'—'}</td><td>${d.phone||'—'}</td><td>${d.lineId||'—'}</td>
+              <td>${escapeHtml(d.name)}</td><td class="mono">${escapeHtml(d.idNumber||'—')}</td><td>${escapeHtml(d.phone||'—')}</td><td>${escapeHtml(d.lineId||'—')}</td>
               <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
-              <td class="mono">${d.vehicle.plate||'—'}</td><td>${d.vehicle.type||'—'}</td><td>${d.vehicle.load||'—'}</td>
-              <td>${d.bank.bankName||'—'}</td><td>${d.bank.branch||'—'}</td><td class="mono">${d.bank.account||'—'}</td><td>${d.bank.holder||'—'}</td>
+              <td class="mono">${escapeHtml(d.vehicle.plate||'—')}</td><td>${escapeHtml(d.vehicle.type||'—')}</td><td>${escapeHtml(String(d.vehicle.load||'—'))}</td>
+              <td>${escapeHtml(d.bank.bankName||'—')}</td><td>${escapeHtml(d.bank.branch||'—')}</td><td class="mono">${escapeHtml(d.bank.account||'—')}</td><td>${escapeHtml(d.bank.holder||'—')}</td>
             </tr>`).join('') || `<tr><td colspan="12"><div class="empty">尚無夥伴資料</div></td></tr>`}
           </tbody>
         </table></div>
@@ -5314,7 +5314,7 @@ function payrollAttachmentHtml(driver, monthStr, r, opts){
       <h3 style="text-align:center; margin:0 0 14px;">附件：${opts.period ? '代墊款明細' : Number(m)+'月代墊款明細'}</h3>
       <table>
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
-        <tr><td>所得人姓名</td><td>${driver.bank.holder||driver.name}</td><td>${opts.period ? '所屬期間' : '所屬月份'}</td><td>${opts.period ? opts.period.start+'～'+opts.period.end : monthStr}</td></tr>
+        <tr><td>所得人姓名</td><td>${escapeHtml(driver.bank.holder||driver.name)}</td><td>${opts.period ? '所屬期間' : '所屬月份'}</td><td>${opts.period ? opts.period.start+'～'+opts.period.end : monthStr}</td></tr>
       </table>
       <p style="font-size:12px; margin:12px 0 4px;">以下為所得人代墊（加油、車輛保養等）、發票憑證開立公司統編之款項，已包含在${opts.period ? '本期間' : '本月'}報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
       <table>
@@ -5368,9 +5368,9 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       <h3 style="text-align:center; margin:0 0 14px;">${opts.period ? '勞務報酬單' : Number(m)+'月勞務報酬單'}</h3>
       <table>
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
-        <tr><td>所得人姓名</td><td>${driver.bank.holder||driver.name}</td><td>身分證／居留證號</td><td>${driver.idNumber||'（未填寫）'}</td></tr>
+        <tr><td>所得人姓名</td><td>${escapeHtml(driver.bank.holder||driver.name)}</td><td>身分證／居留證號</td><td>${escapeHtml(driver.idNumber||'（未填寫）')}</td></tr>
         <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>銀行轉帳</td></tr>
-        <tr><td>銀行／分行</td><td>${driver.bank.bankName||'—'}／${driver.bank.branch||'—'}</td><td>帳號</td><td>${driver.bank.account||'—'}</td></tr>
+        <tr><td>銀行／分行</td><td>${escapeHtml(driver.bank.bankName||'—')}／${escapeHtml(driver.bank.branch||'—')}</td><td>帳號</td><td>${escapeHtml(driver.bank.account||'—')}</td></tr>
       </table>
       <h4 style="margin:14px 0 6px;">勞務內容</h4>
       <table>
@@ -7900,16 +7900,16 @@ function renderMyProfile(c){
     ${incomplete ? `<div class="note" style="border-color:var(--amber); color:#8A5A17;">電話、身分證字號、銀行帳戶資訊為必填，請補齊並儲存後才能使用其他功能。</div>` : ''}
     <div class="panel">
       <div class="grid4">
-        <div class="field"><label>電話 <span class="required-mark">*</span></label><input id="mpPhone" value="${d.phone||''}"></div>
-        <div class="field"><label>身分證字號（可提供勞報人員） <span class="required-mark">*</span></label><input id="mpIdNumber" value="${d.idNumber||''}"></div>
-        <div class="field"><label>車牌（選填）</label><input id="mpPlate" value="${d.vehicle.plate||''}"></div>
-        <div class="field"><label>車型（選填）</label><input id="mpVType" value="${d.vehicle.type||''}"></div>
+        <div class="field"><label>電話 <span class="required-mark">*</span></label><input id="mpPhone" value="${escapeHtml(d.phone||'')}"></div>
+        <div class="field"><label>身分證字號（可提供勞報人員） <span class="required-mark">*</span></label><input id="mpIdNumber" value="${escapeHtml(d.idNumber||'')}"></div>
+        <div class="field"><label>車牌（選填）</label><input id="mpPlate" value="${escapeHtml(d.vehicle.plate||'')}"></div>
+        <div class="field"><label>車型（選填）</label><input id="mpVType" value="${escapeHtml(d.vehicle.type||'')}"></div>
       </div>
       <div class="grid4">
-        <div class="field"><label>銀行 <span class="required-mark">*</span></label><input id="mpBankName" value="${d.bank.bankName||''}"></div>
-        <div class="field"><label>分行 <span class="required-mark">*</span></label><input id="mpBranch" value="${d.bank.branch||''}"></div>
-        <div class="field"><label>帳號 <span class="required-mark">*</span></label><input id="mpAccount" value="${d.bank.account||''}"></div>
-        <div class="field"><label>戶名 <span class="required-mark">*</span></label><input id="mpHolder" value="${d.bank.holder||''}"></div>
+        <div class="field"><label>銀行 <span class="required-mark">*</span></label><input id="mpBankName" value="${escapeHtml(d.bank.bankName||'')}"></div>
+        <div class="field"><label>分行 <span class="required-mark">*</span></label><input id="mpBranch" value="${escapeHtml(d.bank.branch||'')}"></div>
+        <div class="field"><label>帳號 <span class="required-mark">*</span></label><input id="mpAccount" value="${escapeHtml(d.bank.account||'')}"></div>
+        <div class="field"><label>戶名 <span class="required-mark">*</span></label><input id="mpHolder" value="${escapeHtml(d.bank.holder||'')}"></div>
       </div>
       <button class="btn amber" id="mpSave">儲存修改</button>
     </div>
