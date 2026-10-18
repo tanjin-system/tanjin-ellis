@@ -93,7 +93,7 @@ function renderLoginGate(message) {
     <div class="field">
       <label id="loginCodeLabel">登入代碼</label>
       <div class="pw-wrap">
-        <input id="loginCode" type="password" inputmode="numeric" maxlength="64">
+        <input id="loginCode" type="password" maxlength="64" autocapitalize="off" autocorrect="off" spellcheck="false">
         <button type="button" class="pw-toggle" id="loginCodeToggle" tabindex="-1">顯示</button>
       </div>
     </div>
@@ -126,7 +126,7 @@ function renderLoginGate(message) {
       forgotWrap.style.display = 'none';
     } else {
       codeLabel.textContent = '登入代碼';
-      codeInput.setAttribute('inputmode', 'numeric');
+      codeInput.removeAttribute('inputmode');
       codeInput.setAttribute('maxlength', '12');
       forgotWrap.style.display = 'block';
     }
@@ -173,18 +173,18 @@ function renderForceCodeResetGate(driverId, driverName) {
   gate.style.display = 'block';
   gate.innerHTML = `
     <h2 class="section-title">設定新的登入代碼</h2>
-    <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入、代碼被主控重設，或目前的代碼少於 6 碼時，需要自訂一組新的登入代碼（至少 6 碼數字）才能繼續使用。請不要用生日、手機號碼或 123456 這類容易被猜到的數字。</p>
+    <p class="section-sub">${driverName ? driverName + '，' : ''}為了帳號安全，首次登入、代碼被主控重設，或目前的代碼少於 6 碼時，需要自訂一組新的登入代碼（至少 6 碼，可用數字與英文大小寫）才能繼續使用。請不要用生日、手機號碼或 123456 這類容易被猜到的組合；數字加英文字母混用最安全。</p>
     <div class="field">
-      <label>新登入代碼（請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼數字）</label>
+      <label>新登入代碼（${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼，可用數字、英文大小寫）</label>
       <div class="pw-wrap">
-        <input id="newCode1" type="password" inputmode="numeric" maxlength="${DRIVER_CODE_MAX_LEN}">
+        <input id="newCode1" type="password" maxlength="${DRIVER_CODE_MAX_LEN}" autocapitalize="off" autocorrect="off" spellcheck="false">
         <button type="button" class="pw-toggle" id="newCode1Toggle" tabindex="-1">顯示</button>
       </div>
     </div>
     <div class="field">
       <label>再輸入一次確認</label>
       <div class="pw-wrap">
-        <input id="newCode2" type="password" inputmode="numeric" maxlength="${DRIVER_CODE_MAX_LEN}">
+        <input id="newCode2" type="password" maxlength="${DRIVER_CODE_MAX_LEN}" autocapitalize="off" autocorrect="off" spellcheck="false">
         <button type="button" class="pw-toggle" id="newCode2Toggle" tabindex="-1">顯示</button>
       </div>
     </div>
@@ -199,8 +199,8 @@ function renderForceCodeResetGate(driverId, driverName) {
     const c2 = document.getElementById('newCode2').value.trim();
     errEl.style.display = 'none';
     if (!c1) { errEl.textContent = '請輸入新代碼'; errEl.style.display = 'block'; return; }
-    if (!/^[0-9]+$/.test(c1) || c1.length < DRIVER_CODE_MIN_LEN || c1.length > DRIVER_CODE_MAX_LEN) {
-      errEl.textContent = `新代碼請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼數字`;
+    if (!/^[A-Za-z0-9]+$/.test(c1) || c1.length < DRIVER_CODE_MIN_LEN || c1.length > DRIVER_CODE_MAX_LEN) {
+      errEl.textContent = `新代碼請設定 ${DRIVER_CODE_MIN_LEN}～${DRIVER_CODE_MAX_LEN} 碼，只能用數字與英文字母（大小寫視為不同）`;
       errEl.style.display = 'block';
       return;
     }

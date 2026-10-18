@@ -1285,8 +1285,8 @@ revoke all on admin_security from anon, authenticated, app_admin, app_driver, pu
 create or replace function check_driver_access_code() returns trigger language plpgsql as $$
 begin
   if (tg_op = 'INSERT' or new.access_code is distinct from old.access_code)
-     and new.access_code is not null and new.access_code !~ '^[0-9]{6,12}$' then
-    raise exception '登入代碼要是 6～12 碼數字';
+     and new.access_code is not null and new.access_code !~ '^[A-Za-z0-9]{6,12}$' then
+    raise exception '登入代碼要是 6～12 碼，只能用數字與英文字母';
   end if;
   return new;
 end;

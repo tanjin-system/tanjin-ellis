@@ -515,7 +515,7 @@ async function regenerateDriverAccessCode(driverId) {
 // 只有本人（driver_id 來自 JWT）能改自己這一列的 access_code/force_code_reset，
 // 改完就把 force_code_reset 清成 false，之後登入不會再被強制要求重設。
 async function changeMyAccessCode(driverId, newCode) {
-  if (!/^[0-9]{6,12}$/.test(String(newCode))) throw new Error('新代碼請設定 6～12 碼數字');
+  if (!/^[A-Za-z0-9]{6,12}$/.test(String(newCode))) throw new Error('新代碼請設定 6～12 碼，只能用數字與英文字母');
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers')
     .update({ access_code: newCode, force_code_reset: false })
