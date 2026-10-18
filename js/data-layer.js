@@ -2392,6 +2392,49 @@ async function recordBackupDone() {
   } catch (err) { console.error('記錄備份時間失敗:', err.message); }
 }
 
+// ---------- 完整備份 ----------
+// 直接讀資料庫每張表的「原始資料列」（不是畫面上載入的 14 天視窗），分頁抓完整張表。
+// 不含：夥伴證件／簽名／照片檔（檔案在 Storage，照片本來就只留 30 天）、推播訂閱、登入嘗試紀錄。
+// settings 的推播私鑰（vapid_private）不放進備份（遺失會自動重建）。
+const BACKUP_TABLES = [
+  ['settings', 'id'], ['drivers', 'id'], ['channels', 'id'], ['origins', 'id'], ['drop_points', 'id'],
+  ['routes', 'id'], ['route_versions', 'id'], ['route_version_points', 'id'],
+  ['assignments', 'id'], ['assignment_drop_points', 'id'], ['assignment_drop_point_media', 'id'],
+  ['adjustments', 'id'], ['billing_adjustments', 'id'], ['statements', 'id'], ['trip_pay_adjustments', 'id'],
+  ['fuel_claims', 'id'], ['announcements', 'id'], ['announcement_recipients', ['announcement_id', 'driver_id']], ['notifications', 'id'],
+  ['stop_delegations', 'id'], ['settle_skips', ['driver_id', 'statement_month']], ['schedule_rollovers', 'week_start'], ['war_room_marks', 'assignment_id'],
+  ['catalog_meta', 'id']
+];
+async function fetchAllRowsRaw(table, orderCol) {
+  const supabase = getSupabase();
+  const PAGE = 1000, rows = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase.from(table).select('*');
+    [].concat(orderCol || []).forEach(c => { q = q.order(c, { ascending: true }); });
+    const { data, error } = await q.range(from, from + PAGE - 1);
+    if (error) throw new Error(error.message);
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE) break;
+  }
+  return rows;
+}
+// 回傳 { json, counts, errors }；onProgress(done, total, tableName)
+async function buildFullBackup(onProgress) {
+  const out = { meta: { app: '碳金Hub', kind: 'full-backup', createdAt: new Date().toISOString(), version: 1 }, tables: {} };
+  const counts = {}, errors = [];
+  for (let i = 0; i < BACKUP_TABLES.length; i++) {
+    const [table, orderCol] = BACKUP_TABLES[i];
+    if (onProgress) onProgress(i, BACKUP_TABLES.length, table);
+    try {
+      let rows = await fetchAllRowsRaw(table, orderCol);
+      if (table === 'settings') rows = rows.map(r => { const c = Object.assign({}, r); delete c.vapid_private; return c; });
+      out.tables[table] = rows; counts[table] = rows.length;
+    } catch (e) { errors.push(table + '：' + e.message); }
+  }
+  out.meta.counts = counts; out.meta.errors = errors;
+  return { json: JSON.stringify(out), counts, errors };
+}
+
 // 「匯出全部備份」沿用 demo 的 JSON.stringify(state.data)，只是資料來源換成即時查詢結果；
 // 「匯入覆蓋全系統」這個危險操作已依討論結果拿掉，不搬到正式版。
 

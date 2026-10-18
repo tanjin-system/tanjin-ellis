@@ -6,7 +6,7 @@
 //                    （例如主控用自己的手機測試夥伴帳號），換人時偏好設定重置。
 //   POST ?op=status    → 這支手機目前是不是登記給「現在登入的這個人」（畫面用這個判斷，不能只看手機本身有沒有訂閱）。
 //   POST ?op=test  → 夥伴或主控傳一則測試通知給「自己」。
-//   GET  ?op=cron  → 每天一次的排程（vercel.json）：前一天提醒隔天有任務的夥伴；月底最後一天提醒對帳。
+//   GET  ?op=cron  → 每天一次的排程（vercel.json）：前一天提醒隔天有任務的夥伴；月底最後一天提醒對帳；超過 7 天沒備份提醒主控。
 //                    用 push_log 去重（同一天只會發一次），且 16 點以前不動作，所以就算網址被別人呼叫也不會重複打擾。
 // 通知內容只放路線與日期，不放店名、金額、電話（會顯示在鎖定畫面上）。
 const webpush = require('web-push');
@@ -124,6 +124,17 @@ async function runCron() {
       { to: { all: true }, kind: 'statement', tag: 'statement-' + today.slice(0, 7), url: '/?go=my-earnings', title: '月底對帳', body: month + ' 月結束了，請到「我的報酬」確認本月任務與報酬是否正確' },
       { to: { admin: true }, kind: 'statement', tag: 'statement-admin-' + today.slice(0, 7), url: '/?go=slips', title: '月底對帳', body: month + ' 月結束了，記得進行月結：報酬結算與勞報單' }
     ]);
+  }
+  // 3) 備份提醒：超過 7 天沒下載完整備份（或從來沒有），每兩天提醒主控一次，直到備份為止
+  {
+    const { data: st } = await supabase.from('settings').select('last_backup_at').eq('id', 1).maybeSingle();
+    const last = st && st.last_backup_at ? new Date(st.last_backup_at).getTime() : null;
+    const days = last ? Math.floor((Date.now() - last) / 86400000) : null;
+    const bucket = Math.floor(Date.now() / (2 * 86400000));
+    if ((days === null || days >= 7) && await claim('backup:' + bucket)) {
+      out.backup = await sendMessages([{ to: { admin: true }, kind: 'backup', tag: 'backup-reminder', url: '/?go=settings',
+        title: '該備份資料了', body: (days === null ? '還沒有備份紀錄' : '已經 ' + days + ' 天沒有備份') + '，請到「系統設定」下載完整備份。' }]);
+    }
   }
   return out;
 }

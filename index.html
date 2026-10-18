@@ -2235,7 +2235,7 @@ async function renderHomeAdmin(c){
     if(state.tab!=='home') return; // 使用者可能已經切走這一頁
   }
   const p = computeProfitSnapshot();
-  // 備份提醒：超過7天沒按過「下載快照」或「顯示備份文字」就提醒——免費方案
+  // 備份提醒：超過7天沒有下載「完整備份」就提醒——免費方案
   // 沒有自動備份，全靠這個提醒讓人記得手動備份一次。
   const lastBackupAt = state.data.settings.lastBackupAt;
   const daysSinceBackup = lastBackupAt ? Math.floor((Date.now()-new Date(lastBackupAt).getTime())/86400000) : null;
@@ -6760,13 +6760,9 @@ function renderSettings(c){
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">資料備份</h3>
-      <p class="section-sub">Supabase 免費方案沒有自動備份機制，建議定期用下面的方式手動備份一份。</p>
-      <button class="btn ghost" id="exportAllData">下載目前資料快照（JSON）</button>
-      <div style="margin-top:10px;">
-        <label>或直接顯示備份文字，手動全選複製貼到記事本保存</label>
-        <button class="btn ghost" id="showBackupText">顯示備份文字</button>
-        <textarea id="backupTextArea" style="display:none; margin-top:8px; height:150px; font-family:monospace; font-size:11px;" readonly></textarea>
-      </div>
+      <p class="section-sub">Supabase 免費方案沒有自動備份，請<b>每週</b>下載一次完整備份，存在你自己的電腦或雲端硬碟。備份包含資料庫所有資料表的完整內容（含所有歷史趟次、勞報單、請款調整），不含照片與夥伴證件檔案。<b>檔案裡有身分證字號、銀行帳號等個資，請妥善保管，不要傳給別人。</b></p>
+      <p class="section-sub" id="backupLast" style="margin-top:0;">${state.data.settings.lastBackupAt ? '上次備份：'+new Date(state.data.settings.lastBackupAt).toLocaleString('zh-TW') : '還沒有備份紀錄'}</p>
+      <button class="btn amber" id="fullBackup">下載完整備份</button> <span id="fullBackupMsg" class="section-sub"></span>
     </div>
   `;
   fetchUsageStats().then(({dbSizeBytes, storageBuckets, storageTotalBytes})=>{
@@ -6812,27 +6808,27 @@ function renderSettings(c){
     try{ await updateAdminPin(pin); alert('已更新主控PIN碼。'); }
     catch(err){ alert(err.message); }
   };
-  document.getElementById('showBackupText').onclick = ()=>{
-    const ta = document.getElementById('backupTextArea');
-    ta.value = JSON.stringify(state.data);
-    ta.style.display = 'block';
-    ta.focus(); ta.select();
-    recordBackupDone();
-    alert('已顯示備份文字並自動選取，請用手機的「複製」功能（長按選取範圍會出現複製選項）複製後貼到記事本或LINE保存。');
-  };
-  document.getElementById('exportAllData').onclick = ()=>{
-    const json = JSON.stringify(state.data, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `碳金Hub系統備份_${todayStr()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(()=> URL.revokeObjectURL(url), 3000);
-    recordBackupDone();
-    alert('備份檔已下載，請妥善保存這個檔案。');
+  document.getElementById('fullBackup').onclick = async ()=>{
+    const btn = document.getElementById('fullBackup'), msg = document.getElementById('fullBackupMsg');
+    btn.disabled = true; msg.textContent = '準備中…';
+    try{
+      const { json, counts, errors } = await buildFullBackup((n, total, t)=>{ msg.textContent = `讀取資料表 ${n+1}/${total}（${t}）…`; });
+      if(errors.length){
+        if(!confirm('有幾張資料表讀取失敗，這份備份不完整：\n' + errors.join('\n') + '\n\n仍要下載嗎？（不完整的備份不會記錄為「已備份」）')){ msg.textContent = ''; btn.disabled = false; return; }
+      }
+      let blob, name = `碳金Hub完整備份_${todayStr()}`;
+      if(typeof CompressionStream === 'function'){
+        blob = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+        name += '.json.gz';
+      } else { blob = new Blob([json], { type:'application/json' }); name += '.json'; }
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=> URL.revokeObjectURL(url), 5000);
+      if(!errors.length){ await recordBackupDone(); const l = document.getElementById('backupLast'); if(l) l.textContent = '上次備份：'+new Date(state.data.settings.lastBackupAt).toLocaleString('zh-TW'); }
+      const total = Object.values(counts).reduce((x,y)=>x+y,0);
+      msg.textContent = `已下載（${total.toLocaleString()} 筆資料，${(blob.size/1024/1024).toFixed(1)} MB）`;
+    }catch(err){ msg.textContent = ''; alert('備份失敗：' + err.message); }
+    btn.disabled = false;
   };
 }
 
