@@ -1240,7 +1240,7 @@ $$;
 drop trigger if exists trg_auto_progress on assignment_drop_points;
 create trigger trg_auto_progress after update of status on assignment_drop_points for each row execute function auto_progress_assignment();
 
--- PART 33：夥伴帳號只讀「白名單欄位」（2026-10-18）— 尚未執行，先上線程式、確認夥伴端正常後才執行
+-- PART 33：夥伴帳號只讀「白名單欄位」（2026-10-18，已執行）
 -- 之前 app_driver 對 assignments／route_versions／channels 是整張表可讀，等於夥伴能讀到：
 --   * 所有路線版本的請款總額、各通路拆賬、夥伴費用（route_versions）
 --   * 各通路的計價費率、固定費用與客戶連結金鑰（channels）
@@ -1259,3 +1259,9 @@ grant select (id,route_id,start_date,end_date,created_at,distance_km) on route_v
 
 revoke select on channels from app_driver;
 grant select (id,name,period_type,start_day,end_day,status,formula_type,tax_mode,created_at) on channels to app_driver;
+
+-- app_driver 是 anon 角色的成員（繼承 anon 的權限），而 Supabase 預設把整表 SELECT 給 anon，
+-- 光收回 app_driver 自己的權限會被繼承蓋過、欄位限制不生效。所以這三張表也要收回 anon 的整表讀取
+-- （anon 本來就沒有任何列層級政策可以讀，收回不影響功能）。之後新增有敏感欄位的表，也要記得做同樣的事。
+-- 還原：grant select on assignments, route_versions, channels to anon;
+revoke select on assignments, route_versions, channels from anon;
