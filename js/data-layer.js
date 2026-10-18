@@ -30,8 +30,8 @@ function mapChannel(row) {
   return {
     id: row.id, name: row.name, periodType: row.period_type,
     startDay: row.start_day, endDay: row.end_day, status: row.status,
-    formulaType: row.formula_type, rateKm: Number(row.rate_km), ratePoint: Number(row.rate_point),
-    flatAmount: Number(row.flat_amount), taxMode: row.tax_mode || 'inclusive',
+    formulaType: row.formula_type, rateKm: Number(row.rate_km ?? 0), ratePoint: Number(row.rate_point ?? 0),
+    flatAmount: Number(row.flat_amount ?? 0), taxMode: row.tax_mode || 'inclusive',
     accessToken: row.access_token || ''
   };
 }
@@ -276,17 +276,29 @@ async function fetchAllAssignmentPages(buildQuery) {
 // 身份測試、再用主控登入，只要目錄版本沒變，主控就會拿到只有1位夥伴的縮水快取，
 // 看起來像夥伴資料全部不見（實際資料庫完好）。主控一份，每位夥伴各自一份。
 // 版本號碼後綴 v2：舊版（沒分身份）的快取直接作廢，不再被讀取。
+// ---- 夥伴帳號可讀欄位白名單（資料庫端同樣只開放這些欄位，見 schema.sql PART 33）----
+// 請款金額、費率、夥伴費用（路線版本）、客戶連結金鑰等敏感欄位只有主控讀得到；夥伴端查詢一律明確列欄位，
+// 不能用 select('*')，否則會因為沒權限的欄位整個查詢失敗。新增欄位預設不給夥伴，需要時要同步加到這裡與資料庫權限。
+const ASSIGNMENT_COLS_PARTNER = 'id,trip_date,route_id,driver_id,run_no,origin_snapshot,fare,distance_km,status,has_issue,issue_note,completed_at,payroll_fare_snapshot,created_at,extra_pay,paid_amount,paid_date,paid_method,paid_group,paid_period_start,paid_period_end,pay_due_date,pay_due_note,published,departed_at,fare_manual';
+const CHANNEL_COLS_PARTNER = 'id,name,period_type,start_day,end_day,status,formula_type,tax_mode,created_at';
+const ROUTE_VERSION_COLS_PARTNER = 'id,route_id,start_date,end_date,created_at,distance_km';
+function assignmentSelect() {
+  return (state.role === 'admin' ? '*' : ASSIGNMENT_COLS_PARTNER) + ', assignment_drop_points(*, assignment_drop_point_media(*))';
+}
+
 function catalogCacheSuffix() {
   const driverId = state.role === 'driver' ? (state.activeDriverId || 'unknown') : null;
   return driverId ? `driver_${driverId}` : 'admin';
 }
-const catalogCacheKey = () => `fleet_catalog_cache_v2_${catalogCacheSuffix()}`;
-const catalogVersionKey = () => `fleet_catalog_version_v2_${catalogCacheSuffix()}`;
+const catalogCacheKey = () => `fleet_catalog_cache_v3_${catalogCacheSuffix()}`;
+const catalogVersionKey = () => `fleet_catalog_version_v3_${catalogCacheSuffix()}`;
 
 async function loadAllData() {
   const supabase = getSupabase();
   // 清掉舊版（沒分身份）的目錄快取，避免佔著空間；新版快取用不同的 key，不受影響。
   try { localStorage.removeItem('fleet_catalog_cache_v1'); localStorage.removeItem('fleet_catalog_version_v1'); } catch (e) { /* 忽略 */ }
+  // v2 快取裡存有完整的通路費率／路線版本金額，改成白名單欄位後一律作廢並刪除（夥伴手機上不該再留著）
+  try { Object.keys(localStorage).filter(k => /^fleet_catalog_(cache|version)_v2_/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { /* 忽略 */ }
 
   let cachedCatalog = null;
   let remoteCatalogVersion = null;
@@ -313,12 +325,12 @@ async function loadAllData() {
     ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
     ...(cachedCatalog ? {} : {
       driversRes: supabase.from('drivers').select('*').order('created_at'),
-      channelsRes: supabase.from('channels').select('*').order('created_at'),
+      channelsRes: supabase.from('channels').select(isAdmin ? '*' : CHANNEL_COLS_PARTNER).order('created_at'),
       originsRes: supabase.from('origins').select('*').order('created_at'),
       dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
-      routesRes: supabase.from('routes').select('*, origins(address), route_versions(*, route_version_points(*))')
+      routesRes: supabase.from('routes').select('*, origins(address), route_versions(' + (isAdmin ? '*' : ROUTE_VERSION_COLS_PARTNER) + ', route_version_points(*))')
     }),
-    assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').gte('trip_date', assignmentsWindowStart)),
+    assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select(assignmentSelect()).gte('trip_date', assignmentsWindowStart)),
     adjustmentsRes: supabase.from('adjustments').select('*'),
     statementsRes: supabase.from('statements').select('*'),
     // billing_adjustments 只 grant app_admin，夥伴身份查會 permission denied，只有 admin 才查。
@@ -383,7 +395,7 @@ async function ensureAssignmentsRange(startDate) {
   const supabase = getSupabase();
   const { data, error } = await fetchAllAssignmentPages(() => supabase
     .from('assignments')
-    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
+    .select(assignmentSelect())
     .gte('trip_date', startDate)
     .lt('trip_date', windowStart));
   if (error) throw new Error('讀取較早的任務資料失敗：' + error.message);
@@ -408,7 +420,7 @@ async function refreshAssignmentsRange(start, end) {
   const supabase = getSupabase();
   const { data, error } = await fetchAllAssignmentPages(() => supabase
     .from('assignments')
-    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
+    .select(assignmentSelect())
     .gte('trip_date', start)
     .lte('trip_date', end));
   if (error) throw new Error('重新整理任務資料失敗：' + error.message);
@@ -432,7 +444,7 @@ async function fetchAssignmentsInRange(start, end) {
   const supabase = getSupabase();
   const { data, error } = await fetchAllAssignmentPages(() => supabase
     .from('assignments')
-    .select('*, assignment_drop_points(*, assignment_drop_point_media(*))')
+    .select(assignmentSelect())
     .gte('trip_date', start)
     .lte('trip_date', end));
   if (error) throw new Error('讀取任務資料失敗：' + error.message);
@@ -458,7 +470,7 @@ function trimAssignmentsToBaseWindow() {
 
 async function fetchAssignment(id) {
   const supabase = getSupabase();
-  const { data, error } = await supabase.from('assignments').select('*, assignment_drop_points(*, assignment_drop_point_media(*))').eq('id', id).single();
+  const { data, error } = await supabase.from('assignments').select(assignmentSelect()).eq('id', id).single();
   if (error) throw new Error('讀取任務失敗：' + error.message);
   const assignment = mapAssignment(data);
   await resolvePhotoUrls([assignment]);

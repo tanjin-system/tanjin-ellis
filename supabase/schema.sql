@@ -1239,3 +1239,23 @@ end;
 $$;
 drop trigger if exists trg_auto_progress on assignment_drop_points;
 create trigger trg_auto_progress after update of status on assignment_drop_points for each row execute function auto_progress_assignment();
+
+-- PART 33：夥伴帳號只讀「白名單欄位」（2026-10-18）— 尚未執行，先上線程式、確認夥伴端正常後才執行
+-- 之前 app_driver 對 assignments／route_versions／channels 是整張表可讀，等於夥伴能讀到：
+--   * 所有路線版本的請款總額、各通路拆賬、夥伴費用（route_versions）
+--   * 各通路的計價費率、固定費用與客戶連結金鑰（channels）
+--   * 自己趟次的請款快照（assignments）
+-- 改成欄位層級授權：收回整表讀取，只開放下列欄位（對應 js/data-layer.js 的 *_COLS_PARTNER，兩邊要一致）。
+-- 夥伴按「完成」時 compute_trip_billing 觸發器要讀通路費率，所以改成以系統身分執行（它是觸發器函式，不能被直接呼叫）；
+-- compute_trip_billing_values／recompute_trip_billing_snapshot 維持原樣（不開放給夥伴）。
+-- 還原：grant select on assignments, route_versions, channels to app_driver;
+alter function compute_trip_billing() security definer set search_path = public;
+
+revoke select on assignments from app_driver;
+grant select (id,trip_date,route_id,driver_id,run_no,origin_snapshot,fare,distance_km,status,has_issue,issue_note,completed_at,payroll_fare_snapshot,created_at,extra_pay,paid_amount,paid_date,paid_method,paid_group,paid_period_start,paid_period_end,pay_due_date,pay_due_note,published,departed_at,fare_manual) on assignments to app_driver;
+
+revoke select on route_versions from app_driver;
+grant select (id,route_id,start_date,end_date,created_at,distance_km) on route_versions to app_driver;
+
+revoke select on channels from app_driver;
+grant select (id,name,period_type,start_day,end_day,status,formula_type,tax_mode,created_at) on channels to app_driver;
