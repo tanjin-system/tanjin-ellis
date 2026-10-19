@@ -19,7 +19,7 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&display=swap');
   :root{
-    --navy:#1B2A41; --amber:#E0902E; --teal:#3F6E6C;
+    --navy:#1B2A41; --amber:#E0902E; --teal:#3F6E6C; --red:#C0392B;
     --paper:#F5F5F2; --panel:#FFFFFF; --border:#D9DCE1; --ink:#1B2129; --ink-soft:#5B6472;
     --radius:6px;
   }
@@ -41,12 +41,14 @@
   .meta-row b{ color:var(--ink); font-weight:600; }
   .grid{ display:flex; flex-direction:column; gap:10px; }
   .card{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; }
+  .card.changed{ border:2px solid var(--red); padding:11px 13px; }
   .card .route-name{ font-size:14.5px; font-weight:700; margin:0 0 8px; }
   .route-name .name-text{ font-size:14.5px; font-weight:700; }
   .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; margin-left:6px; white-space:nowrap; }
   .pill.am{ background:rgba(63,110,108,.12); color:var(--teal); }
   .pill.pm{ background:rgba(224,144,46,.16); color:var(--amber); }
   .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; margin-left:6px; white-space:nowrap; }
+  .changed-flag{ display:inline-flex; align-items:center; gap:4px; margin-left:8px; font-size:11px; font-weight:700; color:var(--red); white-space:nowrap; }
   /* 店點清單是格子狀的表格線＋最後一欄空白備註欄（可直接打字）。 */
   .stops{ margin-top:4px; }
   .stop-row{ display:flex; border:1px solid var(--border); border-bottom:none; }
@@ -101,13 +103,23 @@
 </main>
 <script>
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-// noteValues：備註欄位的內容，key 是「車次序號-站序」。使用者直接在網頁上打字（例如代收金額、
-// 簽收狀態），打字當下就同步進這個物件；重新整理/背景刷新重畫卡片時會從這裡讀回來，不會洗掉。
-// 列印用的就是當下畫面的真實輸入框，瀏覽器原生列印本來就會印出輸入框目前的值，不需要額外處理。
-let noteValues = {};
-function cardHtml(route, routeIdx){
+// 備註內容／「上次看到的行程」快照都存在瀏覽器的 localStorage，key 用起點本身的 id（originId），
+// 不是連結網址裡的 token——這樣主控重新產生連結、換了 token 之後，同一台裝置、同一個瀏覽器
+// 打開新連結還是讀得到舊的備註與比對基準，不用重填。因為是存在單一瀏覽器裡，換裝置/清瀏覽器
+// 資料就看不到了；多台裝置／多人共用備註目前不支援，之後若需要要改成存資料庫。
+function notesKey(originId){ return 'fleet_origin_notes_' + originId; }
+function snapKey(originId){ return 'fleet_origin_snapshot_' + originId; }
+function loadNotes(originId){ try{ return JSON.parse(localStorage.getItem(notesKey(originId)) || '{}'); }catch(e){ return {}; } }
+function saveNotes(originId, notes){ try{ localStorage.setItem(notesKey(originId), JSON.stringify(notes)); }catch(e){} }
+function loadSnapshot(originId){ try{ return JSON.parse(localStorage.getItem(snapKey(originId)) || '{}'); }catch(e){ return {}; } }
+function saveSnapshot(originId, snap){ try{ localStorage.setItem(snapKey(originId), JSON.stringify(snap)); }catch(e){} }
+// 用「車次名稱＋班別＋每一站的店名/通路」組一個指紋字串，拿來跟上次看到的比對行程是否被主控調整過。
+function routeFingerprint(route){ return route.name + '|' + route.shift + '|' + route.stops.map(s=>s.store+'/'+s.channel).join(','); }
+
+let currentOriginId = '', noteValues = {};
+function cardHtml(route, changed){
   const rows = route.stops.map((s,i)=>{
-    const key = routeIdx + '-' + i;
+    const key = route.id + '-' + i;
     const val = noteValues[key] || '';
     return `
     <div class="stop-row">
@@ -118,32 +130,45 @@ function cardHtml(route, routeIdx){
   }).join('') || `<div class="stop-row"><div class="label" style="color:var(--ink-soft);">尚未設定店點</div></div>`;
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
   return `
-    <div class="card">
-      <div class="route-name"><span class="name-text">${escapeHtml(route.name)}</span> <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span></div>
+    <div class="card${changed?' changed':''}">
+      <div class="route-name"><span class="name-text">${escapeHtml(route.name)}</span> <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span>${changed?'<span class="changed-flag">⬤ 行程已調整</span>':''}</div>
       <div class="stops">${rows}</div>
     </div>`;
 }
 document.addEventListener('input', (e)=>{
   if(e.target && e.target.classList && e.target.classList.contains('note-input')){
     noteValues[e.target.dataset.key] = e.target.value;
+    saveNotes(currentOriginId, noteValues);
   }
 });
 
 let currentOriginLabel = '', currentData = null;
 function renderRoutes(data){
   currentData = data;
+  currentOriginId = data.originId || '';
+  noteValues = loadNotes(currentOriginId);
   const content = document.getElementById('content');
   if(!data.routes.length){ content.innerHTML = '<div class="state-msg">目前沒有車次資料。</div>'; return; }
   const totalStops = data.routes.reduce((s,r)=>s+r.stops.length, 0);
+  const snap = loadSnapshot(currentOriginId);
+  const nextSnap = {};
+  const cardsHtml = data.routes.map(r=>{
+    const fp = routeFingerprint(r);
+    nextSnap[r.id] = fp;
+    // 只有「之前看過這個車次、而且內容跟現在不一樣」才算異動；第一次看到的車次不算異動。
+    const changed = Object.prototype.hasOwnProperty.call(snap, r.id) && snap[r.id] !== fp;
+    return cardHtml(r, changed);
+  }).join('');
   content.innerHTML = `
     <div class="meta-row">
       <span>共 <b>${data.routes.length}</b> 車次</span>
       <span>合計 <b>${totalStops}</b> 站</span>
       <span>查詢日期：<b>${escapeHtml(data.today)}</b></span>
     </div>
-    <div id="shots"><div class="grid">${data.routes.map((r,idx)=>cardHtml(r, idx)).join('')}</div></div>
-    <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本。</div>
+    <div id="shots"><div class="grid">${cardsHtml}</div></div>
+    <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本；紅框代表行程自上次查看後被主控調整過。</div>
   `;
+  saveSnapshot(currentOriginId, nextSnap); // 看過一次之後就更新快照，紅框只提示「上次看之後有改」，看過就算確認過了
 }
 
 async function main(){

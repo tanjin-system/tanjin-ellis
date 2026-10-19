@@ -37,11 +37,13 @@ module.exports = async (req, res) => {
         .slice().sort((a, b) => a.sequence_no - b.sequence_no)
         .map(p => ({ store: (p.drop_points && (p.drop_points.code || p.drop_points.address)) || '', channel: (p.drop_points && p.drop_points.channels && p.drop_points.channels.name) || '' }))
         : [];
-      return { name: r.name, shift: r.shift, stops };
+      return { id: r.id, name: r.name, shift: r.shift, stops };
     }).filter(r => r.stops.length);
 
     res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=15');
-    return res.status(200).json({ originLabel: origin.label || origin.address, originAddress: origin.address, today, routes: items });
+    // originId／每個車次的 id 都只是內部的 UUID，沒有金額或個資意義，前端用來做「本機資料存取 key」
+    // 跟「行程有沒有被主控調整過」的比對，不會因為 token 重新產生而跟著變。
+    return res.status(200).json({ originId: origin.id, originLabel: origin.label || origin.address, originAddress: origin.address, today, routes: items });
   } catch (e) {
     console.error('origin-data query failed:', e.message);
     return res.status(500).json({ error: '伺服器錯誤，請稍後再試' });
