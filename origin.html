@@ -41,16 +41,19 @@
   .meta-row b{ color:var(--ink); font-weight:600; }
   .grid{ display:flex; flex-direction:column; gap:10px; }
   .card{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; }
-  .card .route-name{ font-size:14.5px; font-weight:700; margin:0 0 6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; }
+  .card .route-name{ font-size:14.5px; font-weight:700; margin:0 0 8px; }
+  .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; margin-left:6px; }
   .pill.am{ background:rgba(63,110,108,.12); color:var(--teal); }
   .pill.pm{ background:rgba(224,144,46,.16); color:var(--amber); }
-  .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; }
-  .stops{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
-  .stops li{ display:flex; gap:8px; align-items:flex-start; font-size:13px; border-top:1px solid var(--border); padding-top:6px; }
-  .stops li:first-child{ border-top:none; padding-top:0; }
-  .stops .n{ flex:none; width:18px; height:18px; border-radius:4px; background:var(--paper); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px; }
-  .stops .label{ min-width:0; }
+  .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; margin-left:6px; }
+  /* 這裡刻意不用 flex/gap：下載圖片／PDF 用的截圖元件對 flex+gap 的支援不好，標題和編號方塊
+     整塊會憑空消失，改用最老派、相容性最好的「浮動＋外距」做數字方塊跟店名並排。 */
+  .stops{ list-style:none; margin:0; padding:0; }
+  .stops li{ font-size:13px; border-top:1px solid var(--border); padding-top:7px; margin-top:7px; }
+  .stops li::after{ content:''; display:table; clear:both; }
+  .stops li:first-child{ border-top:none; padding-top:0; margin-top:0; }
+  .stops .n{ float:left; width:18px; height:18px; line-height:17px; text-align:center; border-radius:4px; background:var(--paper); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; margin-right:8px; }
+  .stops .label{ overflow:hidden; display:block; }
   .stops .store{ font-weight:600; }
   .stops .channel{ color:var(--ink-soft); font-size:11.5px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
@@ -73,18 +76,11 @@
     .card:nth-child(4n+1){ break-before:page; page-break-before:always; }
     .card:first-child{ break-before:auto; page-break-before:auto; }
   }
-  /* 下載圖片：排版跟上面的列印一樣（兩欄、大約一頁四格），只是沒有實體分頁，
-     改成每 4 張卡片之間加一條虛線當作「頁與頁的分界」。只在 html2canvas 擷取的
-     複本上套用這個 class（見 downloadAsImage 的 onclone），畫面上平常看到的清單樣式不受影響。 */
+  /* 下載 PDF：排版跟上面的列印一樣（兩欄）。PDF 是一批（最多 4 張卡片）截一次圖、各自成一頁，
+     所以這裡不用再處理分頁，只需要兩欄排版本身。只在 html2canvas 擷取的複本上套用這個 class
+     （見 renderPdfBatch 的 onclone），畫面上平常看到的清單樣式不受影響。 */
   .shot-layout .grid{ display:block; font-size:0; }
-  .shot-layout .card{
-    display:inline-block; vertical-align:top; width:48%; font-size:13px;
-    margin:0 1% 10mm 1%;
-  }
-  .shot-layout .card:nth-child(4n+1){
-    margin-top:1%; padding-top:14px; border-top:2px dashed var(--border);
-  }
-  .shot-layout .card:first-child{ margin-top:0; padding-top:12px; border-top:none; }
+  .shot-layout .card{ display:inline-block; vertical-align:top; width:48%; font-size:13px; margin:0 1% 10mm 1%; }
 </style>
 </head>
 <body>
@@ -100,7 +96,7 @@
     </button>
     <button class="hbtn" id="dlBtn">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      下載圖片
+      下載 PDF
     </button>
   </div>
 </header>
@@ -123,49 +119,62 @@ function cardHtml(route){
     </div>`;
 }
 
-// 下載成圖片：html2canvas 只在真的按下載時才載入，平常開頁面不用多耗這 200KB 流量。
+// 下載 PDF：html2canvas／jsPDF 只在真的按下載時才載入，平常開頁面不用多耗這些流量。
 // 鎖定版本＋完整性雜湊（SRI）：跟主系統（index.html）用同一個版本，CDN 上的檔案只要有一個位元組不同就會拒絕執行。
-const HTML2CANVAS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-const HTML2CANVAS_SRI = 'sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H';
-let _h2cP = null;
-function loadHtml2Canvas(){
-  if(window.html2canvas) return Promise.resolve();
-  if(_h2cP) return _h2cP;
-  _h2cP = new Promise((res, rej)=>{
+const PDF_LIBS = [
+  ['https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', 'sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H'],
+  ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk']
+];
+const _libP = {};
+function loadLib(url, sri){
+  if(_libP[url]) return _libP[url];
+  _libP[url] = new Promise((res, rej)=>{
     const sc = document.createElement('script');
-    sc.src = HTML2CANVAS_URL; sc.integrity = HTML2CANVAS_SRI; sc.crossOrigin = 'anonymous';
-    sc.onload = ()=>res(); sc.onerror = ()=>{ _h2cP = null; rej(new Error('圖片元件載入失敗，請檢查網路後再試')); };
+    sc.src = url; sc.integrity = sri; sc.crossOrigin = 'anonymous';
+    sc.onload = ()=>res(); sc.onerror = ()=>{ delete _libP[url]; rej(new Error('元件載入失敗，請檢查網路後再試')); };
     document.head.appendChild(sc);
   });
-  return _h2cP;
+  return _libP[url];
 }
-let currentOriginLabel = '';
-// 只抓 #shots（純卡片），不含導覽列、統計列——下載的圖只需要卡片本身。
-async function downloadAsImage(btn){
-  const target = document.getElementById('shots');
-  if(!target) return;
+function loadPdfLibs(){ return Promise.all(PDF_LIBS.map(([u,s])=>loadLib(u,s))); }
+
+let currentOriginLabel = '', currentData = null;
+// 每批最多 4 張卡片截一次圖、各自成一個 PDF 頁面——不是先截一張長圖再切，是因為切的話
+// 很難準確切在卡片跟卡片的中間，又會變回「車次被腰斬」的老問題；一批一批截圖，每一頁
+// 的內容本來就只有這一批，不會有切到一半的卡片。
+async function downloadAsPdf(btn){
+  if(!currentData || !currentData.routes.length) return;
   const oldText = btn.textContent;
   btn.disabled = true; btn.textContent = '產生中…';
+  const shots = document.getElementById('shots');
   try{
-    await loadHtml2Canvas();
-    const canvas = await window.html2canvas(target, {
-      backgroundColor:'#ffffff', scale:2, useCORS:true,
-      onclone: (clonedDoc)=>{ const el = clonedDoc.getElementById('shots'); if(el) el.classList.add('shot-layout'); }
-    });
-    const blob = await new Promise(r=> canvas.toBlob(r, 'image/jpeg', 0.92));
-    if(!blob) throw new Error('圖片產生失敗');
-    const url = URL.createObjectURL(blob);
+    await loadPdfLibs();
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
+    const pageW = doc.internal.pageSize.getWidth(), pageH = doc.internal.pageSize.getHeight(), marginX = 12, marginY = 14;
+    const usableW = pageW - marginX*2, usableH = pageH - marginY*2;
+    const routes = currentData.routes, batches = [];
+    for(let i=0; i<routes.length; i+=4) batches.push(routes.slice(i, i+4));
+    for(let b=0; b<batches.length; b++){
+      shots.innerHTML = `<div class="grid shot-layout">${batches[b].map(cardHtml).join('')}</div>`;
+      const canvas = await window.html2canvas(shots, { backgroundColor:'#ffffff', scale:2, useCORS:true });
+      const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      let w = usableW, h = canvas.height * (usableW / canvas.width);
+      if(h > usableH){ const sc = usableH / h; h = usableH; w = w * sc; }
+      const x = marginX + (usableW - w) / 2;
+      if(b > 0) doc.addPage();
+      doc.addImage(imgData, 'JPEG', x, marginY, w, h);
+    }
     const today = new Date().toISOString().slice(0,10);
     const safeName = (currentOriginLabel || '行程').replace(/[\\/:*?"<>|]/g, '');
-    const a = document.createElement('a');
-    a.href = url; a.download = `${safeName}_${today}.jpg`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(()=> URL.revokeObjectURL(url), 5000);
+    doc.save(`${safeName}_${today}.pdf`);
   }catch(e){ alert(e.message || '下載失敗，請稍後再試'); }
+  finally{ renderRoutes(currentData); } // 還原成原本的完整清單，不要讓畫面停在只有最後一批的狀態
   btn.disabled = false; btn.textContent = oldText;
 }
 
 function renderRoutes(data){
+  currentData = data;
   const content = document.getElementById('content');
   if(!data.routes.length){ content.innerHTML = '<div class="state-msg">目前沒有車次資料。</div>'; return; }
   const totalStops = data.routes.reduce((s,r)=>s+r.stops.length, 0);
@@ -204,7 +213,7 @@ async function main(){
   document.getElementById('hbtns').style.display = 'flex';
   renderRoutes(data);
   document.getElementById('printBtn').onclick = ()=> window.print();
-  document.getElementById('dlBtn').onclick = (e)=> downloadAsImage(e.currentTarget);
+  document.getElementById('dlBtn').onclick = (e)=> downloadAsPdf(e.currentTarget);
 }
 
 // 這個頁面常被起點「加入主畫面」使用，跟主系統一樣會被手機背景凍結、放很久沒有真正重新整理過，
