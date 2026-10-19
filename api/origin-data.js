@@ -35,29 +35,13 @@ module.exports = async (req, res) => {
 
     const items = (routes || []).map(r => {
       const versions = r.route_versions || [];
-      // 今天生效的版本；如果有舊版本忘了填 end_date，會跟新版本同時符合「今天生效」，
-      // 這裡一定要取 start_date 最新的那個，不能用陣列裡隨便第一個符合的（資料庫回傳順序
-      // 不保證跟日期順序一致），不然主控明明已經新增新版本，頁面卻一直顯示舊的行程。
-      // 找不到任何今天生效的版本（例如資料還沒排到今天）就退回最近一個開始生效的版本，
-      // 不要整條車次直接消失不顯示。
-      const todaysVersions = versions.filter(v => v.start_date <= today && (!v.end_date || v.end_date >= today));
-      const active = (todaysVersions.length ? todaysVersions : versions)
-        .slice().sort((a, b) => b.start_date.localeCompare(a.start_date))[0] || null;
-      const stops = stopsOf(active);
-
-      // 預告未來異動：主控常常提前排好「明天/下週生效」的新版本，出發點不會剛好在生效當天
-      // 才第一次打開連結，必須提前讓他們看到——否則變動當天司機才發現行程不一樣就太晚了。
-      // 只取最近的下一個未來版本（生效日最早的那個），且內容真的跟目前不同才顯示，避免
-      // 單純重建同一份內容的版本也跳預告。
-      const futureVersions = versions.filter(v => v.start_date > today).sort((a, b) => a.start_date.localeCompare(b.start_date));
-      const nextVersion = futureVersions[0] || null;
-      const upcomingStops = stopsOf(nextVersion);
-      const upcoming = (nextVersion && upcomingStops.length && JSON.stringify(upcomingStops) !== JSON.stringify(stops))
-        ? { effectiveDate: nextVersion.start_date, stops: upcomingStops }
-        : null;
-
-      return { id: r.id, name: r.name, shift: r.shift, stops, upcoming };
-    }).filter(r => r.stops.length || r.upcoming);
+      // 這個頁面本來就不碰費率/請款——效期制（start_date/end_date）是給計費用的，主控
+      // 調整行程時不管生效日填今天還是未來，起點都要馬上看到最新排定的內容，不要等到
+      // 生效當天才顯示；同一台車如果有好幾個版本，一律取 start_date 最新的那一個。
+      const latest = versions.slice().sort((a, b) => b.start_date.localeCompare(a.start_date))[0] || null;
+      const stops = stopsOf(latest);
+      return { id: r.id, name: r.name, shift: r.shift, stops };
+    }).filter(r => r.stops.length);
 
     res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=15');
     // originId／每個車次的 id 都只是內部的 UUID，沒有金額或個資意義，前端用來做「本機資料存取 key」

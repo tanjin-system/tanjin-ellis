@@ -62,13 +62,6 @@
   .note-input:focus{ background:rgba(63,110,108,.08); }
   .stops .store{ font-weight:600; }
   .stops .channel{ color:var(--ink-soft); font-size:11.5px; }
-  /* 預告區塊：主控已經排好、但還沒到生效日的下一個行程版本，讓起點提前知道、提前準備，
-     不要等到生效當天司機才發現跟昨天不一樣。用琥珀色跟「已經生效、異動過」的紅框做區隔。 */
-  .upcoming{ margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); }
-  .upcoming-title{ font-size:12px; font-weight:700; color:var(--amber); margin-bottom:6px; }
-  .upcoming .stop-row{ border-color:rgba(224,144,46,.35); }
-  .upcoming .stop-row:last-child{ border-bottom-color:rgba(224,144,46,.35); }
-  .upcoming .stop-row>div{ border-right-color:rgba(224,144,46,.35); }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
 
   /* 列印：固定 A4、兩欄排版，大約一張紙四張卡片；每 4 張卡片強制換頁，卡片本身不被從中間切斷。
@@ -136,23 +129,10 @@ function cardHtml(route, changed){
     </div>`;
   }).join('') || `<div class="stop-row"><div class="label" style="color:var(--ink-soft);">尚未設定店點</div></div>`;
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
-  const upcomingHtml = route.upcoming ? (()=>{
-    const upRows = route.upcoming.stops.map((s,i)=>`
-      <div class="stop-row upcoming-row">
-        <div class="n">${i+1}</div>
-        <div class="label"><span class="store">${escapeHtml(s.store)}</span>${s.channel?` <span class="channel">${escapeHtml(s.channel)}</span>`:''}</div>
-      </div>`).join('');
-    return `
-      <div class="upcoming">
-        <div class="upcoming-title">⚠ 自 ${escapeHtml(route.upcoming.effectiveDate)} 起行程將異動為：</div>
-        <div class="stops">${upRows}</div>
-      </div>`;
-  })() : '';
   return `
     <div class="card${changed?' changed':''}">
       <div class="route-name"><span class="name-text">${escapeHtml(route.name)}</span> <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span>${changed?'<span class="changed-flag">⬤ 行程已調整</span>':''}</div>
       <div class="stops">${rows}</div>
-      ${upcomingHtml}
     </div>`;
 }
 document.addEventListener('input', (e)=>{
@@ -191,7 +171,7 @@ function renderRoutes(data, consume = true){
       <span>查詢日期：<b>${escapeHtml(data.today)}</b></span>
     </div>
     <div id="shots"><div class="grid">${cardsHtml}</div></div>
-    <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本；紅框代表行程自上次查看後被主控調整過，琥珀色區塊則是尚未生效、即將上路的新行程預告。</div>
+    <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本；紅框代表行程自上次查看後被主控調整過。</div>
   `;
   if(consume) saveSnapshot(currentOriginId, nextSnap); // 看過一次之後才更新快照，紅框只提示「上次看之後有改」
 }
