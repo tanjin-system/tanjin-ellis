@@ -47,11 +47,7 @@
   .pill.am{ background:rgba(63,110,108,.12); color:var(--teal); }
   .pill.pm{ background:rgba(224,144,46,.16); color:var(--amber); }
   .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; margin-left:6px; white-space:nowrap; }
-  /* 店點清單要做成格子狀的表格線＋最後一欄空白備註欄。這裡實測過兩種「看起來像表格」的做法在
-     html2canvas（下載圖片／PDF 用的擷取元件）都會出包：真正的 <table> 標籤會把整個區塊寬度
-     算錯（縮成約六成寬、文字擠成一團）；display:table/table-row/table-cell 的 div 雖然寬度正常，
-     但邊框和數字欄位整個不畫出來。改用 flex（不加 gap，間距都用 padding/border 做）每一列自己
-     排三欄，這個組合實測在擷取元件裡是穩定的。 */
+  /* 店點清單是格子狀的表格線＋最後一欄空白備註欄（可直接打字）。 */
   .stops{ margin-top:4px; }
   .stop-row{ display:flex; border:1px solid var(--border); border-bottom:none; }
   .stop-row:last-child{ border-bottom:1px solid var(--border); }
@@ -72,7 +68,8 @@
   @media print{
     /* CSS Grid 在 Chrome 列印分頁時支援不好，「卡片不能被切斷」常常失效、整張卡被腰斬，
        所以列印時改用區塊自然換行（inline-block）排兩欄，不用 Grid——這是瀏覽器分頁
-       真正可靠支援的排法。畫面上看到的還是 Grid，只有列印/下載圖片這裡換掉。 */
+       真正可靠支援的排法。畫面上看到的還是 Grid，只有列印這裡換掉。備註欄的輸入框瀏覽器
+       原生列印就會印出目前打的值，不用額外處理。 */
     body *{ visibility:hidden; }
     #shots, #shots *{ visibility:visible; }
     #shots{ position:absolute; left:0; top:0; width:100%; margin:0; padding:0; }
@@ -84,11 +81,6 @@
     .card:nth-child(4n+1){ break-before:page; page-break-before:always; }
     .card:first-child{ break-before:auto; page-break-before:auto; }
   }
-  /* 下載 PDF：排版跟上面的列印一樣（兩欄）。PDF 是一批（最多 4 張卡片）截一次圖、各自成一頁，
-     所以這裡不用再處理分頁，只需要兩欄排版本身。只在 html2canvas 擷取的複本上套用這個 class
-     （見 renderPdfBatch 的 onclone），畫面上平常看到的清單樣式不受影響。 */
-  .shot-layout .grid{ display:block; font-size:0; }
-  .shot-layout .card{ display:inline-block; vertical-align:top; width:48%; font-size:13px; margin:0 1% 10mm 1%; }
 </style>
 </head>
 <body>
@@ -102,14 +94,6 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
       列印
     </button>
-    <button class="hbtn" id="dlBtn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      下載 PDF
-    </button>
-    <button class="hbtn" id="xlsBtn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      下載 Excel
-    </button>
   </div>
 </header>
 <main>
@@ -118,22 +102,18 @@
 <script>
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 // noteValues：備註欄位的內容，key 是「車次序號-站序」。使用者直接在網頁上打字（例如代收金額、
-// 簽收狀態），打字當下就同步進這個物件，列印時用的就是當下畫面的真實輸入框，瀏覽器原生列印
-// 本來就會印出輸入框目前的值，不需要額外處理。下載 PDF 這種要另外截圖的管道，輸入框裡的文字
-// html2canvas 讀不到，所以截圖用的版本改成印成純文字（見 capture 參數）。
+// 簽收狀態），打字當下就同步進這個物件；重新整理/背景刷新重畫卡片時會從這裡讀回來，不會洗掉。
+// 列印用的就是當下畫面的真實輸入框，瀏覽器原生列印本來就會印出輸入框目前的值，不需要額外處理。
 let noteValues = {};
-function cardHtml(route, routeIdx, capture){
+function cardHtml(route, routeIdx){
   const rows = route.stops.map((s,i)=>{
     const key = routeIdx + '-' + i;
     const val = noteValues[key] || '';
-    const noteCell = capture
-      ? `<div class="note">${escapeHtml(val)}</div>`
-      : `<div class="note"><input type="text" class="note-input" data-key="${key}" value="${escapeHtml(val)}" autocomplete="off"></div>`;
     return `
     <div class="stop-row">
       <div class="n">${i+1}</div>
       <div class="label"><span class="store">${escapeHtml(s.store)}</span>${s.channel?` <span class="channel">${escapeHtml(s.channel)}</span>`:''}</div>
-      ${noteCell}
+      <div class="note"><input type="text" class="note-input" data-key="${key}" value="${escapeHtml(val)}" autocomplete="off"></div>
     </div>`;
   }).join('') || `<div class="stop-row"><div class="label" style="color:var(--ink-soft);">尚未設定店點</div></div>`;
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
@@ -149,86 +129,7 @@ document.addEventListener('input', (e)=>{
   }
 });
 
-// 下載 PDF：html2canvas／jsPDF 只在真的按下載時才載入，平常開頁面不用多耗這些流量。
-// 鎖定版本＋完整性雜湊（SRI）：跟主系統（index.html）用同一個版本，CDN 上的檔案只要有一個位元組不同就會拒絕執行。
-const PDF_LIBS = [
-  ['https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', 'sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H'],
-  ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk']
-];
-const _libP = {};
-function loadLib(url, sri){
-  if(_libP[url]) return _libP[url];
-  _libP[url] = new Promise((res, rej)=>{
-    const sc = document.createElement('script');
-    sc.src = url; sc.integrity = sri; sc.crossOrigin = 'anonymous';
-    sc.onload = ()=>res(); sc.onerror = ()=>{ delete _libP[url]; rej(new Error('元件載入失敗，請檢查網路後再試')); };
-    document.head.appendChild(sc);
-  });
-  return _libP[url];
-}
-function loadPdfLibs(){ return Promise.all(PDF_LIBS.map(([u,s])=>loadLib(u,s))); }
-const XLSX_LIB = ['https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', 'sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA=='];
-
 let currentOriginLabel = '', currentData = null;
-// 每批最多 4 張卡片截一次圖、各自成一個 PDF 頁面——不是先截一張長圖再切，是因為切的話
-// 很難準確切在卡片跟卡片的中間，又會變回「車次被腰斬」的老問題；一批一批截圖，每一頁
-// 的內容本來就只有這一批，不會有切到一半的卡片。
-async function downloadAsPdf(btn){
-  if(!currentData || !currentData.routes.length) return;
-  const oldText = btn.textContent;
-  btn.disabled = true; btn.textContent = '產生中…';
-  const shots = document.getElementById('shots');
-  try{
-    await loadPdfLibs();
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
-    const pageW = doc.internal.pageSize.getWidth(), pageH = doc.internal.pageSize.getHeight(), marginX = 12, marginY = 14;
-    const usableW = pageW - marginX*2, usableH = pageH - marginY*2;
-    const routes = currentData.routes.map((r,idx)=>({ r, idx })), batches = [];
-    for(let i=0; i<routes.length; i+=4) batches.push(routes.slice(i, i+4));
-    for(let b=0; b<batches.length; b++){
-      shots.className = 'shot-layout';
-      shots.innerHTML = `<div class="grid">${batches[b].map(({r,idx})=>cardHtml(r, idx, true)).join('')}</div>`;
-      const canvas = await window.html2canvas(shots, { backgroundColor:'#ffffff', scale:2, useCORS:true });
-      const imgData = canvas.toDataURL('image/jpeg', 0.92);
-      let w = usableW, h = canvas.height * (usableW / canvas.width);
-      if(h > usableH){ const sc = usableH / h; h = usableH; w = w * sc; }
-      const x = marginX + (usableW - w) / 2;
-      if(b > 0) doc.addPage();
-      doc.addImage(imgData, 'JPEG', x, marginY, w, h);
-    }
-    const today = new Date().toISOString().slice(0,10);
-    const safeName = (currentOriginLabel || '行程').replace(/[\\/:*?"<>|]/g, '');
-    doc.save(`${safeName}_${today}.pdf`);
-  }catch(e){ alert(e.message || '下載失敗，請稍後再試'); }
-  finally{ renderRoutes(currentData); } // 還原成原本的完整清單，不要讓畫面停在只有最後一批的狀態
-  btn.disabled = false; btn.textContent = oldText;
-}
-
-// 下載 Excel：每個店點一列（車次／班別／站序／店名／通路／備註空欄），方便起點人員在電腦上
-// 排序、篩選或直接在備註欄打字記錄，跟列印/PDF 用的是同一份 currentData，資料一定一致。
-async function downloadAsExcel(btn){
-  if(!currentData || !currentData.routes.length) return;
-  const oldText = btn.textContent;
-  btn.disabled = true; btn.textContent = '產生中…';
-  try{
-    await loadLib(XLSX_LIB[0], XLSX_LIB[1]);
-    const rows = [['車次', '班別', '站序', '店名', '通路', '備註']];
-    currentData.routes.forEach((route, routeIdx)=>{
-      const shiftLabel = route.shift==='PM' ? '下午' : '上午';
-      route.stops.forEach((s,i)=>{ rows.push([route.name, shiftLabel, i+1, s.store, s.channel || '', noteValues[routeIdx+'-'+i] || '']); });
-    });
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{wch:22},{wch:6},{wch:6},{wch:22},{wch:14},{wch:18}];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '行程');
-    const today = new Date().toISOString().slice(0,10);
-    const safeName = (currentOriginLabel || '行程').replace(/[\\/:*?"<>|]/g, '');
-    XLSX.writeFile(wb, `${safeName}_${today}.xlsx`);
-  }catch(e){ alert(e.message || '下載失敗，請稍後再試'); }
-  btn.disabled = false; btn.textContent = oldText;
-}
-
 function renderRoutes(data){
   currentData = data;
   const content = document.getElementById('content');
@@ -240,7 +141,7 @@ function renderRoutes(data){
       <span>合計 <b>${totalStops}</b> 站</span>
       <span>查詢日期：<b>${escapeHtml(data.today)}</b></span>
     </div>
-    <div id="shots"><div class="grid">${data.routes.map((r,idx)=>cardHtml(r, idx, false)).join('')}</div></div>
+    <div id="shots"><div class="grid">${data.routes.map((r,idx)=>cardHtml(r, idx)).join('')}</div></div>
     <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本。</div>
   `;
 }
@@ -269,8 +170,6 @@ async function main(){
   document.getElementById('hbtns').style.display = 'flex';
   renderRoutes(data);
   document.getElementById('printBtn').onclick = ()=> window.print();
-  document.getElementById('dlBtn').onclick = (e)=> downloadAsPdf(e.currentTarget);
-  document.getElementById('xlsBtn').onclick = (e)=> downloadAsExcel(e.currentTarget);
 }
 
 // 這個頁面常被起點「加入主畫面」使用，跟主系統一樣會被手機背景凍結、放很久沒有真正重新整理過，
