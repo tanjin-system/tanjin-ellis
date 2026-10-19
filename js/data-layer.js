@@ -37,7 +37,7 @@ function mapChannel(row) {
 }
 
 function mapOrigin(row) {
-  return { id: row.id, address: row.address, label: row.label || '', status: row.status, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null };
+  return { id: row.id, address: row.address, label: row.label || '', status: row.status, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null, accessToken: row.access_token || '' };
 }
 
 function mapDropPoint(row) {
@@ -700,6 +700,18 @@ async function deleteOrDeactivateOrigin(originId) {
   if (error) throw new Error('刪除任務起點失敗：' + error.message);
   state.data.origins = state.data.origins.filter(o => o.id !== originId);
   return 'deleted';
+}
+
+// 任務起點專屬查詢連結（唯讀，給起點自己看目前生效的車次與店點順序，不含金額）：
+// 跟客戶連結（channels.access_token／regenerateChannelAccessToken）同一套做法。
+async function regenerateOriginAccessToken(originId) {
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b => b.toString(16).padStart(2, '0')).join('');
+  const supabase = getSupabase();
+  const { error } = await supabase.from('origins').update({ access_token: token }).eq('id', originId);
+  if (error) throw new Error('產生查詢連結失敗：' + error.message);
+  const og = state.data.origins.find(o => o.id === originId);
+  if (og) og.accessToken = token;
+  return token;
 }
 
 // ---------------- 地圖座標（地址轉座標、儲存） ----------------

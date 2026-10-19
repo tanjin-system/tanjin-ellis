@@ -3257,7 +3257,7 @@ let editingOgId = null;
 function renderOrigins(c){
   c.innerHTML = `
     <h2 class="section-title">任務起點資料庫</h2>
-    <p class="section-sub">先建立好常用任務起點，路線與週期任務清單中即可用選單挑選，不用每次手key。</p>
+    <p class="section-sub">先建立好常用任務起點，路線與週期任務清單中即可用選單挑選，不用每次手key。每個起點可以產生一條不用登入的查詢連結，給起點自己看目前生效的車次與店點順序（不含任何金額或夥伴資料），路線一有異動，連結裡看到的就是最新的，不用再截圖給他們。</p>
     <div class="panel">
       <div class="grid2">
         <div class="field"><label>地址</label><input id="ogAddr"></div>
@@ -3282,28 +3282,39 @@ function renderOgList(){
   el.innerHTML = `
     <div class="panel">
       <table>
-        <thead><tr><th>名稱</th><th>地址</th><th>地圖位置</th><th>狀態</th><th></th></tr></thead>
+        <thead><tr><th>名稱</th><th>地址</th><th>地圖位置</th><th>狀態</th><th>行程查詢連結</th><th></th></tr></thead>
         <tbody>
           ${state.data.origins.map(og=>{
             if(editingOgId === og.id){
-              return `<tr><td colspan="5">
+              return `<tr><td colspan="6">
                 <div class="grid2">
-                  <div class="field"><label>地址</label><input id="eogAddr" value="${og.address}"></div>
-                  <div class="field"><label>備註名稱</label><input id="eogLabel" value="${og.label||''}"></div>
+                  <div class="field"><label>地址</label><input id="eogAddr" value="${escapeHtml(og.address)}"></div>
+                  <div class="field"><label>備註名稱</label><input id="eogLabel" value="${escapeHtml(og.label||'')}"></div>
                 </div>
                 <button class="btn amber" data-saveog="${og.id}">儲存</button>
                 <button class="btn ghost" data-cancelog="${og.id}">取消</button>
               </td></tr>`;
             }
             const hasPos = og.lat!=null && og.lng!=null;
-            return `<tr><td>${og.label||'—'}</td><td>${og.address}</td><td>${hasPos?'<span style="color:var(--teal);">已定位</span>':'<span style="color:var(--danger);">還沒有位置</span>'} <button class="btn ghost" data-locog="${og.id}" style="padding:2px 8px; font-size:12px;">${hasPos?'修正':'指定位置'}</button></td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
+            const ogUrl = og.accessToken ? `${location.origin}/origin.html?token=${og.accessToken}` : '';
+            return `<tr><td>${escapeHtml(og.label||'—')}</td><td>${escapeHtml(og.address)}</td><td>${hasPos?'<span style="color:var(--teal);">已定位</span>':'<span style="color:var(--danger);">還沒有位置</span>'} <button class="btn ghost" data-locog="${og.id}" style="padding:2px 8px; font-size:12px;">${hasPos?'修正':'指定位置'}</button></td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
+            <td>${ogUrl ? `<input class="mono" readonly value="${ogUrl}" style="font-size:11px; padding:4px 6px; max-width:220px;" onclick="this.select()"> <button class="btn ghost" data-regenog="${og.id}" style="padding:2px 8px; font-size:12px;">重新產生</button>` : `<button class="btn ghost" data-genog="${og.id}" style="padding:2px 8px; font-size:12px;">產生連結</button>`}</td>
             <td><button class="btn ghost" data-editog="${og.id}">編輯</button> ${og.status!=='inactive'?`<button class="btn danger" data-del="${og.id}">刪除</button>`:''}</td></tr>`;
-          }).join('') || `<tr><td colspan="5"><div class="empty">尚無任務起點資料</div></td></tr>`}
+          }).join('') || `<tr><td colspan="6"><div class="empty">尚無任務起點資料</div></td></tr>`}
         </tbody>
       </table>
     </div>
   `;
   el.querySelectorAll('[data-locog]').forEach(btn=>{ btn.onclick = ()=> openLocate('origin', btn.dataset.locog); });
+  el.querySelectorAll('[data-genog]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await regenerateOriginAccessToken(btn.dataset.genog); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  el.querySelectorAll('[data-regenog]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('重新產生會讓舊的連結失效，這個起點要改用新連結。確定要繼續嗎？')) return;
+      try{ await regenerateOriginAccessToken(btn.dataset.regenog); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
   el.querySelectorAll('[data-editog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = btn.dataset.editog; renderOgList(); }; });
   el.querySelectorAll('[data-cancelog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = null; renderOgList(); }; });
   el.querySelectorAll('[data-saveog]').forEach(btn=>{

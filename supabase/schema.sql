@@ -1507,3 +1507,9 @@ create trigger trg_guard_driver_partner before update on drivers for each row ex
 -- 一樣會被要求重新輸入驗證碼。伺服器只存這組憑證的雜湊＋到期時間（見 admin_security.trusted_devices），
 -- 瀏覽器端的原始值外洩才有用、資料庫外洩沒用。詳細邏輯在 lib/adminSecurity.js／api/auth-admin.js。
 alter table admin_security add column if not exists trusted_devices jsonb not null default '[]'::jsonb;
+
+-- PART 38：任務起點專屬查詢連結（2026-10-19）
+-- 給起點自己看「目前生效的車次與店點順序」的唯讀公開連結，不含金額、不含夥伴資料，跟 channels.access_token
+-- （客戶查詢頁）是同一套做法：隨機亂碼，資料庫對 anon 角色完全鎖死，實際查詢一律經過 api/origin-data.js
+-- 用 service role 執行。
+alter table origins add column if not exists access_token text unique;

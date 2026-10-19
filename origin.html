@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>任務起點行程查詢</title>
+<link rel="icon" href="assets/icons/icon-192.png">
+<style>
+/* 版面：頂部起點資訊卡，下方依班次（上午／下午）分區，每個車次一張卡片，店點編號直向列出 */
+:root{
+  --bg:#EFEFEC; --panel:#FFFFFF; --ink:#262420; --ink-soft:#6B6860; --border:#DEDCD5;
+  --accent:#C4551B; --accent-soft:#F4E3D7; --am:#2F6F5E; --am-soft:#E3EFEC; --pm:#8A5A17; --pm-soft:#F2E8D5;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#17120E; --panel:#231C16; --ink:#F0ECE5; --ink-soft:#AFA89C; --border:#3A3129;
+    --accent:#E2884F; --accent-soft:#3A2416; --am:#79C9AE; --am-soft:#1C3530; --pm:#E0B15D; --pm-soft:#3A2C12;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box;}
+html,body{margin:0;}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"IBM Plex Sans TC","Noto Sans TC",system-ui,sans-serif;
+  padding:20px 16px 40px;
+}
+.wrap{max-width:860px; margin:0 auto;}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums;}
+.head{
+  background:var(--panel); border:1px solid var(--border); border-radius:14px;
+  padding:18px 20px; margin-bottom:22px;
+}
+.head .eyebrow{font-size:11.5px; letter-spacing:.08em; color:var(--ink-soft); text-transform:uppercase; margin:0 0 6px;}
+.head h1{font-size:24px; margin:0 0 6px; letter-spacing:-.01em;}
+.head .addr{font-size:13px; color:var(--ink-soft); margin:0;}
+.head .meta{
+  display:flex; flex-wrap:wrap; gap:14px; margin-top:14px; padding-top:14px;
+  border-top:1px solid var(--border); font-size:12.5px; color:var(--ink-soft);
+}
+.head .meta b{color:var(--ink); font-weight:600;}
+.shift-block{margin-bottom:28px;}
+.shift-title{display:flex; align-items:center; gap:10px; margin:0 0 12px; font-size:14px; font-weight:700;}
+.shift-dot{width:9px; height:9px; border-radius:50%; flex:none;}
+.shift-dot.am{background:var(--am);} .shift-dot.pm{background:var(--pm);}
+.shift-count{color:var(--ink-soft); font-weight:400;}
+.grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:14px;}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 16px 16px; display:flex; flex-direction:column; min-width:0;}
+.card .route-name{font-size:15.5px; font-weight:700; margin:0 0 2px;}
+.card .route-sub{display:flex; align-items:center; gap:8px; margin-bottom:10px;}
+.pill{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; line-height:1.6;}
+.pill.am{background:var(--am-soft); color:var(--am);}
+.pill.pm{background:var(--pm-soft); color:var(--pm);}
+.stop-n{color:var(--ink-soft); font-size:11.5px;}
+.stops{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px;}
+.stops li{display:flex; gap:9px; align-items:flex-start; font-size:13px; line-height:1.45;}
+.stops .n{flex:none; width:19px; height:19px; border-radius:5px; background:var(--bg); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px;}
+.stops .label{min-width:0;}
+.stops .store{font-weight:600;}
+.stops .channel{color:var(--ink-soft); font-size:11.5px;}
+.state-msg{text-align:center; color:var(--ink-soft); padding:60px 16px; font-size:13.5px;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="state-msg">載入中...</div></div>
+<script>
+function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function cardHtml(route){
+  const stops = route.stops.map((s,i)=>`
+    <li>
+      <span class="n">${i+1}</span>
+      <span class="label"><span class="store">${escapeHtml(s.store)}</span> ${s.channel?`<span class="channel">${escapeHtml(s.channel)}</span>`:''}</span>
+    </li>`).join('') || '<li class="label" style="color:var(--ink-soft);">尚未設定店點</li>';
+  const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
+  return `
+    <div class="card">
+      <div class="route-name">${escapeHtml(route.name)}</div>
+      <div class="route-sub">
+        <span class="pill ${shiftClass}">${shiftLabel}</span>
+        <span class="stop-n">共 ${route.stops.length} 站</span>
+      </div>
+      <ul class="stops">${stops}</ul>
+    </div>`;
+}
+async function main(){
+  const app = document.getElementById('app');
+  const token = new URLSearchParams(location.search).get('token');
+  if(!token){ app.innerHTML = '<div class="state-msg">這個連結少了存取金鑰，請跟主控確認最新連結。</div>'; return; }
+  let data;
+  try{
+    const res = await fetch('/api/origin-data?token=' + encodeURIComponent(token));
+    data = await res.json();
+    if(!res.ok) throw new Error(data.error || '載入失敗');
+  }catch(e){ app.innerHTML = `<div class="state-msg">${escapeHtml(e.message || '連結無效或已停用，請跟主控確認最新連結。')}</div>`; return; }
+
+  const am = data.routes.filter(r=>r.shift!=='PM'), pm = data.routes.filter(r=>r.shift==='PM');
+  const totalStops = data.routes.reduce((s,r)=>s+r.stops.length, 0);
+  app.innerHTML = `
+    <div class="head">
+      <p class="eyebrow">任務起點・行程查詢</p>
+      <h1>${escapeHtml(data.originLabel)}</h1>
+      <p class="addr">${escapeHtml(data.originAddress)}</p>
+      <div class="meta">
+        <span>共 <b>${data.routes.length}</b> 車次</span>
+        <span>合計 <b>${totalStops}</b> 站</span>
+        <span>查詢日期：<b class="mono">${escapeHtml(data.today)}</b></span>
+      </div>
+    </div>
+    ${am.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot am"></span>上午車次 <span class="shift-count">(${am.length})</span></div><div class="grid">${am.map(cardHtml).join('')}</div></div>` : ''}
+    ${pm.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot pm"></span>下午車次 <span class="shift-count">(${pm.length})</span></div><div class="grid">${pm.map(cardHtml).join('')}</div></div>` : ''}
+    ${!data.routes.length ? '<div class="state-msg">目前沒有車次資料。</div>' : ''}
+  `;
+}
+main();
+</script>
+</body>
+</html>
