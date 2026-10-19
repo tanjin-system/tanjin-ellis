@@ -1,89 +1,94 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow, noarchive">
 <title>任務起點行程查詢</title>
-<link rel="icon" href="assets/icons/icon-192.png">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<link rel="shortcut icon" href="favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png">
+<link rel="apple-touch-icon" sizes="152x152" href="assets/icons/apple-touch-icon-152.png">
+<link rel="apple-touch-icon" sizes="167x167" href="assets/icons/apple-touch-icon-167.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#F3E7CF">
+<meta name="apple-mobile-web-app-title" content="信興｜碳金 Hub">
 <style>
-/* 版面：頂部起點資訊卡，下方依班次（上午／下午）分區，每個車次一張卡片，店點編號直向列出。
-   固定白底黑字（不跟著系統深色模式），因為這頁常會被下載成圖片傳給店家，顏色要是固定的才不會印出來忽明忽暗。 */
-:root{
-  --bg:#FFFFFF; --panel:#FFFFFF; --ink:#171512; --ink-soft:#6B6860; --border:#E2E0D8;
-  --am:#2F6F5E; --am-soft:#E3EFEC; --pm:#8A5A17; --pm-soft:#F2E8D5; --accent:#C4551B;
-  color-scheme:light;
-}
-*{box-sizing:border-box;}
-html,body{margin:0;}
-body{
-  background:var(--bg); color:var(--ink);
-  font-family:"IBM Plex Sans TC","Noto Sans TC",system-ui,sans-serif;
-  padding:20px 16px 40px;
-}
-.wrap{max-width:860px; margin:0 auto;}
-.mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums;}
-.toolbar{display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-bottom:12px;}
-.dl-btn{
-  display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:var(--panel);
-  color:var(--ink); font-size:13px; font-weight:600; padding:8px 14px; border-radius:9px; cursor:pointer;
-  font-family:inherit;
-}
-.dl-btn:disabled{opacity:.55; cursor:default;}
-.dl-btn svg{flex:none;}
-.head{
-  background:var(--panel); border:1px solid var(--border); border-radius:14px;
-  box-shadow:0 1px 3px rgba(23,21,18,.06);
-  padding:18px 20px; margin-bottom:22px;
-}
-.head .eyebrow{font-size:11.5px; letter-spacing:.08em; color:var(--ink-soft); text-transform:uppercase; margin:0 0 6px;}
-.head h1{font-size:24px; margin:0 0 6px; letter-spacing:-.01em;}
-.head .addr{font-size:13px; color:var(--ink-soft); margin:0;}
-.head .meta{
-  display:flex; flex-wrap:wrap; gap:14px; margin-top:14px; padding-top:14px;
-  border-top:1px solid var(--border); font-size:12.5px; color:var(--ink-soft);
-}
-.head .meta b{color:var(--ink); font-weight:600;}
-.shift-block{margin-bottom:28px;}
-.shift-title{display:flex; align-items:center; gap:10px; margin:0 0 12px; font-size:14px; font-weight:700;}
-.shift-dot{width:9px; height:9px; border-radius:50%; flex:none;}
-.shift-dot.am{background:var(--am);} .shift-dot.pm{background:var(--pm);}
-.shift-count{color:var(--ink-soft); font-weight:400;}
-.grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:14px;}
-.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:0 1px 3px rgba(23,21,18,.06); padding:14px 16px 16px; display:flex; flex-direction:column; min-width:0;}
-.card .route-name{font-size:15.5px; font-weight:700; margin:0 0 2px;}
-.card .route-sub{display:flex; align-items:center; gap:8px; margin-bottom:10px;}
-.pill{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; line-height:1.6;}
-.pill.am{background:var(--am-soft); color:var(--am);}
-.pill.pm{background:var(--pm-soft); color:var(--pm);}
-.stop-n{color:var(--ink-soft); font-size:11.5px;}
-.stops{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px;}
-.stops li{display:flex; gap:9px; align-items:flex-start; font-size:13px; line-height:1.45;}
-.stops .n{flex:none; width:19px; height:19px; border-radius:5px; background:var(--bg); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px;}
-.stops .label{min-width:0;}
-.stops .store{font-weight:600;}
-.stops .channel{color:var(--ink-soft); font-size:11.5px;}
-.state-msg{text-align:center; color:var(--ink-soft); padding:60px 16px; font-size:13.5px;}
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&display=swap');
+  :root{
+    --navy:#1B2A41; --amber:#E0902E; --teal:#3F6E6C;
+    --paper:#F5F5F2; --panel:#FFFFFF; --border:#D9DCE1; --ink:#1B2129; --ink-soft:#5B6472;
+    --radius:6px;
+  }
+  *{box-sizing:border-box;}
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans TC',-apple-system,sans-serif; font-size:14px; line-height:1.55; }
+  header{ background:var(--navy); color:#fff; padding:16px 18px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+  header .htext h1{ font-size:16px; font-weight:600; margin:0; }
+  header .htext p{ font-size:12px; color:#B9C2CE; margin:4px 0 0; }
+  header .hbtns{ display:flex; gap:8px; flex-wrap:wrap; }
+  .hbtn{
+    display:inline-flex; align-items:center; gap:6px; border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.08);
+    color:#fff; font-size:12px; font-weight:600; padding:7px 11px; border-radius:var(--radius); cursor:pointer; font-family:inherit;
+  }
+  .hbtn:disabled{ opacity:.6; cursor:default; }
+  .hbtn svg{ flex:none; }
+  main{ max-width:560px; margin:0 auto; padding:14px; }
+  .state-msg{ text-align:center; color:var(--ink-soft); padding:60px 16px; font-size:13.5px; }
+  .meta-row{ display:flex; flex-wrap:wrap; gap:12px; color:var(--ink-soft); font-size:12.5px; margin:0 0 14px; }
+  .meta-row b{ color:var(--ink); font-weight:600; }
+  .grid{ display:flex; flex-direction:column; gap:10px; }
+  .card{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; }
+  .card .route-name{ font-size:14.5px; font-weight:700; margin:0 0 6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; }
+  .pill.am{ background:rgba(63,110,108,.12); color:var(--teal); }
+  .pill.pm{ background:rgba(224,144,46,.16); color:var(--amber); }
+  .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; }
+  .stops{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  .stops li{ display:flex; gap:8px; align-items:flex-start; font-size:13px; border-top:1px solid var(--border); padding-top:6px; }
+  .stops li:first-child{ border-top:none; padding-top:0; }
+  .stops .n{ flex:none; width:18px; height:18px; border-radius:4px; background:var(--paper); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px; }
+  .stops .label{ min-width:0; }
+  .stops .store{ font-weight:600; }
+  .stops .channel{ color:var(--ink-soft); font-size:11.5px; }
+  .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
 
-/* 列印：固定 A4、兩欄排版，大約一張紙四張卡片；每 4 張卡片強制換頁，卡片本身不被從中間切斷。
-   上午／下午各自從新的一頁開始，不會兩個班次擠在同一張紙的中段。 */
-@page{ size:A4; margin:14mm 12mm; }
-@media print{
-  .toolbar{ display:none !important; }
-  body{ padding:0; }
-  .head{ box-shadow:none; }
-  .shift-block{ break-before:page; margin-bottom:0; }
-  .shift-block:first-of-type{ break-before:auto; }
-  .grid{ grid-template-columns:repeat(2, 1fr); gap:10mm; }
-  .card{ break-inside:avoid; box-shadow:none; }
-  .card:nth-child(4n+1){ break-before:page; }
-  .card:first-child{ break-before:auto; }
-}
+  /* 列印：固定 A4、兩欄排版，大約一張紙四張卡片；每 4 張卡片強制換頁，卡片本身不被從中間切斷。
+     只印卡片本身（#shots），不含上面的導覽列與統計列，頁首頁尾不會佔掉版面。 */
+  @page{ size:A4; margin:14mm 12mm; }
+  @media print{
+    body *{ visibility:hidden; }
+    #shots, #shots *{ visibility:visible; }
+    #shots{ position:absolute; left:0; top:0; width:100%; margin:0; padding:0; }
+    .grid{ display:grid; grid-template-columns:repeat(2, 1fr); gap:10mm; }
+    .card{ break-inside:avoid; }
+    .card:nth-child(4n+1){ break-before:page; }
+    .card:first-child{ break-before:auto; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap" id="app"><div class="state-msg">載入中...</div></div>
+<header>
+  <div class="htext">
+    <h1 id="originTitle">任務起點行程查詢</h1>
+    <p id="originSub">載入中...</p>
+  </div>
+  <div class="hbtns" id="hbtns" style="display:none;">
+    <button class="hbtn" id="printBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+      列印
+    </button>
+    <button class="hbtn" id="dlBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      下載圖片
+    </button>
+  </div>
+</header>
+<main>
+  <div id="content"><div class="state-msg">載入中...</div></div>
+</main>
 <script>
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function cardHtml(route){
@@ -91,15 +96,11 @@ function cardHtml(route){
     <li>
       <span class="n">${i+1}</span>
       <span class="label"><span class="store">${escapeHtml(s.store)}</span> ${s.channel?`<span class="channel">${escapeHtml(s.channel)}</span>`:''}</span>
-    </li>`).join('') || '<li class="label" style="color:var(--ink-soft);">尚未設定店點</li>';
+    </li>`).join('') || '<li class="label" style="color:var(--ink-soft); border-top:none;">尚未設定店點</li>';
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
   return `
     <div class="card">
-      <div class="route-name">${escapeHtml(route.name)}</div>
-      <div class="route-sub">
-        <span class="pill ${shiftClass}">${shiftLabel}</span>
-        <span class="stop-n">共 ${route.stops.length} 站</span>
-      </div>
+      <div class="route-name">${escapeHtml(route.name)} <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span></div>
       <ul class="stops">${stops}</ul>
     </div>`;
 }
@@ -121,11 +122,12 @@ function loadHtml2Canvas(){
   return _h2cP;
 }
 let currentOriginLabel = '';
+// 只抓 #shots（純卡片），不含導覽列、統計列——下載的圖只需要卡片本身。
 async function downloadAsImage(btn){
   const target = document.getElementById('shots');
   if(!target) return;
   const oldText = btn.textContent;
-  btn.disabled = true; btn.textContent = '圖片產生中…';
+  btn.disabled = true; btn.textContent = '產生中…';
   try{
     await loadHtml2Canvas();
     const canvas = await window.html2canvas(target, { backgroundColor:'#ffffff', scale:2, useCORS:true });
@@ -142,50 +144,89 @@ async function downloadAsImage(btn){
   btn.disabled = false; btn.textContent = oldText;
 }
 
+function renderRoutes(data){
+  const content = document.getElementById('content');
+  if(!data.routes.length){ content.innerHTML = '<div class="state-msg">目前沒有車次資料。</div>'; return; }
+  const totalStops = data.routes.reduce((s,r)=>s+r.stops.length, 0);
+  content.innerHTML = `
+    <div class="meta-row">
+      <span>共 <b>${data.routes.length}</b> 車次</span>
+      <span>合計 <b>${totalStops}</b> 站</span>
+      <span>查詢日期：<b>${escapeHtml(data.today)}</b></span>
+    </div>
+    <div id="shots"><div class="grid">${data.routes.map(cardHtml).join('')}</div></div>
+    <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本。</div>
+  `;
+}
+
 async function main(){
-  const app = document.getElementById('app');
-  const token = new URLSearchParams(location.search).get('token');
-  if(!token){ app.innerHTML = '<div class="state-msg">這個連結少了存取金鑰，請跟主控確認最新連結。</div>'; return; }
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token');
+  const sub = document.getElementById('originSub');
+  if(!token){
+    document.getElementById('content').innerHTML = '<div class="state-msg">這個連結少了存取金鑰，請跟主控確認最新連結。</div>';
+    sub.textContent = ''; return;
+  }
   let data;
   try{
     const res = await fetch('/api/origin-data?token=' + encodeURIComponent(token));
     data = await res.json();
     if(!res.ok) throw new Error(data.error || '載入失敗');
-  }catch(e){ app.innerHTML = `<div class="state-msg">${escapeHtml(e.message || '連結無效或已停用，請跟主控確認最新連結。')}</div>`; return; }
-
+  }catch(e){
+    document.getElementById('content').innerHTML = `<div class="state-msg">${escapeHtml(e.message || '連結無效或已停用，請跟主控確認最新連結。')}</div>`;
+    sub.textContent = ''; return;
+  }
   currentOriginLabel = data.originLabel || '';
-  const am = data.routes.filter(r=>r.shift!=='PM'), pm = data.routes.filter(r=>r.shift==='PM');
-  const totalStops = data.routes.reduce((s,r)=>s+r.stops.length, 0);
-  app.innerHTML = `
-    <div class="toolbar">
-      <button class="dl-btn" id="printBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-        列印（A4，一張四格）
-      </button>
-      <button class="dl-btn" id="dlBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        下載圖片（JPG）
-      </button>
-    </div>
-    <div id="shots">
-      <div class="head">
-        <p class="eyebrow">任務起點・行程查詢</p>
-        <h1>${escapeHtml(data.originLabel)}</h1>
-        <p class="addr">${escapeHtml(data.originAddress)}</p>
-        <div class="meta">
-          <span>共 <b>${data.routes.length}</b> 車次</span>
-          <span>合計 <b>${totalStops}</b> 站</span>
-          <span>查詢日期：<b class="mono">${escapeHtml(data.today)}</b></span>
-        </div>
-      </div>
-      ${am.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot am"></span>上午車次 <span class="shift-count">(${am.length})</span></div><div class="grid">${am.map(cardHtml).join('')}</div></div>` : ''}
-      ${pm.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot pm"></span>下午車次 <span class="shift-count">(${pm.length})</span></div><div class="grid">${pm.map(cardHtml).join('')}</div></div>` : ''}
-      ${!data.routes.length ? '<div class="state-msg">目前沒有車次資料。</div>' : ''}
-    </div>
-  `;
-  document.getElementById('dlBtn').onclick = (e)=> downloadAsImage(e.currentTarget);
+  document.getElementById('originTitle').textContent = data.originLabel + ' 行程查詢';
+  document.title = data.originLabel + ' 行程查詢';
+  sub.textContent = data.originAddress || '';
+  document.getElementById('hbtns').style.display = 'flex';
+  renderRoutes(data);
   document.getElementById('printBtn').onclick = ()=> window.print();
+  document.getElementById('dlBtn').onclick = (e)=> downloadAsImage(e.currentTarget);
 }
+
+// 這個頁面常被起點「加入主畫面」使用，跟主系統一樣會被手機背景凍結、放很久沒有真正重新整理過，
+// 看起來像行程無法同步。切回前景/每隔幾分鐘悄悄重新抓一次資料，並比對頁面內容有沒有更新過，
+// 有的話跳提示讓使用者自己決定要不要重新整理。
+async function refreshData(){
+  const token = new URLSearchParams(location.search).get('token');
+  if(!token) return;
+  try{
+    const res = await fetch('/api/origin-data?token=' + encodeURIComponent(token));
+    const data = await res.json();
+    if(!res.ok) return;
+    renderRoutes(data);
+  }catch(e){ /* 背景刷新失敗就靜默維持原本畫面 */ }
+}
+let __bootPageSignature = null;
+async function computePageSignature(){
+  try{
+    const res = await fetch(location.pathname, { method:'HEAD', cache:'no-store' });
+    if(!res.ok) return null;
+    return res.headers.get('etag') || null;
+  }catch(e){ return null; }
+}
+function showUpdateBanner(){
+  if(document.getElementById('updateBanner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBanner';
+  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; background:var(--amber); color:#fff; padding:10px 14px; text-align:center; font-size:13px; z-index:99999; cursor:pointer;';
+  bar.textContent = '📢 頁面已更新，點此重新整理 ↻';
+  bar.onclick = ()=> location.reload();
+  document.body.appendChild(bar);
+}
+async function checkForUpdate(){
+  const sig = await computePageSignature();
+  if(sig===null) return;
+  if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
+  if(sig !== __bootPageSignature) showUpdateBanner();
+}
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ checkForUpdate(); refreshData(); } });
+window.addEventListener('focus', ()=>{ checkForUpdate(); refreshData(); });
+setInterval(checkForUpdate, 5*60*1000);
+setInterval(refreshData, 3*60*1000);
+computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
 main();
 </script>
 </body>
