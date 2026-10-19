@@ -156,7 +156,8 @@ async function downloadAsPdf(btn){
     const routes = currentData.routes, batches = [];
     for(let i=0; i<routes.length; i+=4) batches.push(routes.slice(i, i+4));
     for(let b=0; b<batches.length; b++){
-      shots.innerHTML = `<div class="grid shot-layout">${batches[b].map(cardHtml).join('')}</div>`;
+      shots.className = 'shot-layout';
+      shots.innerHTML = `<div class="grid">${batches[b].map(cardHtml).join('')}</div>`;
       const canvas = await window.html2canvas(shots, { backgroundColor:'#ffffff', scale:2, useCORS:true });
       const imgData = canvas.toDataURL('image/jpeg', 0.92);
       let w = usableW, h = canvas.height * (usableW / canvas.width);
