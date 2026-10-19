@@ -73,6 +73,18 @@
     .card:nth-child(4n+1){ break-before:page; page-break-before:always; }
     .card:first-child{ break-before:auto; page-break-before:auto; }
   }
+  /* 下載圖片：排版跟上面的列印一樣（兩欄、大約一頁四格），只是沒有實體分頁，
+     改成每 4 張卡片之間加一條虛線當作「頁與頁的分界」。只在 html2canvas 擷取的
+     複本上套用這個 class（見 downloadAsImage 的 onclone），畫面上平常看到的清單樣式不受影響。 */
+  .shot-layout .grid{ display:block; font-size:0; }
+  .shot-layout .card{
+    display:inline-block; vertical-align:top; width:48%; font-size:13px;
+    margin:0 1% 10mm 1%;
+  }
+  .shot-layout .card:nth-child(4n+1){
+    margin-top:1%; padding-top:14px; border-top:2px dashed var(--border);
+  }
+  .shot-layout .card:first-child{ margin-top:0; padding-top:12px; border-top:none; }
 </style>
 </head>
 <body>
@@ -136,7 +148,10 @@ async function downloadAsImage(btn){
   btn.disabled = true; btn.textContent = '產生中…';
   try{
     await loadHtml2Canvas();
-    const canvas = await window.html2canvas(target, { backgroundColor:'#ffffff', scale:2, useCORS:true });
+    const canvas = await window.html2canvas(target, {
+      backgroundColor:'#ffffff', scale:2, useCORS:true,
+      onclone: (clonedDoc)=>{ const el = clonedDoc.getElementById('shots'); if(el) el.classList.add('shot-layout'); }
+    });
     const blob = await new Promise(r=> canvas.toBlob(r, 'image/jpeg', 0.92));
     if(!blob) throw new Error('圖片產生失敗');
     const url = URL.createObjectURL(blob);
