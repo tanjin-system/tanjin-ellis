@@ -43,18 +43,23 @@
   .card{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; }
   .card .route-name{ font-size:14.5px; font-weight:700; margin:0 0 8px; }
   .route-name .name-text{ font-size:14.5px; font-weight:700; }
-  .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; margin-left:6px; }
+  .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; margin-left:6px; white-space:nowrap; }
   .pill.am{ background:rgba(63,110,108,.12); color:var(--teal); }
   .pill.pm{ background:rgba(224,144,46,.16); color:var(--amber); }
-  .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; margin-left:6px; }
-  /* 這裡刻意不用 flex/gap，也不用 float：下載圖片／PDF 用的截圖元件（html2canvas）對這兩種排版
-     的支援都不好，標題文字和編號方塊會整塊憑空消失，改用最老派、相容性最好的「表格儲存格」
-     （display:table/table-cell）做數字方塊跟店名並排，這是少數截圖元件能正確處理的排法。 */
-  .stops{ list-style:none; margin:0; padding:0; }
-  .stops li{ font-size:13px; border-top:1px solid var(--border); padding-top:7px; margin-top:7px; display:table; width:100%; }
-  .stops li:first-child{ border-top:none; padding-top:0; margin-top:0; }
-  .stops .n{ display:table-cell; width:18px; height:18px; line-height:17px; text-align:center; vertical-align:top; border-radius:4px; background:var(--paper); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; }
-  .stops .label{ display:table-cell; vertical-align:top; padding-left:8px; }
+  .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; margin-left:6px; white-space:nowrap; }
+  /* 店點清單要做成格子狀的表格線＋最後一欄空白備註欄。這裡實測過兩種「看起來像表格」的做法在
+     html2canvas（下載圖片／PDF 用的擷取元件）都會出包：真正的 <table> 標籤會把整個區塊寬度
+     算錯（縮成約六成寬、文字擠成一團）；display:table/table-row/table-cell 的 div 雖然寬度正常，
+     但邊框和數字欄位整個不畫出來。改用 flex（不加 gap，間距都用 padding/border 做）每一列自己
+     排三欄，這個組合實測在擷取元件裡是穩定的。 */
+  .stops{ margin-top:4px; }
+  .stop-row{ display:flex; border:1px solid var(--border); border-bottom:none; }
+  .stop-row:last-child{ border-bottom:1px solid var(--border); }
+  .stop-row>div{ border-right:1px solid var(--border); padding:5px 7px; font-size:13px; }
+  .stop-row>div:last-child{ border-right:none; }
+  .stops .n{ width:22px; flex:none; text-align:center; color:var(--ink-soft); font-size:11px; font-weight:700; background:var(--paper); }
+  .stops .label{ flex:1; }
+  .stops .note{ width:56px; flex:none; }
   .stops .store{ font-weight:600; }
   .stops .channel{ color:var(--ink-soft); font-size:11.5px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
@@ -99,6 +104,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       下載 PDF
     </button>
+    <button class="hbtn" id="xlsBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      下載 Excel
+    </button>
   </div>
 </header>
 <main>
@@ -107,16 +116,17 @@
 <script>
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function cardHtml(route){
-  const stops = route.stops.map((s,i)=>`
-    <li>
-      <span class="n">${i+1}</span>
-      <span class="label"><span class="store">${escapeHtml(s.store)}</span> ${s.channel?`<span class="channel">${escapeHtml(s.channel)}</span>`:''}</span>
-    </li>`).join('') || '<li class="label" style="color:var(--ink-soft); border-top:none;">尚未設定店點</li>';
+  const rows = route.stops.map((s,i)=>`
+    <div class="stop-row">
+      <div class="n">${i+1}</div>
+      <div class="label"><span class="store">${escapeHtml(s.store)}</span>${s.channel?` <span class="channel">${escapeHtml(s.channel)}</span>`:''}</div>
+      <div class="note"></div>
+    </div>`).join('') || `<div class="stop-row"><div class="label" style="color:var(--ink-soft);">尚未設定店點</div></div>`;
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
   return `
     <div class="card">
       <div class="route-name"><span class="name-text">${escapeHtml(route.name)}</span> <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span></div>
-      <ul class="stops">${stops}</ul>
+      <div class="stops">${rows}</div>
     </div>`;
 }
 
@@ -138,6 +148,7 @@ function loadLib(url, sri){
   return _libP[url];
 }
 function loadPdfLibs(){ return Promise.all(PDF_LIBS.map(([u,s])=>loadLib(u,s))); }
+const XLSX_LIB = ['https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', 'sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA=='];
 
 let currentOriginLabel = '', currentData = null;
 // 每批最多 4 張卡片截一次圖、各自成一個 PDF 頁面——不是先截一張長圖再切，是因為切的話
@@ -172,6 +183,30 @@ async function downloadAsPdf(btn){
     doc.save(`${safeName}_${today}.pdf`);
   }catch(e){ alert(e.message || '下載失敗，請稍後再試'); }
   finally{ renderRoutes(currentData); } // 還原成原本的完整清單，不要讓畫面停在只有最後一批的狀態
+  btn.disabled = false; btn.textContent = oldText;
+}
+
+// 下載 Excel：每個店點一列（車次／班別／站序／店名／通路／備註空欄），方便起點人員在電腦上
+// 排序、篩選或直接在備註欄打字記錄，跟列印/PDF 用的是同一份 currentData，資料一定一致。
+async function downloadAsExcel(btn){
+  if(!currentData || !currentData.routes.length) return;
+  const oldText = btn.textContent;
+  btn.disabled = true; btn.textContent = '產生中…';
+  try{
+    await loadLib(XLSX_LIB[0], XLSX_LIB[1]);
+    const rows = [['車次', '班別', '站序', '店名', '通路', '備註']];
+    currentData.routes.forEach(route=>{
+      const shiftLabel = route.shift==='PM' ? '下午' : '上午';
+      route.stops.forEach((s,i)=>{ rows.push([route.name, shiftLabel, i+1, s.store, s.channel || '', '']); });
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:22},{wch:6},{wch:6},{wch:22},{wch:14},{wch:18}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '行程');
+    const today = new Date().toISOString().slice(0,10);
+    const safeName = (currentOriginLabel || '行程').replace(/[\\/:*?"<>|]/g, '');
+    XLSX.writeFile(wb, `${safeName}_${today}.xlsx`);
+  }catch(e){ alert(e.message || '下載失敗，請稍後再試'); }
   btn.disabled = false; btn.textContent = oldText;
 }
 
@@ -216,6 +251,7 @@ async function main(){
   renderRoutes(data);
   document.getElementById('printBtn').onclick = ()=> window.print();
   document.getElementById('dlBtn').onclick = (e)=> downloadAsPdf(e.currentTarget);
+  document.getElementById('xlsBtn').onclick = (e)=> downloadAsExcel(e.currentTarget);
 }
 
 // 這個頁面常被起點「加入主畫面」使用，跟主系統一樣會被手機背景凍結、放很久沒有真正重新整理過，
