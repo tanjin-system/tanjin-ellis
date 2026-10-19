@@ -42,18 +42,19 @@
   .grid{ display:flex; flex-direction:column; gap:10px; }
   .card{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; }
   .card .route-name{ font-size:14.5px; font-weight:700; margin:0 0 8px; }
+  .route-name .name-text{ font-size:14.5px; font-weight:700; }
   .pill{ font-size:11px; font-weight:600; padding:2px 9px; border-radius:10px; margin-left:6px; }
   .pill.am{ background:rgba(63,110,108,.12); color:var(--teal); }
   .pill.pm{ background:rgba(224,144,46,.16); color:var(--amber); }
   .stop-n{ color:var(--ink-soft); font-weight:400; font-size:12px; margin-left:6px; }
-  /* 這裡刻意不用 flex/gap：下載圖片／PDF 用的截圖元件對 flex+gap 的支援不好，標題和編號方塊
-     整塊會憑空消失，改用最老派、相容性最好的「浮動＋外距」做數字方塊跟店名並排。 */
+  /* 這裡刻意不用 flex/gap，也不用 float：下載圖片／PDF 用的截圖元件（html2canvas）對這兩種排版
+     的支援都不好，標題文字和編號方塊會整塊憑空消失，改用最老派、相容性最好的「表格儲存格」
+     （display:table/table-cell）做數字方塊跟店名並排，這是少數截圖元件能正確處理的排法。 */
   .stops{ list-style:none; margin:0; padding:0; }
-  .stops li{ font-size:13px; border-top:1px solid var(--border); padding-top:7px; margin-top:7px; }
-  .stops li::after{ content:''; display:table; clear:both; }
+  .stops li{ font-size:13px; border-top:1px solid var(--border); padding-top:7px; margin-top:7px; display:table; width:100%; }
   .stops li:first-child{ border-top:none; padding-top:0; margin-top:0; }
-  .stops .n{ float:left; width:18px; height:18px; line-height:17px; text-align:center; border-radius:4px; background:var(--paper); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; margin-right:8px; }
-  .stops .label{ overflow:hidden; display:block; }
+  .stops .n{ display:table-cell; width:18px; height:18px; line-height:17px; text-align:center; vertical-align:top; border-radius:4px; background:var(--paper); border:1px solid var(--border); color:var(--ink-soft); font-size:10.5px; font-weight:700; }
+  .stops .label{ display:table-cell; vertical-align:top; padding-left:8px; }
   .stops .store{ font-weight:600; }
   .stops .channel{ color:var(--ink-soft); font-size:11.5px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
@@ -114,7 +115,7 @@ function cardHtml(route){
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
   return `
     <div class="card">
-      <div class="route-name">${escapeHtml(route.name)} <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span></div>
+      <div class="route-name"><span class="name-text">${escapeHtml(route.name)}</span> <span class="pill ${shiftClass}">${shiftLabel}</span> <span class="stop-n">共 ${route.stops.length} 站</span></div>
       <ul class="stops">${stops}</ul>
     </div>`;
 }
