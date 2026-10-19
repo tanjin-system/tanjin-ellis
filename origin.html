@@ -5,19 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>任務起點行程查詢</title>
 <link rel="icon" href="assets/icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
 <style>
-/* 版面：頂部起點資訊卡，下方依班次（上午／下午）分區，每個車次一張卡片，店點編號直向列出 */
+/* 版面：頂部起點資訊卡，下方依班次（上午／下午）分區，每個車次一張卡片，店點編號直向列出。
+   固定白底黑字（不跟著系統深色模式），因為這頁常會被下載成圖片傳給店家，顏色要是固定的才不會印出來忽明忽暗。 */
 :root{
-  --bg:#EFEFEC; --panel:#FFFFFF; --ink:#262420; --ink-soft:#6B6860; --border:#DEDCD5;
-  --accent:#C4551B; --accent-soft:#F4E3D7; --am:#2F6F5E; --am-soft:#E3EFEC; --pm:#8A5A17; --pm-soft:#F2E8D5;
+  --bg:#FFFFFF; --panel:#FFFFFF; --ink:#171512; --ink-soft:#6B6860; --border:#E2E0D8;
+  --am:#2F6F5E; --am-soft:#E3EFEC; --pm:#8A5A17; --pm-soft:#F2E8D5; --accent:#C4551B;
   color-scheme:light;
-}
-@media (prefers-color-scheme: dark){
-  :root{
-    --bg:#17120E; --panel:#231C16; --ink:#F0ECE5; --ink-soft:#AFA89C; --border:#3A3129;
-    --accent:#E2884F; --accent-soft:#3A2416; --am:#79C9AE; --am-soft:#1C3530; --pm:#E0B15D; --pm-soft:#3A2C12;
-    color-scheme:dark;
-  }
 }
 *{box-sizing:border-box;}
 html,body{margin:0;}
@@ -28,8 +24,17 @@ body{
 }
 .wrap{max-width:860px; margin:0 auto;}
 .mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums;}
+.toolbar{display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-bottom:12px;}
+.dl-btn{
+  display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:var(--panel);
+  color:var(--ink); font-size:13px; font-weight:600; padding:8px 14px; border-radius:9px; cursor:pointer;
+  font-family:inherit;
+}
+.dl-btn:disabled{opacity:.55; cursor:default;}
+.dl-btn svg{flex:none;}
 .head{
   background:var(--panel); border:1px solid var(--border); border-radius:14px;
+  box-shadow:0 1px 3px rgba(23,21,18,.06);
   padding:18px 20px; margin-bottom:22px;
 }
 .head .eyebrow{font-size:11.5px; letter-spacing:.08em; color:var(--ink-soft); text-transform:uppercase; margin:0 0 6px;}
@@ -46,7 +51,7 @@ body{
 .shift-dot.am{background:var(--am);} .shift-dot.pm{background:var(--pm);}
 .shift-count{color:var(--ink-soft); font-weight:400;}
 .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:14px;}
-.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 16px 16px; display:flex; flex-direction:column; min-width:0;}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:0 1px 3px rgba(23,21,18,.06); padding:14px 16px 16px; display:flex; flex-direction:column; min-width:0;}
 .card .route-name{font-size:15.5px; font-weight:700; margin:0 0 2px;}
 .card .route-sub{display:flex; align-items:center; gap:8px; margin-bottom:10px;}
 .pill{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; line-height:1.6;}
@@ -60,6 +65,21 @@ body{
 .stops .store{font-weight:600;}
 .stops .channel{color:var(--ink-soft); font-size:11.5px;}
 .state-msg{text-align:center; color:var(--ink-soft); padding:60px 16px; font-size:13.5px;}
+
+/* 列印：固定 A4、兩欄排版，大約一張紙四張卡片；每 4 張卡片強制換頁，卡片本身不被從中間切斷。
+   上午／下午各自從新的一頁開始，不會兩個班次擠在同一張紙的中段。 */
+@page{ size:A4; margin:14mm 12mm; }
+@media print{
+  .toolbar{ display:none !important; }
+  body{ padding:0; }
+  .head{ box-shadow:none; }
+  .shift-block{ break-before:page; margin-bottom:0; }
+  .shift-block:first-of-type{ break-before:auto; }
+  .grid{ grid-template-columns:repeat(2, 1fr); gap:10mm; }
+  .card{ break-inside:avoid; box-shadow:none; }
+  .card:nth-child(4n+1){ break-before:page; }
+  .card:first-child{ break-before:auto; }
+}
 </style>
 </head>
 <body>
@@ -83,6 +103,45 @@ function cardHtml(route){
       <ul class="stops">${stops}</ul>
     </div>`;
 }
+
+// 下載成圖片：html2canvas 只在真的按下載時才載入，平常開頁面不用多耗這 200KB 流量。
+// 鎖定版本＋完整性雜湊（SRI）：跟主系統（index.html）用同一個版本，CDN 上的檔案只要有一個位元組不同就會拒絕執行。
+const HTML2CANVAS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+const HTML2CANVAS_SRI = 'sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H';
+let _h2cP = null;
+function loadHtml2Canvas(){
+  if(window.html2canvas) return Promise.resolve();
+  if(_h2cP) return _h2cP;
+  _h2cP = new Promise((res, rej)=>{
+    const sc = document.createElement('script');
+    sc.src = HTML2CANVAS_URL; sc.integrity = HTML2CANVAS_SRI; sc.crossOrigin = 'anonymous';
+    sc.onload = ()=>res(); sc.onerror = ()=>{ _h2cP = null; rej(new Error('圖片元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _h2cP;
+}
+let currentOriginLabel = '';
+async function downloadAsImage(btn){
+  const target = document.getElementById('shots');
+  if(!target) return;
+  const oldText = btn.textContent;
+  btn.disabled = true; btn.textContent = '圖片產生中…';
+  try{
+    await loadHtml2Canvas();
+    const canvas = await window.html2canvas(target, { backgroundColor:'#ffffff', scale:2, useCORS:true });
+    const blob = await new Promise(r=> canvas.toBlob(r, 'image/jpeg', 0.92));
+    if(!blob) throw new Error('圖片產生失敗');
+    const url = URL.createObjectURL(blob);
+    const today = new Date().toISOString().slice(0,10);
+    const safeName = (currentOriginLabel || '行程').replace(/[\\/:*?"<>|]/g, '');
+    const a = document.createElement('a');
+    a.href = url; a.download = `${safeName}_${today}.jpg`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=> URL.revokeObjectURL(url), 5000);
+  }catch(e){ alert(e.message || '下載失敗，請稍後再試'); }
+  btn.disabled = false; btn.textContent = oldText;
+}
+
 async function main(){
   const app = document.getElementById('app');
   const token = new URLSearchParams(location.search).get('token');
@@ -94,23 +153,38 @@ async function main(){
     if(!res.ok) throw new Error(data.error || '載入失敗');
   }catch(e){ app.innerHTML = `<div class="state-msg">${escapeHtml(e.message || '連結無效或已停用，請跟主控確認最新連結。')}</div>`; return; }
 
+  currentOriginLabel = data.originLabel || '';
   const am = data.routes.filter(r=>r.shift!=='PM'), pm = data.routes.filter(r=>r.shift==='PM');
   const totalStops = data.routes.reduce((s,r)=>s+r.stops.length, 0);
   app.innerHTML = `
-    <div class="head">
-      <p class="eyebrow">任務起點・行程查詢</p>
-      <h1>${escapeHtml(data.originLabel)}</h1>
-      <p class="addr">${escapeHtml(data.originAddress)}</p>
-      <div class="meta">
-        <span>共 <b>${data.routes.length}</b> 車次</span>
-        <span>合計 <b>${totalStops}</b> 站</span>
-        <span>查詢日期：<b class="mono">${escapeHtml(data.today)}</b></span>
-      </div>
+    <div class="toolbar">
+      <button class="dl-btn" id="printBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        列印（A4，一張四格）
+      </button>
+      <button class="dl-btn" id="dlBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下載圖片（JPG）
+      </button>
     </div>
-    ${am.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot am"></span>上午車次 <span class="shift-count">(${am.length})</span></div><div class="grid">${am.map(cardHtml).join('')}</div></div>` : ''}
-    ${pm.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot pm"></span>下午車次 <span class="shift-count">(${pm.length})</span></div><div class="grid">${pm.map(cardHtml).join('')}</div></div>` : ''}
-    ${!data.routes.length ? '<div class="state-msg">目前沒有車次資料。</div>' : ''}
+    <div id="shots">
+      <div class="head">
+        <p class="eyebrow">任務起點・行程查詢</p>
+        <h1>${escapeHtml(data.originLabel)}</h1>
+        <p class="addr">${escapeHtml(data.originAddress)}</p>
+        <div class="meta">
+          <span>共 <b>${data.routes.length}</b> 車次</span>
+          <span>合計 <b>${totalStops}</b> 站</span>
+          <span>查詢日期：<b class="mono">${escapeHtml(data.today)}</b></span>
+        </div>
+      </div>
+      ${am.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot am"></span>上午車次 <span class="shift-count">(${am.length})</span></div><div class="grid">${am.map(cardHtml).join('')}</div></div>` : ''}
+      ${pm.length ? `<div class="shift-block"><div class="shift-title"><span class="shift-dot pm"></span>下午車次 <span class="shift-count">(${pm.length})</span></div><div class="grid">${pm.map(cardHtml).join('')}</div></div>` : ''}
+      ${!data.routes.length ? '<div class="state-msg">目前沒有車次資料。</div>' : ''}
+    </div>
   `;
+  document.getElementById('dlBtn').onclick = (e)=> downloadAsImage(e.currentTarget);
+  document.getElementById('printBtn').onclick = ()=> window.print();
 }
 main();
 </script>
