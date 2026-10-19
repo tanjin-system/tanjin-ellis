@@ -59,13 +59,19 @@
      只印卡片本身（#shots），不含上面的導覽列與統計列，頁首頁尾不會佔掉版面。 */
   @page{ size:A4; margin:14mm 12mm; }
   @media print{
+    /* CSS Grid 在 Chrome 列印分頁時支援不好，「卡片不能被切斷」常常失效、整張卡被腰斬，
+       所以列印時改用區塊自然換行（inline-block）排兩欄，不用 Grid——這是瀏覽器分頁
+       真正可靠支援的排法。畫面上看到的還是 Grid，只有列印/下載圖片這裡換掉。 */
     body *{ visibility:hidden; }
     #shots, #shots *{ visibility:visible; }
     #shots{ position:absolute; left:0; top:0; width:100%; margin:0; padding:0; }
-    .grid{ display:grid; grid-template-columns:repeat(2, 1fr); gap:10mm; }
-    .card{ break-inside:avoid; }
-    .card:nth-child(4n+1){ break-before:page; }
-    .card:first-child{ break-before:auto; }
+    .grid{ display:block; font-size:0; }
+    .card{
+      display:inline-block; vertical-align:top; width:48%; font-size:13px;
+      margin:0 1% 10mm 1%; break-inside:avoid; page-break-inside:avoid;
+    }
+    .card:nth-child(4n+1){ break-before:page; page-break-before:always; }
+    .card:first-child{ break-before:auto; page-break-before:auto; }
   }
 </style>
 </head>
