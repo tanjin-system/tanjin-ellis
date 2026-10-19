@@ -59,7 +59,9 @@
   .stop-row>div:last-child{ border-right:none; }
   .stops .n{ width:22px; flex:none; text-align:center; color:var(--ink-soft); font-size:11px; font-weight:700; background:var(--paper); }
   .stops .label{ flex:1; }
-  .stops .note{ width:56px; flex:none; }
+  .stops .note{ width:56px; flex:none; padding:0; }
+  .note-input{ width:100%; height:100%; border:none; outline:none; background:transparent; font:inherit; color:var(--ink); padding:5px 7px; box-sizing:border-box; }
+  .note-input:focus{ background:rgba(63,110,108,.08); }
   .stops .store{ font-weight:600; }
   .stops .channel{ color:var(--ink-soft); font-size:11.5px; }
   .footer-note{ text-align:center; color:var(--ink-soft); font-size:11.5px; padding:20px 16px 30px; }
@@ -115,13 +117,25 @@
 </main>
 <script>
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function cardHtml(route){
-  const rows = route.stops.map((s,i)=>`
+// noteValues：備註欄位的內容，key 是「車次序號-站序」。使用者直接在網頁上打字（例如代收金額、
+// 簽收狀態），打字當下就同步進這個物件，列印時用的就是當下畫面的真實輸入框，瀏覽器原生列印
+// 本來就會印出輸入框目前的值，不需要額外處理。下載 PDF 這種要另外截圖的管道，輸入框裡的文字
+// html2canvas 讀不到，所以截圖用的版本改成印成純文字（見 capture 參數）。
+let noteValues = {};
+function cardHtml(route, routeIdx, capture){
+  const rows = route.stops.map((s,i)=>{
+    const key = routeIdx + '-' + i;
+    const val = noteValues[key] || '';
+    const noteCell = capture
+      ? `<div class="note">${escapeHtml(val)}</div>`
+      : `<div class="note"><input type="text" class="note-input" data-key="${key}" value="${escapeHtml(val)}" autocomplete="off"></div>`;
+    return `
     <div class="stop-row">
       <div class="n">${i+1}</div>
       <div class="label"><span class="store">${escapeHtml(s.store)}</span>${s.channel?` <span class="channel">${escapeHtml(s.channel)}</span>`:''}</div>
-      <div class="note"></div>
-    </div>`).join('') || `<div class="stop-row"><div class="label" style="color:var(--ink-soft);">尚未設定店點</div></div>`;
+      ${noteCell}
+    </div>`;
+  }).join('') || `<div class="stop-row"><div class="label" style="color:var(--ink-soft);">尚未設定店點</div></div>`;
   const shiftClass = route.shift==='PM' ? 'pm' : 'am', shiftLabel = route.shift==='PM' ? '下午' : '上午';
   return `
     <div class="card">
@@ -129,6 +143,11 @@ function cardHtml(route){
       <div class="stops">${rows}</div>
     </div>`;
 }
+document.addEventListener('input', (e)=>{
+  if(e.target && e.target.classList && e.target.classList.contains('note-input')){
+    noteValues[e.target.dataset.key] = e.target.value;
+  }
+});
 
 // 下載 PDF：html2canvas／jsPDF 只在真的按下載時才載入，平常開頁面不用多耗這些流量。
 // 鎖定版本＋完整性雜湊（SRI）：跟主系統（index.html）用同一個版本，CDN 上的檔案只要有一個位元組不同就會拒絕執行。
@@ -165,11 +184,11 @@ async function downloadAsPdf(btn){
     const doc = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
     const pageW = doc.internal.pageSize.getWidth(), pageH = doc.internal.pageSize.getHeight(), marginX = 12, marginY = 14;
     const usableW = pageW - marginX*2, usableH = pageH - marginY*2;
-    const routes = currentData.routes, batches = [];
+    const routes = currentData.routes.map((r,idx)=>({ r, idx })), batches = [];
     for(let i=0; i<routes.length; i+=4) batches.push(routes.slice(i, i+4));
     for(let b=0; b<batches.length; b++){
       shots.className = 'shot-layout';
-      shots.innerHTML = `<div class="grid">${batches[b].map(cardHtml).join('')}</div>`;
+      shots.innerHTML = `<div class="grid">${batches[b].map(({r,idx})=>cardHtml(r, idx, true)).join('')}</div>`;
       const canvas = await window.html2canvas(shots, { backgroundColor:'#ffffff', scale:2, useCORS:true });
       const imgData = canvas.toDataURL('image/jpeg', 0.92);
       let w = usableW, h = canvas.height * (usableW / canvas.width);
@@ -195,9 +214,9 @@ async function downloadAsExcel(btn){
   try{
     await loadLib(XLSX_LIB[0], XLSX_LIB[1]);
     const rows = [['車次', '班別', '站序', '店名', '通路', '備註']];
-    currentData.routes.forEach(route=>{
+    currentData.routes.forEach((route, routeIdx)=>{
       const shiftLabel = route.shift==='PM' ? '下午' : '上午';
-      route.stops.forEach((s,i)=>{ rows.push([route.name, shiftLabel, i+1, s.store, s.channel || '', '']); });
+      route.stops.forEach((s,i)=>{ rows.push([route.name, shiftLabel, i+1, s.store, s.channel || '', noteValues[routeIdx+'-'+i] || '']); });
     });
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws['!cols'] = [{wch:22},{wch:6},{wch:6},{wch:22},{wch:14},{wch:18}];
@@ -221,7 +240,7 @@ function renderRoutes(data){
       <span>合計 <b>${totalStops}</b> 站</span>
       <span>查詢日期：<b>${escapeHtml(data.today)}</b></span>
     </div>
-    <div id="shots"><div class="grid">${data.routes.map(cardHtml).join('')}</div></div>
+    <div id="shots"><div class="grid">${data.routes.map((r,idx)=>cardHtml(r, idx, false)).join('')}</div></div>
     <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本。</div>
   `;
 }
@@ -260,6 +279,9 @@ async function main(){
 async function refreshData(){
   const token = new URLSearchParams(location.search).get('token');
   if(!token) return;
+  // 如果使用者正在備註欄打字，這次背景刷新先跳過（不要重畫整個清單打斷輸入），
+  // 下一個週期再試一次就好，打字途中資料本來就不會差這 3 分鐘。
+  if(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('note-input')) return;
   try{
     const res = await fetch('/api/origin-data?token=' + encodeURIComponent(token));
     const data = await res.json();
