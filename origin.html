@@ -143,7 +143,12 @@ document.addEventListener('input', (e)=>{
 });
 
 let currentOriginLabel = '', currentData = null;
-function renderRoutes(data){
+// consume=false：只更新畫面上的資料，不要把「已看過」的比對基準往前推進。
+// 這支頁面常被背景計時器悄悄刷新（見下面 refreshData 的 setInterval），如果每次悄悄刷新
+// 都順便把紅框的比對基準更新掉，使用者根本還沒看到紅框，下一次悄悄刷新就先把它清掉了——
+// 等使用者真的回來看畫面時，紅框早就不見了，變成「主控明明調整過，畫面卻看不出來」。
+// 所以只有使用者真的切回/打開這個分頁、或是剛載入頁面時，才會把紅框「看過」算數。
+function renderRoutes(data, consume = true){
   currentData = data;
   currentOriginId = data.originId || '';
   noteValues = loadNotes(currentOriginId);
@@ -168,7 +173,7 @@ function renderRoutes(data){
     <div id="shots"><div class="grid">${cardsHtml}</div></div>
     <div class="footer-note">只顯示車次與店點順序，異動後重新整理即為最新版本；紅框代表行程自上次查看後被主控調整過。</div>
   `;
-  saveSnapshot(currentOriginId, nextSnap); // 看過一次之後就更新快照，紅框只提示「上次看之後有改」，看過就算確認過了
+  if(consume) saveSnapshot(currentOriginId, nextSnap); // 看過一次之後才更新快照，紅框只提示「上次看之後有改」
 }
 
 async function main(){
@@ -200,7 +205,7 @@ async function main(){
 // 這個頁面常被起點「加入主畫面」使用，跟主系統一樣會被手機背景凍結、放很久沒有真正重新整理過，
 // 看起來像行程無法同步。切回前景/每隔幾分鐘悄悄重新抓一次資料，並比對頁面內容有沒有更新過，
 // 有的話跳提示讓使用者自己決定要不要重新整理。
-async function refreshData(){
+async function refreshData(consume){
   const token = new URLSearchParams(location.search).get('token');
   if(!token) return;
   // 如果使用者正在備註欄打字，這次背景刷新先跳過（不要重畫整個清單打斷輸入），
@@ -210,7 +215,7 @@ async function refreshData(){
     const res = await fetch('/api/origin-data?token=' + encodeURIComponent(token));
     const data = await res.json();
     if(!res.ok) return;
-    renderRoutes(data);
+    renderRoutes(data, consume);
   }catch(e){ /* 背景刷新失敗就靜默維持原本畫面 */ }
 }
 let __bootPageSignature = null;
@@ -236,10 +241,12 @@ async function checkForUpdate(){
   if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
   if(sig !== __bootPageSignature) showUpdateBanner();
 }
-document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ checkForUpdate(); refreshData(); } });
-window.addEventListener('focus', ()=>{ checkForUpdate(); refreshData(); });
+// 切回/打開這個分頁才算使用者「真的回來看了」，這時候的刷新才能把紅框算成「已看過」；
+// 下面的 setInterval 是背景悄悄刷新，不管使用者有沒有在看，所以不能讓它消掉紅框。
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ checkForUpdate(); refreshData(true); } });
+window.addEventListener('focus', ()=>{ checkForUpdate(); refreshData(true); });
 setInterval(checkForUpdate, 5*60*1000);
-setInterval(refreshData, 3*60*1000);
+setInterval(()=>refreshData(false), 3*60*1000);
 computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
 main();
 </script>

@@ -30,9 +30,14 @@ module.exports = async (req, res) => {
 
     const items = (routes || []).map(r => {
       const versions = r.route_versions || [];
-      // 今天生效的版本；找不到（例如資料還沒排到今天）就退回最近一個開始生效的版本，不要整條車次直接消失不顯示
-      const active = versions.find(v => v.start_date <= today && (!v.end_date || v.end_date >= today))
-        || versions.slice().sort((a, b) => b.start_date.localeCompare(a.start_date))[0] || null;
+      // 今天生效的版本；如果有舊版本忘了填 end_date，會跟新版本同時符合「今天生效」，
+      // 這裡一定要取 start_date 最新的那個，不能用陣列裡隨便第一個符合的（資料庫回傳順序
+      // 不保證跟日期順序一致），不然主控明明已經新增新版本，頁面卻一直顯示舊的行程。
+      // 找不到任何今天生效的版本（例如資料還沒排到今天）就退回最近一個開始生效的版本，
+      // 不要整條車次直接消失不顯示。
+      const todaysVersions = versions.filter(v => v.start_date <= today && (!v.end_date || v.end_date >= today));
+      const active = (todaysVersions.length ? todaysVersions : versions)
+        .slice().sort((a, b) => b.start_date.localeCompare(a.start_date))[0] || null;
       const stops = active ? (active.route_version_points || [])
         .slice().sort((a, b) => a.sequence_no - b.sequence_no)
         .map(p => ({ store: (p.drop_points && (p.drop_points.code || p.drop_points.address)) || '', channel: (p.drop_points && p.drop_points.channels && p.drop_points.channels.name) || '' }))
