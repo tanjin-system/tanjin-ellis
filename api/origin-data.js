@@ -28,6 +28,11 @@ module.exports = async (req, res) => {
       .eq('origin_id', origin.id).eq('status', 'active').order('shift').order('created_at');
     if (rErr) throw new Error(rErr.message);
 
+    const stopsOf = (version) => version ? (version.route_version_points || [])
+      .slice().sort((a, b) => a.sequence_no - b.sequence_no)
+      .map(p => ({ store: (p.drop_points && (p.drop_points.code || p.drop_points.address)) || '', channel: (p.drop_points && p.drop_points.channels && p.drop_points.channels.name) || '' }))
+      : [];
+
     const items = (routes || []).map(r => {
       const versions = r.route_versions || [];
       // 今天生效的版本；如果有舊版本忘了填 end_date，會跟新版本同時符合「今天生效」，
@@ -38,12 +43,21 @@ module.exports = async (req, res) => {
       const todaysVersions = versions.filter(v => v.start_date <= today && (!v.end_date || v.end_date >= today));
       const active = (todaysVersions.length ? todaysVersions : versions)
         .slice().sort((a, b) => b.start_date.localeCompare(a.start_date))[0] || null;
-      const stops = active ? (active.route_version_points || [])
-        .slice().sort((a, b) => a.sequence_no - b.sequence_no)
-        .map(p => ({ store: (p.drop_points && (p.drop_points.code || p.drop_points.address)) || '', channel: (p.drop_points && p.drop_points.channels && p.drop_points.channels.name) || '' }))
-        : [];
-      return { id: r.id, name: r.name, shift: r.shift, stops };
-    }).filter(r => r.stops.length);
+      const stops = stopsOf(active);
+
+      // 預告未來異動：主控常常提前排好「明天/下週生效」的新版本，出發點不會剛好在生效當天
+      // 才第一次打開連結，必須提前讓他們看到——否則變動當天司機才發現行程不一樣就太晚了。
+      // 只取最近的下一個未來版本（生效日最早的那個），且內容真的跟目前不同才顯示，避免
+      // 單純重建同一份內容的版本也跳預告。
+      const futureVersions = versions.filter(v => v.start_date > today).sort((a, b) => a.start_date.localeCompare(b.start_date));
+      const nextVersion = futureVersions[0] || null;
+      const upcomingStops = stopsOf(nextVersion);
+      const upcoming = (nextVersion && upcomingStops.length && JSON.stringify(upcomingStops) !== JSON.stringify(stops))
+        ? { effectiveDate: nextVersion.start_date, stops: upcomingStops }
+        : null;
+
+      return { id: r.id, name: r.name, shift: r.shift, stops, upcoming };
+    }).filter(r => r.stops.length || r.upcoming);
 
     res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=15');
     // originId／每個車次的 id 都只是內部的 UUID，沒有金額或個資意義，前端用來做「本機資料存取 key」
