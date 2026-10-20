@@ -1787,6 +1787,7 @@ function wrUpdate(){
     b.cards.forEach(c=>{ const prev = W.prevDone[c.key]; if(prev!==undefined && c.doneN>prev) fresh.push(c.key); W.prevDone[c.key] = c.doneN; });
     if(changed) fresh.forEach(k=>{ const el = boardEl.querySelector('[data-key="'+(window.CSS&&CSS.escape?CSS.escape(k):k)+'"]'); if(el){ el.classList.add('fresh'); setTimeout(()=>el.classList.remove('fresh'), 1800); } });
   }
+  wrFitScreenSoon(); // 電視模式下，資料量一變就重新量一次能不能整頁放得下，不行就自動縮小字體
 }
 async function wrLoadMarks(force){
   if(state._wrExternal) return;
@@ -1901,6 +1902,7 @@ function wrLeaveFull(){
   if(state._wrExternal) return;
   if(!document.body.classList.contains('wr-full')) return;
   document.body.classList.remove('wr-full');
+  wrClearFit();
   if(wrFsEl()) wrFsExit();
 }
 // 網頁全螢幕：Safari 舊版只有 webkit 前綴、iPhone 完全不支援，所以統一包起來；不支援時要告訴使用者怎麼辦，不能按了沒反應。
@@ -1914,7 +1916,32 @@ function wrToggleFull(){
   document.body.classList.add('wr-full');
   wrFsEnter().catch(()=>{});
   wrUpdateFullBtn();
+  wrFitScreenSoon();
 }
+// 電視模式（全螢幕戰情室）內容量會隨路線/店點數量變動，固定字體大小常常放不下整個畫面，
+// 變成要滑動——戰情室大螢幕通常沒人站在前面滑。進全螢幕、每次資料更新、視窗大小改變時都
+// 重新量一次整個畫面的高度；放不下就把 .wr 的字體整體縮小（這個字體大小是全站卡片/數字
+// 的基準，縮小它會連動縮小所有東西），直到剛好放得下為止。真的資料多到縮到最小字體都放
+// 不下，就放棄縮放、改回正常捲動（不犧牲到看不清楚文字）。
+const WR_FIT_MIN_PX = 11, WR_FIT_MAX_PX = 26;
+function wrClearFit(){ const root = document.getElementById('wrRoot'); if(root) root.style.fontSize = ''; }
+function wrFitScreen(){
+  if(!document.body.classList.contains('wr-full')) return;
+  const root = document.getElementById('wrRoot');
+  if(!root) return;
+  root.style.fontSize = WR_FIT_MAX_PX + 'px';
+  if(root.scrollHeight <= window.innerHeight){ root.style.fontSize = ''; return; } // 預設大小就放得下，不用強制縮放
+  let lo = WR_FIT_MIN_PX, hi = WR_FIT_MAX_PX - 1, best = lo;
+  while(lo <= hi){
+    const mid = Math.floor((lo + hi) / 2);
+    root.style.fontSize = mid + 'px';
+    if(root.scrollHeight <= window.innerHeight){ best = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  root.style.fontSize = best + 'px';
+}
+let _wrFitTimer = null;
+function wrFitScreenSoon(){ clearTimeout(_wrFitTimer); _wrFitTimer = setTimeout(wrFitScreen, 60); }
+window.addEventListener('resize', wrFitScreenSoon);
 function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(!b) return; const on = state._wrExternal ? !!wrFsEl() : document.body.classList.contains('wr-full'); b.textContent = on ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
 const wrOnFsChange = ()=>{ if(state._wrExternal){ wrUpdateFullBtn(); return; } if(!wrFsEl() && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } };
 document.addEventListener('fullscreenchange', wrOnFsChange); document.addEventListener('webkitfullscreenchange', wrOnFsChange);
