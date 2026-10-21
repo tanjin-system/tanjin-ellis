@@ -17,8 +17,13 @@
 <meta name="theme-color" content="#F3E7CF">
 <script>try{ if(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.setAttribute('data-theme','dark'); }catch(e){}</script>
 <meta name="apple-mobile-web-app-title" content="信興｜碳金 Hub">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap');
+  /* 字體改用 <link> 載入（原本是 @import）：@import 寫在 <style> 裡面，瀏覽器要先解析完這塊
+     <style> 才會發現要去抓字體，等於把字體請求硬生生延後；<link> 一開始掃描 <head> 就會被
+     發現，可以跟其他資源一起平行下載，不會卡住畫面變白的時間。 */
   :root{
     --navy:#1B2A41; --navy-dim:#2A3B54; --amber:#E0902E; --teal:#3F6E6C;
     --paper:#F5F5F2; --panel:#FFFFFF; --border:#D9DCE1; --ink:#1B2129; --ink-soft:#5B6472;
@@ -517,9 +522,19 @@
   table.route-grid tr.assign-detail-row .panel{ margin:0; }
   tr.route-detail-row td{ background:var(--bg-soft2); padding:10px; }
   @media print{ nav.tabs,header,.no-print{ display:none !important; } main{ max-width:100%; padding:0; } body{ background:var(--panel); } }
+  /* 開機畫面：手機打開系統到畫面真正能用之前，中間那段（載入 js/*.js、抓資料）原本是一片
+     空白，看起來像當機。這塊用最前面、不依賴任何外部資源的純 HTML/CSS 畫出來，開頭就能
+     馬上顯示；boot() 跑完、畫面真的準備好了才用 JS 把它移除（見檔案最下面的 hideBootSplash）。 */
+  #bootSplash{ position:fixed; inset:0; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; background:var(--paper); }
+  #bootSplash .bs-t{ font-size:17px; font-weight:800; color:var(--navy); letter-spacing:0.04em; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; }
+  #bootSplash .bs-spin{ width:28px; height:28px; border-radius:50%; border:3px solid var(--border); border-top-color:var(--amber); animation:bsSpin .8s linear infinite; }
+  #bootSplash .bs-sub{ font-size:12.5px; color:var(--ink-soft); font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; }
+  @keyframes bsSpin{ to{ transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce){ #bootSplash .bs-spin{ animation:none; } }
 </style>
 </head>
 <body>
+<div id="bootSplash"><div class="bs-spin" aria-hidden="true"></div><div class="bs-t">信興｜碳金 Hub</div><div class="bs-sub">載入中…</div></div>
 <header>
   <h1 id="appTitle"><span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金 Hub</span></h1>
   <div id="gsWrap" style="display:none;">
@@ -537,11 +552,19 @@
   <main id="content"></main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
-<script src="js/supabase-client.js"></script>
-<script src="js/data-layer.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/push.js"></script>
+<!-- 這 4 個外部 script 加上 defer：原本是同步載入，瀏覽器會一個等一個依序抓完才繼續（4 個網路
+     來回疊加起來），畫面在這整段期間都是空的。defer 讓它們可以平行下載、不擋住瀏覽器繼續解析
+     畫面（手機開系統變白畫面的主因之一），執行順序仍維持跟原本一樣的文件順序。
+     注意：defer 對沒有 src 的 inline script 沒有任何效果（規格就是這樣定義的），所以下面這支
+     大 inline script 本身還是照原本的方式同步執行、馬上定義好所有函式；只有最底下真正呼叫
+     bootApp() 的那段，改成等 DOMContentLoaded 才執行——defer 的 script 保證都會在
+     DOMContentLoaded 之前執行完畢，這樣就能確保 bootApp() 呼叫到的 getStoredAuth（在 auth.js
+     裡）等函式這時候一定已經就緒，不會變成「用到還沒載入的函式」的錯誤。 -->
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
+<script defer src="js/supabase-client.js"></script>
+<script defer src="js/data-layer.js"></script>
+<script defer src="js/auth.js"></script>
+<script defer src="js/push.js"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -8530,13 +8553,24 @@ async function bootApp(){
   showApp();
 }
 
-(async function init(){
-  const wrPath = location.pathname.match(/^\/wr\/([A-Za-z0-9_-]{16,128})\/?$/);
-  const wrTok = (wrPath && wrPath[1]) || new URLSearchParams(location.search).get('wr');
-  if(wrTok){ await bootWarRoomExternal(wrTok); return; }
-  computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
-  await bootApp();
-})();
+function hideBootSplash(){ const el = document.getElementById('bootSplash'); if(el) el.remove(); }
+// defer 的 4 支外部 script（supabase SDK／supabase-client.js／data-layer.js／auth.js／push.js）
+// 保證會在 DOMContentLoaded 之前就全部執行完畢；這支 inline script 本身不是 defer（defer 對
+// 沒有 src 的 inline script 沒有效果），所以用這個事件確保真正呼叫 bootApp() 之前，auth.js 的
+// getStoredAuth 這些函式都已經就緒，不會出現「用到還沒載入的函式」的錯誤。
+function whenDomReady(fn){
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+  else fn();
+}
+whenDomReady(async function init(){
+  try{
+    const wrPath = location.pathname.match(/^\/wr\/([A-Za-z0-9_-]{16,128})\/?$/);
+    const wrTok = (wrPath && wrPath[1]) || new URLSearchParams(location.search).get('wr');
+    if(wrTok){ await bootWarRoomExternal(wrTok); return; }
+    computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
+    await bootApp();
+  } finally { hideBootSplash(); } // 不管成功、失敗（例如 bootApp 內部真的意料之外出錯），開機畫面一定要拿掉，不能卡住變成另一種「看起來像當機」
+});
 </script>
 </body>
 </html>
