@@ -6910,7 +6910,6 @@ function renderSettings(c){
     <h2 class="section-title">系統設定</h2>
     <p class="section-sub">主控登入安全：密碼以加密雜湊保存（連你自己也看不到原文），可再開啟兩步驟驗證。新裝置登入或連續登入失敗，你的手機會收到推播通知。</p>
     <div class="panel" id="adminSecBox"><h3 style="margin-top:0;">主控登入安全</h3><p class="section-sub" style="margin:0;">載入中…</p></div>
-    <div class="panel" id="auditBox"><h3 style="margin-top:0;">操作紀錄</h3><p class="section-sub" style="margin:0;">載入中…</p></div>
     <div class="panel"><h3 style="margin-top:0;">這支手機的通知</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
     <div class="panel">
       <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
@@ -6991,7 +6990,6 @@ function renderSettings(c){
     try{ await saveWarroomConfig(null); renderSettings(c); alert('已恢復預設值。'); }catch(err){ alert(err.message); }
   };
   renderAdminSecurityBox(document.getElementById('adminSecBox'));
-  renderAuditBox(document.getElementById('auditBox'));
   document.getElementById('decGo').onclick = async ()=>{
     const f = document.getElementById('decFile').files[0], pass = document.getElementById('decPass').value;
     if(!f || !pass){ alert('請選擇備份檔並輸入密碼'); return; }
