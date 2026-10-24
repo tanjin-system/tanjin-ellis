@@ -802,7 +802,7 @@ function drawPhotoWatermark(ctx, width, height, coords, storeName){
     new Date().toLocaleString('zh-TW', { hour12:false }),
     coords ? `GPS ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'GPS 未取得'
   ];
-  const fontSize = Math.max(13, Math.round(width*0.032));
+  const fontSize = Math.max(39, Math.round(width*0.096)); // 放大3倍（原本 13 / width*0.032）
   const lineHeight = Math.round(fontSize*1.35);
   const padding = Math.round(fontSize*0.6);
   const boxHeight = lineHeight*lines.length + padding*2;
