@@ -797,21 +797,28 @@ function openCameraCapture(maxShots, storeName){
 // 浮水印直接畫進canvas像素（燒錄在圖片上），不是寫EXIF——EXIF可以被工具
 // 清掉，燒進畫面才能當送達時間/地點的證明，事後沒辦法無痛抽換時間或地點。
 function drawPhotoWatermark(ctx, width, height, coords, storeName){
+  // GPS那行文字本來就長（"GPS 25.04203, 121.56502"），放大3倍後整行比照片
+  // 寬度還長，會被畫面邊界切掉——GPS這行維持原本字級，店名/時間才放大3倍。
+  const bigSize = Math.max(39, Math.round(width*0.096));
+  const smallSize = Math.max(13, Math.round(width*0.032));
   const lines = [
-    ...(storeName ? [storeName] : []),
-    new Date().toLocaleString('zh-TW', { hour12:false }),
-    coords ? `GPS ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'GPS 未取得'
+    ...(storeName ? [{ text: storeName, size: bigSize }] : []),
+    { text: new Date().toLocaleString('zh-TW', { hour12:false }), size: bigSize },
+    { text: coords ? `GPS ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'GPS 未取得', size: smallSize }
   ];
-  const fontSize = Math.max(39, Math.round(width*0.096)); // 放大3倍（原本 13 / width*0.032）
-  const lineHeight = Math.round(fontSize*1.35);
-  const padding = Math.round(fontSize*0.6);
-  const boxHeight = lineHeight*lines.length + padding*2;
+  const lineHeights = lines.map(l => Math.round(l.size*1.35));
+  const padding = Math.round(bigSize*0.6);
+  const boxHeight = lineHeights.reduce((a,b)=>a+b,0) + padding*2;
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, height-boxHeight, width, boxHeight);
   ctx.fillStyle = '#fff';
-  ctx.font = `${fontSize}px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif`;
   ctx.textBaseline = 'top';
-  lines.forEach((line,i)=>{ ctx.fillText(line, padding, height-boxHeight+padding+i*lineHeight); });
+  let y = height-boxHeight+padding;
+  lines.forEach((line,i)=>{
+    ctx.font = `${line.size}px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif`;
+    ctx.fillText(line.text, padding, y);
+    y += lineHeights[i];
+  });
 }
 // 自建相機（openCameraCapture）在拍照當下已經疊過浮水印；但「上傳照片」
 // 走相簿選現成檔案，沒有經過那段流程，另外在這裡補疊一次，兩條路徑最後
