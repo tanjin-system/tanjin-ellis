@@ -19,10 +19,6 @@ async function pushCurrentSub() {
   if (!pushSupported()) return null;
   try { const reg = await navigator.serviceWorker.getRegistration(); return reg ? await reg.pushManager.getSubscription() : null; } catch (e) { return null; }
 }
-async function pushLoadPrefs(endpoint) {
-  const { data } = await getSupabase().from('push_subscriptions').select('prefs').eq('endpoint', endpoint).maybeSingle();
-  return (data && data.prefs) || {};
-}
 async function pushEnable() {
   const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
   if (perm !== 'granted') throw new Error('通知權限沒有開啟。請在跳出的視窗按「允許」，或到手機的設定裡開啟這個 App 的通知。');
