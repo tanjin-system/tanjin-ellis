@@ -560,11 +560,15 @@
      bootApp() 的那段，改成等 DOMContentLoaded 才執行——defer 的 script 保證都會在
      DOMContentLoaded 之前執行完畢，這樣就能確保 bootApp() 呼叫到的 getStoredAuth（在 auth.js
      裡）等函式這時候一定已經就緒，不會變成「用到還沒載入的函式」的錯誤。 -->
+<!-- js/*.js 的 ?v=N 是手動快取破壞用的版本號：vercel.json 把 /js/ 底下的檔案設成長時間快取
+     （一年、immutable），平常開系統可以完全跳過「跟伺服器確認有沒有更新」這個來回，但代價是
+     瀏覽器會把同一個網址的內容快取到天荒地老——所以之後只要改了下面任何一個 js/*.js 檔案，
+     一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
-<script defer src="js/supabase-client.js"></script>
-<script defer src="js/data-layer.js"></script>
-<script defer src="js/auth.js"></script>
-<script defer src="js/push.js"></script>
+<script defer src="js/supabase-client.js?v=1"></script>
+<script defer src="js/data-layer.js?v=1"></script>
+<script defer src="js/auth.js?v=1"></script>
+<script defer src="js/push.js?v=1"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -5422,7 +5426,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
     contentRows.push(`<tr><td>${dateLabel}</td><td>減：代墊款（憑證歸公司，非所得）</td><td>共 ${items.length} 筆，明細詳見附件（第2頁）</td><td>${items.length}</td><td>筆</td><td>—</td><td class="amount">-$${money(reimb)}</td><td>—</td></tr>`);
   }
   const sigCell = opts.signatureDataUrl
-    ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
+    ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;" loading="lazy">`
     : '<div style="height:56px;"></div>';
   return `
     <div class="panel payroll-slip" style="max-width:720px;">
@@ -7424,7 +7428,7 @@ function renderTodayDetail(todays){
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
             ${statusBadge}
             ${photoCount ? `<span class="upok"><b>✓</b>已上傳 ${photoCount} 張</span>` : ''}
-            ${(()=>{ const th = thumbsGet(dp.id); return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="">`).join('')}</div>` : ''; })()}
+            ${(()=>{ const th = thumbsGet(dp.id); return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="" loading="lazy">`).join('')}</div>` : ''; })()}
             ${readonly ? `<span class="badge" style="background:#E3EEF7; color:#2F6EA5;">由${escapeHtml(dp.helperName||'支援夥伴')}支援</span>` : ''}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未完成：${dp.issueReason}</span>` : ''}
             ${readonly ? '' : `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
@@ -7472,7 +7476,7 @@ function renderTodayDetail(todays){
     const key = dp=> `${a.id}|${dp.id}`;
     const chips = dp=>{
       const th = thumbsGet(dp.id);
-      return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="">`).join('')}</div>` : '';
+      return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="" loading="lazy">`).join('')}</div>` : '';
     };
     const photoN = dp=> (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
     const expanded = (dp, kind)=> `<div class="tl-card ${kind==='done'?'donecard':''}">
@@ -7703,7 +7707,7 @@ function openPhotoLightbox(urls){
   host.innerHTML = `<div class="modal-backdrop" id="photoLightboxBackdrop">
     <div class="modal-box" style="max-width:480px;">
       <div class="toolbar"><strong>送達照片</strong><button class="btn ghost" id="photoLightboxClose">關閉</button></div>
-      ${urls.map(u=>`<img src="${u}" style="width:100%; border-radius:4px; margin-bottom:8px; display:block;">`).join('')}
+      ${urls.map(u=>`<img src="${u}" style="width:100%; border-radius:4px; margin-bottom:8px; display:block;" loading="lazy">`).join('')}
     </div>
   </div>`;
   document.getElementById('photoLightboxBackdrop').onclick = (e)=>{ if(e.target.id==='photoLightboxBackdrop') host.innerHTML=''; };
@@ -8158,7 +8162,7 @@ function showSignaturePreview(record, sigUrl){
         <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
           <tr style="border-top:1px solid #D8DADF; border-bottom:1px solid #D8DADF;">
             <td style="width:22%; padding:8px 6px;">所得人簽章</td>
-            <td style="width:38%; padding:8px 6px; height:72px;"><img src="${sigUrl}" style="max-height:56px; max-width:100%;"></td>
+            <td style="width:38%; padding:8px 6px; height:72px;"><img src="${sigUrl}" style="max-height:56px; max-width:100%;" loading="lazy"></td>
             <td style="width:18%; padding:8px 6px;">給付日期</td>
             <td style="padding:8px 6px;">${payDate}</td>
           </tr>
