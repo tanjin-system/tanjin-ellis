@@ -1561,6 +1561,23 @@ alter table drop_point_coord_adjustments enable row level security;
 grant select, insert on drop_point_coord_adjustments to app_admin;
 create policy admin_all on drop_point_coord_adjustments for all to app_admin using (true) with check (true);
 
+-- PART 41：修正 PART 39 漏掉 security definer 的 regression（2026-10-24）
+-- PART 39 用 create or replace function 重寫 bump_catalog_version() 時，沒有把原本就有的
+-- security definer 帶過去（CREATE OR REPLACE FUNCTION 不會保留舊版本的 security definer／
+-- search_path 設定，沒寫就重置成預設的 security invoker）。這支函式是 7 個目錄表觸發器
+-- 共用的，一旦變成 security invoker，執行時就變成用呼叫者（app_admin／app_driver）的權限，
+-- 但這兩個角色對 catalog_meta 只有 select（見本檔案「grant select on catalog_meta」那行），
+-- 沒有 update，於是任何一張目錄表（司機／通路／起點／店點／路線／路線版本／路線版本店點）
+-- 的新增/修改/刪除都會在觸發器這一步被 permission denied 擋下、整筆異動回滾——不只路線
+-- 停用／恢復，是 PART 39 上線後的所有目錄編輯都受影響。
+create or replace function bump_catalog_version() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  execute format('update catalog_meta set %I = now() where id = 1', TG_ARGV[0]);
+  return null;
+end;
+$$;
+
 -- bump_catalog_version() 改成吃一個參數（要更新哪個版本欄位），觸發器用 TG_ARGV[0] 傳進來；
 -- 一支函式服務全部 7 個觸發器，不用為每張表各寫一份幾乎一樣的函式。
 create or replace function bump_catalog_version() returns trigger

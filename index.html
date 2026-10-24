@@ -566,7 +566,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=2"></script>
+<script defer src="js/data-layer.js?v=3"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=1"></script>
 <script>
@@ -588,6 +588,14 @@ function escapeHtml(s){
 // ---------- 通用查找 ----------
 function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d?d.name:'未指派'; }
 function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
+// 通路沒有自己的顏色欄位，用id雜湊固定對應到一個色票——同一通路每次算出來的顏色
+// 都一樣（不是隨機），純粹給司機端行程示意圖的色塊用，跟計價/畫面其他地方無關。
+const CHANNEL_COLOR_PALETTE = ['#E0902E','#2C6B44','#2F6EA5','#A6453C','#6B5B95','#3F6E6C','#B8860B'];
+function channelColor(id){
+  if(!id) return '#888';
+  let h = 0; for(let i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;
+  return CHANNEL_COLOR_PALETTE[h % CHANNEL_COLOR_PALETTE.length];
+}
 // 路線顯示名稱：「第一車…第九車」一律顯示成 R1～R9，前面接任務起點名稱、不留空格，例如
 // 「橙泰橙 第一車 上午」→「橙泰橙R1上午」。只改畫面顯示，資料庫裡存的路線名稱不動。
 function seqToR(text){
@@ -7627,31 +7635,118 @@ function renderTodayDetail(todays){
   // 平常畫面一模一樣；因為這個疊層是另外掛在document.body底下的DOM，
   // 不在box底下，box自己的querySelectorAll碰不到它，所以要重新呼叫
   // wireStopPhotoControls / 補上data-tlpick、data-tldone的點擊處理。
+  // 原本用Leaflet真實地圖(街道圖磚)畫這個畫面，實測覺得太雜亂——司機真正需要
+  // 的導航本來就是交給Google Maps(見下面「導航」按鈕)，這裡只需要「大概知道
+  // 還有幾站、長怎樣的順序」，改成六邊形示意圖(像賽道checkpoint)，store座標
+  // 只拿來算真實距離/路名(fetchRoadRoute)，不用來畫真實地圖位置，純粹示意。
   async function openTripMapOverlay(a, mine){
+    let legDistByDpIndex = {}, legTimeByDpIndex = {}, legNameByDpIndex = {};
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed; inset:0; background:#12161C; z-index:9000; display:flex; flex-direction:column;';
     overlay.innerHTML = `
-      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:#1B2A41; color:#fff; flex:0 0 auto;">
-        <strong style="font-size:14px;">${escapeHtml(routeName(a.routeId))}</strong>
-        <button type="button" data-mapclose style="background:none; border:none; color:#fff; font-size:20px; padding:4px 8px; line-height:1;">✕</button>
-      </div>
-      <div id="tripMapEl" style="flex:1; position:relative; min-height:0;"></div>
+      <div id="tripTopbar" style="flex:0 0 auto;"></div>
+      <div id="tripMapEl" style="flex:1; position:relative; min-height:0; overflow:auto;"></div>
       <div id="tripDrawer" style="position:relative; background:var(--surface,#fff); border-radius:16px 16px 0 0; box-shadow:0 -4px 16px rgba(0,0,0,.3); overflow:hidden; display:flex; flex-direction:column; flex:0 0 auto;">
         <div data-draghandle style="flex:0 0 auto; padding:10px 0 6px; display:flex; justify-content:center; cursor:grab; touch-action:none;"><div style="width:40px; height:5px; border-radius:3px; background:#ccc;"></div></div>
-        <div id="tripDrawerBody" style="flex:1; overflow:auto; padding:0 14px 14px;"></div>
+        <div id="tripDrawerBody" style="flex:1; overflow:auto; padding:0 14px 6px;"></div>
+        <div id="tripDrawerCta" style="flex:0 0 auto; padding:0 14px 14px;"></div>
       </div>`;
     document.body.appendChild(overlay);
+    const closeOverlay = ()=> overlay.remove();
+    const renderTopbar = ()=>{
+      const doneN = mine.filter(dp=>dp.status==='completed').length;
+      const total = mine.length;
+      const curN = Math.min(doneN+1, Math.max(total,1));
+      const pct = total ? Math.round(doneN*100/total) : 0;
+      const hasIssue = mine.some(dp=>dp.status!=='completed' && dp.issueReason);
+      overlay.querySelector('#tripTopbar').innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; padding:10px 14px; background:#1B2A41;">
+          <button type="button" data-mapclose style="background:none; border:none; color:#fff; font-size:22px; padding:2px 6px; line-height:1; flex:0 0 auto;">‹</button>
+          <strong style="color:#fff; font-size:13px; flex:0 0 auto; max-width:30vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(routeName(a.routeId))}</strong>
+          <div style="background:rgba(0,0,0,.25); border-radius:10px; padding:5px 10px; display:flex; align-items:center; gap:7px; flex:0 0 auto; margin-left:auto;">
+            <span style="color:#fff; font-weight:800; font-size:14px;">${String(curN).padStart(2,'0')}</span><span style="color:#8a94a3; font-size:11px;">/${total}</span>
+            <div style="width:46px; height:7px; border-radius:4px; background:#2a3040; overflow:hidden; position:relative;"><div style="position:absolute; inset:0; width:${pct}%; background:#E0902E;"></div></div>
+          </div>
+          <div style="background:${hasIssue?'rgba(224,144,46,.18)':'rgba(44,107,68,.2)'}; color:${hasIssue?'#E0902E':'#4C9169'}; border-radius:999px; padding:5px 10px; font-size:11px; font-weight:700; display:flex; align-items:center; gap:5px; flex:0 0 auto; white-space:nowrap;">
+            <span style="width:6px; height:6px; border-radius:50%; background:currentColor; display:inline-block;"></span>${hasIssue?'需留意':'一切正常'}
+          </div>
+        </div>`;
+      overlay.querySelector('[data-mapclose]').onclick = closeOverlay;
+    };
+    renderTopbar();
     const drawer = overlay.querySelector('#tripDrawer');
     const drawerBody = overlay.querySelector('#tripDrawerBody');
+    const drawerCta = overlay.querySelector('#tripDrawerCta');
     const SHEET_H = { low: 96, mid: Math.round(window.innerHeight*0.42), high: Math.round(window.innerHeight*0.82) };
     let sheetPos = 'mid';
     const applySheetPos = ()=>{ drawer.style.transition = 'height .25s ease'; drawer.style.height = SHEET_H[sheetPos]+'px'; };
     applySheetPos();
-    const paintDrawer = ()=>{ drawerBody.innerHTML = timelineHtml(a, mine); wireStopPhotoControls(overlay, paintDrawer); };
+    let drawerView = 'focus'; // 'focus'＝只顯示最近一站的重點卡片；'all'＝完整時間軸(timelineHtml)，兩種切換不影響資料本身
+    const focusedCardHtml = ()=>{
+      const pendL = mine.filter(dp=>dp.status!=='completed' && !dp.issueReason);
+      const nextDp = pendL[0];
+      if(!nextDp){
+        return `<div style="padding:22px 0; text-align:center;">
+          <div style="font-size:28px;">🎉</div>
+          <div style="font-weight:700; margin-top:6px;">這趟的店都處理完了</div>
+          ${mine.length ? `<button type="button" data-viewall class="btn ghost" style="margin-top:10px;">查看全部 ${mine.length} 站</button>` : ''}
+        </div>`;
+      }
+      const idx = mine.indexOf(nextDp);
+      const seqN = idx+1;
+      const dist = legDistByDpIndex[idx];
+      const sec = legTimeByDpIndex[idx];
+      let etaStr = '—';
+      if(sec!=null){
+        let acc = 0; for(let i=0;i<=idx;i++) acc += (legTimeByDpIndex[i]||0);
+        const baseline = a.departedAt ? new Date(a.departedAt) : new Date();
+        const eta = new Date(baseline.getTime() + acc*1000);
+        etaStr = String(eta.getHours()).padStart(2,'0')+':'+String(eta.getMinutes()).padStart(2,'0');
+      }
+      const note = state.data.dropPoints.find(x=>x.id===nextDp.sourceDpId)?.unloadNote;
+      const cc = channelColor(nextDp.channelId);
+      return `
+        <div style="display:flex; align-items:center; justify-content:space-between; margin:4px 0 10px;">
+          <span style="border:1px solid #E0902E; color:#E0902E; border-radius:999px; padding:3px 10px; font-size:11.5px; font-weight:700;">最近・排定 ${String(seqN).padStart(2,'0')}</span>
+          <span style="background:${cc}22; color:${cc}; border-radius:999px; padding:3px 10px; font-size:11.5px; font-weight:700;">${escapeHtml(channelName(nextDp.channelId))}</span>
+        </div>
+        <div style="font-size:19px; font-weight:800; margin-bottom:8px;">${escapeHtml(dpLabel(nextDp))}</div>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <div style="flex:1; background:var(--panel-soft,#F3F4F6); border-radius:8px; padding:8px 10px;"><div style="font-size:10.5px; color:var(--ink-soft);">距離</div><div style="font-weight:700;">${dist!=null?(dist/1000).toFixed(1)+' km':'—'}</div></div>
+          <div style="flex:1; background:var(--panel-soft,#F3F4F6); border-radius:8px; padding:8px 10px;"><div style="font-size:10.5px; color:var(--ink-soft);">預計抵達</div><div style="font-weight:700;">${etaStr}</div></div>
+        </div>
+        <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:8px;">${escapeHtml(nextDp.address||'')}</div>
+        ${note ? `<div style="font-size:12.5px; background:#3A2E12; color:#E0B86A; border-radius:8px; padding:8px 10px; margin-bottom:8px;">⚠ 卸貨備註・${escapeHtml(note)}</div>` : ''}
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <a class="btn ghost" href="${mapLink(nextDp.address)}" target="_blank" rel="noopener" style="flex:1; text-align:center; text-decoration:none;">🧭 導航</a>
+          <select data-issue="${a.id}|${nextDp.id}" style="flex:1;">
+            <option value="">這站無法拍照</option>
+            ${['通路未下單','央廚未出貨','便當翻覆','遲到拒收'].map(r=>`<option value="${r}" ${nextDp.issueReason===r?'selected':''}>${r}</option>`).join('')}
+          </select>
+        </div>
+        ${mine.length>1 ? `<button type="button" data-viewall style="background:none; border:none; padding:0; color:var(--amber,#E0902E); font-size:13px; cursor:pointer;">查看全部 ${mine.length} 個站（依排序）›</button>` : ''}
+        <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${nextDp.id}" style="display:none;">
+      `;
+    };
+    const focusedCtaHtml = ()=>{
+      const nextDp = mine.filter(dp=>dp.status!=='completed' && !dp.issueReason)[0];
+      if(!nextDp) return '';
+      return `<button type="button" data-photo="${a.id}|${nextDp.id}" class="btn amber" style="width:100%; padding:13px; font-size:15px; font-weight:700;">📷 到站拍照</button>`;
+    };
+    const paintDrawer = ()=>{
+      renderTopbar();
+      if(drawerView==='all'){
+        drawerBody.innerHTML = `<button type="button" data-backfocus class="btn ghost" style="margin:4px 0 8px; padding:4px 10px; font-size:12px;">‹ 返回摘要</button>` + timelineHtml(a, mine);
+        drawerCta.innerHTML = '';
+      } else {
+        drawerBody.innerHTML = focusedCardHtml();
+        drawerCta.innerHTML = focusedCtaHtml();
+      }
+      wireStopPhotoControls(overlay, paintDrawer);
+      const back = overlay.querySelector('[data-backfocus]'); if(back) back.onclick = ()=>{ drawerView='focus'; paintDrawer(); };
+      overlay.querySelectorAll('[data-viewall]').forEach(btn=> btn.onclick = ()=>{ drawerView='all'; paintDrawer(); });
+    };
     paintDrawer();
-    // data-tlpick/data-tldone 用事件代理（委派在drawerBody上），而不是每次
-    // paintDrawer()重畫內容後都要重新querySelectorAll綁一次，寫法跟box那邊
-    // （靠外層renderTodayDetail整頁重繪）不同，是因為這裡只想重畫抽屜本身。
     drawerBody.addEventListener('click', e=>{
       const pickEl = e.target.closest('[data-tlpick]');
       if(pickEl){ const [aid, dpid] = pickEl.dataset.tlpick.split('|'); const st = tlState(aid); st.focus = (st.eff===dpid) ? '__none' : dpid; paintDrawer(); return; }
@@ -7674,38 +7769,86 @@ function renderTodayDetail(todays){
       sheetPos = Object.entries(SHEET_H).sort((x,y)=>Math.abs(x[1]-h)-Math.abs(y[1]-h))[0][0];
       applySheetPos();
     });
-    const closeOverlay = ()=>{ if(window._tripMap){ try{ window._tripMap.remove(); }catch(e){} window._tripMap = null; } overlay.remove(); };
-    overlay.querySelector('[data-mapclose]').onclick = closeOverlay;
-    const mapEl = overlay.querySelector('#tripMapEl');
-    mapEl.innerHTML = '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px;">地圖載入中…</div>';
-    try{ await loadLeaflet(); }catch(e){ if(overlay.isConnected) mapEl.innerHTML = `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px; text-align:center; padding:0 20px;">${escapeHtml(e.message)}</div>`; return; }
-    if(!overlay.isConnected) return;
-    mapEl.innerHTML = '';
-    const map = L.map(mapEl, { scrollWheelZoom:true });
-    window._tripMap = map;
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
-    const pin = (html, bg)=> L.divIcon({ className:'', html:`<div style="background:${bg};color:#fff;border-radius:50%;width:24px;height:24px;line-height:20px;text-align:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);font-size:13px;">${html}</div>`, iconSize:[24,24], iconAnchor:[12,12] });
-    // 跑車圖示：代表還沒送達的店，送達後換成打勾——純美術/顯示用，不是即時車輛位置。
-    const carIcon = L.divIcon({ className:'', html:'<div style="font-size:24px; line-height:1; filter:drop-shadow(0 1px 3px rgba(0,0,0,.5));">🏎️</div>', iconSize:[28,28], iconAnchor:[14,14] });
+    // 六邊形示意圖：蛇形排列每一站(跟geography無關，純粹示意順序)，BASE固定在最左，
+    // 卡車圖示停在「目前已完成的最後一站」(沒有即時定位，不是持續移動的位置)。
+    const drawSchema = ()=>{
+      const mapEl = overlay.querySelector('#tripMapEl');
+      const n = mine.length;
+      if(!n){ mapEl.innerHTML = '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#8a94a3; font-size:13px;">這趟還沒有店點</div>'; return; }
+      const containerWidth = Math.max(320, mapEl.clientWidth || 360);
+      const colSpacing = 112, rowSpacing = 126;
+      const cols = Math.max(2, Math.min(3, Math.floor((containerWidth-110)/colSpacing)));
+      const positions = [];
+      for(let i=0;i<n;i++){
+        const row = Math.floor(i/cols);
+        const idxInRow = i % cols;
+        const col = (row % 2 === 0) ? idxInRow : (cols-1-idxInRow);
+        const yJitter = (i % 2 === 0) ? -8 : 8;
+        positions.push({ x: 96 + col*colSpacing, y: 86 + row*rowSpacing + yJitter });
+      }
+      const baseX = 36, baseY = positions[0].y;
+      const rows = Math.ceil(n/cols);
+      const canvasW = 96 + cols*colSpacing + 50;
+      const canvasH = 86 + rows*rowSpacing + 70;
+      let lastDoneIdx = -1; mine.forEach((dp,i)=>{ if(dp.status==='completed') lastDoneIdx = i; });
+      const truckPos = lastDoneIdx>=0 ? positions[lastDoneIdx] : { x: baseX, y: baseY };
+      const allPts = [{x:baseX,y:baseY}, ...positions];
+      let pathD = '';
+      allPts.forEach((p,i)=>{ pathD += (i===0?'M':'L') + p.x + ' ' + p.y + ' '; });
+      const labelsHtml = mine.map((dp,i)=>{
+        const name = legNameByDpIndex[i];
+        if(!name) return '';
+        const p1 = allPts[i], p2 = allPts[i+1];
+        const mx = (p1.x+p2.x)/2, my = (p1.y+p2.y)/2;
+        // 往上偏移一點，避免正好疊在節點列/BASE標籤同一條水平線上（BASE跟第一站
+        // 常常離得近，標籤+BASE文字兩個都在同一高度最容易擠在一起）。
+        return `<div style="position:absolute; left:${mx}px; top:${my-20}px; transform:translate(-50%,-50%); font-size:10px; color:#8a94a3; background:#12161C; padding:1px 5px; border-radius:3px; white-space:nowrap;">${escapeHtml(name)}</div>`;
+      }).join('');
+      const nodesHtml = mine.map((dp,i)=>{
+        const p = positions[i];
+        const done = dp.status==='completed';
+        const color = channelColor(dp.channelId);
+        return `<div style="position:absolute; left:${p.x-26}px; top:${p.y-26}px; width:52px; height:52px;">
+          <div style="width:100%; height:100%; background:${done?'#1E3A2A':'#1B2A41'}; border:2px solid ${done?'#4C9169':'#E0902E'}; clip-path:polygon(25% 2%,75% 2%,100% 50%,75% 98%,25% 98%,0% 50%); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:14px;">${done?'✓':String(i+1).padStart(2,'0')}</div>
+          <div style="position:absolute; left:50%; bottom:-6px; transform:translateX(-50%); width:28px; height:4px; border-radius:2px; background:${color};"></div>
+        </div>`;
+      }).join('');
+      const baseHtml = `<div style="position:absolute; left:${baseX-28}px; top:${baseY-32}px; width:56px; text-align:center;">
+        <div style="font-size:24px; line-height:1;">🏭</div>
+        <div style="font-size:9.5px; font-weight:800; color:#E0902E; letter-spacing:.5px; margin-top:2px;">BASE</div>
+      </div>`;
+      const truckHtml = `<div style="position:absolute; left:${truckPos.x-14}px; top:${truckPos.y-44}px; font-size:20px;">🚚</div>`;
+      mapEl.innerHTML = `<div style="position:relative; width:${canvasW}px; height:${canvasH}px; min-width:100%; min-height:100%; background-image:linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px); background-size:36px 36px;">
+        <svg style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"><path d="${pathD}" stroke="#E0902E" stroke-width="2.5" stroke-dasharray="6 6" fill="none" opacity=".75"/></svg>
+        ${baseHtml}${truckHtml}${nodesHtml}${labelsHtml}
+      </div>`;
+    };
+    drawSchema();
+    // 真實距離/行車時間/路名(fetchRoadRoute，跟admin路線地圖共用同一支函式)，算好之後
+    // 補一次 drawSchema()(補路名標籤) + paintDrawer()(補卡片上的距離/ETA數字)。
     const og = state.data.origins.find(o=>o.address===a.origin);
-    const all = [], seq = [];
-    if(og && og.lat!=null && og.lng!=null){ L.marker([og.lat, og.lng], { icon: pin('⌂','#5B6472') }).addTo(map).bindTooltip('出發：'+(og.address||'')); all.push([og.lat, og.lng]); seq.push([og.lat, og.lng]); }
-    mine.forEach(dp=>{
+    const coordEntries = [];
+    if(og && og.lat!=null && og.lng!=null) coordEntries.push({ lat:og.lat, lng:og.lng });
+    mine.forEach((dp, idx)=>{
       const full = state.data.dropPoints.find(x=>x.id===dp.sourceDpId);
-      if(!full || full.lat==null || full.lng==null) return;
-      L.marker([full.lat, full.lng], { icon: dp.status==='completed' ? pin('✓','#2C6B44') : carIcon }).addTo(map).bindTooltip(dpLabel(dp));
-      all.push([full.lat, full.lng]); seq.push([full.lat, full.lng]);
+      if(full && full.lat!=null && full.lng!=null) coordEntries.push({ lat:full.lat, lng:full.lng, dpIndex:idx });
     });
-    if(all.length) map.fitBounds(all, { padding:[30,30], maxZoom:16 }); else map.setView([25.05, 121.52], 11);
-    if(seq.length>=2){
+    if(coordEntries.length>=2){
       try{
-        const rt = await fetchRoadRoute(seq);
+        const rt = await fetchRoadRoute(coordEntries.map(c=>[c.lat, c.lng]));
         if(!overlay.isConnected) return;
-        const line = rt ? rt.line : seq;
-        // 賽道造型：深色外線＋橘色主線＋白色中線虛線三層疊畫，純美術效果，不影響底層路徑資料。
-        L.polyline(line, { color:'#1B2A41', weight:9, opacity:.9, lineCap:'round' }).addTo(map);
-        L.polyline(line, { color:'#E0902E', weight:5, opacity:rt?1:0.7, dashArray: rt?null:'6 8' }).addTo(map);
-        if(rt) L.polyline(line, { color:'#fff', weight:1.5, opacity:.9, dashArray:'8 10' }).addTo(map);
+        if(rt){
+          rt.legs.forEach((leg, i)=>{
+            const toEntry = coordEntries[i+1];
+            if(toEntry && toEntry.dpIndex!=null){
+              legNameByDpIndex[toEntry.dpIndex] = leg.roadName;
+              legDistByDpIndex[toEntry.dpIndex] = leg.m;
+              legTimeByDpIndex[toEntry.dpIndex] = leg.s;
+            }
+          });
+          drawSchema();
+          paintDrawer();
+        }
       }catch(e){ console.error('路線計算失敗', e); }
     }
   }

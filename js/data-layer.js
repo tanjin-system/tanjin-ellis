@@ -903,13 +903,22 @@ async function fetchRoadRoute(coords) {
   const path = coords.map(c => c[1] + ',' + c[0]).join(';');
   const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 9000);
   try {
-    const r = await fetch('https://router.project-osrm.org/route/v1/driving/' + path + '?overview=full&geometries=geojson&steps=false', { signal: ctl.signal });
+    // steps=true：司機端的行程示意圖（見index.html openTripMapOverlay）要在每段路上標路名，
+    // 跟原本admin路線地圖共用這支函式，多了steps不影響原本的km/sec/legs用途。
+    const r = await fetch('https://router.project-osrm.org/route/v1/driving/' + path + '?overview=full&geometries=geojson&steps=true', { signal: ctl.signal });
     if (!r.ok) return null;
     const j = await r.json();
     const rt = j.routes && j.routes[0];
     if (!rt) return null;
-    // legs[i] = 第 i 段（上一點到這一點）的距離（公尺）與行車時間（秒）
-    return { line: rt.geometry.coordinates.map(c => [c[1], c[0]]), km: rt.distance / 1000, sec: rt.duration, legs: (rt.legs || []).map(l => ({ m: l.distance, s: l.duration })) };
+    // legs[i] = 第 i 段（上一點到這一點）的距離（公尺）與行車時間（秒）；roadName取這段裡
+    // 走最長距離的那個step的路名當代表（一段路本來就可能經過好幾條短街道，不會全部列出）。
+    return {
+      line: rt.geometry.coordinates.map(c => [c[1], c[0]]), km: rt.distance / 1000, sec: rt.duration,
+      legs: (rt.legs || []).map(l => ({
+        m: l.distance, s: l.duration,
+        roadName: (l.steps || []).slice().sort((a, b) => b.distance - a.distance)[0]?.name || ''
+      }))
+    };
   } catch (e) { return null; } finally { clearTimeout(tm); }
 }
 
