@@ -41,7 +41,7 @@ function mapOrigin(row) {
 }
 
 function mapDropPoint(row) {
-  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null };
+  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null, unloadNote: row.unload_note || '' };
 }
 
 function mapRoute(row) {
@@ -103,6 +103,10 @@ function mapAssignment(row) {
       photoPath: p.photo_url,
       photo: null,
       photoCleared: p.photo_cleared,
+      // 拍主要送達照片那一刻的GPS座標（跟燒進浮水印的同一次定位），用來之後校正
+      // drop_points 的地圖座標準確度，見 suggestDropPointCoordCorrections()。
+      deliveryLat: p.delivery_lat != null ? Number(p.delivery_lat) : null,
+      deliveryLng: p.delivery_lng != null ? Number(p.delivery_lng) : null,
       completedAt: p.completed_at || null,
       issueReason: p.issue_reason || null,
       helperId: p.helper_id || null, helperName: p.helper_name || '', delegationId: p.delegation_id || null, completedBy: p.completed_by || null,
@@ -807,6 +811,69 @@ async function saveDropPointCoord(dpId, lat, lng) {
   if (error) throw new Error('儲存座標失敗：' + error.message);
   const dp = state.data.dropPoints.find(x => x.id === dpId);
   if (dp) { dp.lat = lat; dp.lng = lng; }
+}
+// 卸貨備註：跟著店本身走的共用筆記（見schema PART 40），任何司機都能補寫，
+// 不是單趟任務的欄位，所以直接存回 drop_points，不是 assignment_drop_points。
+async function saveUnloadNote(dpId, note) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('drop_points').update({ unload_note: note || null }).eq('id', dpId);
+  if (error) throw new Error('儲存卸貨備註失敗：' + error.message);
+  const dp = state.data.dropPoints.find(x => x.id === dpId);
+  if (dp) dp.unloadNote = note || '';
+}
+// 地圖座標自動校正：用司機拍照當下的GPS座標（跟燒進浮水印同一份定位）跟
+// drop_points目前的座標比對——同一家店如果已經累積夠多次送達座標、且一致
+// 偏離目前座標超過門檻，代表目前座標（地址反查出來的）可能本來就不準，
+// 直接用送貨座標的中位數校正掉，不用主控逐筆確認（純粹提升地圖/導航精準度，
+// 跟計價公式無關——里程/費用是主控按「採用地圖里程」當下寫入的快照，不會
+// 被座標變動連動改掉，見schema PART 40的說明）。開啟店點資料庫頁面時機會性
+// 執行一次，不是背景排程（這個系統本來就沒有後端排程基礎設施）。
+// 注意：state.data.assignments 可能只載入了近期窗口（見ASSIGNMENTS_WINDOW_DAYS），
+// 不是全部歷史——這個函式本來就是「機會性、愈用愈準」，不要求一次看到全部資料。
+const COORD_CORRECTION_MIN_SAMPLES = 5;
+const COORD_CORRECTION_THRESHOLD_KM = 0.1; // 100公尺，跟使用者討論時定的門檻一致
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371, r = x => x * Math.PI / 180;
+  const dLat = r(lat2 - lat1), dLng = r(lng2 - lng1);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function median(nums) {
+  const s = nums.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+async function suggestDropPointCoordCorrections() {
+  const bySource = new Map();
+  for (const a of state.data.assignments) {
+    for (const dp of (a.dropPoints || [])) {
+      if (!dp.sourceDpId || dp.deliveryLat == null || dp.deliveryLng == null) continue;
+      if (!bySource.has(dp.sourceDpId)) bySource.set(dp.sourceDpId, []);
+      bySource.get(dp.sourceDpId).push({ lat: dp.deliveryLat, lng: dp.deliveryLng });
+    }
+  }
+  const applied = [];
+  const supabase = getSupabase();
+  for (const [dpId, samples] of bySource) {
+    if (samples.length < COORD_CORRECTION_MIN_SAMPLES) continue;
+    const dp = state.data.dropPoints.find(x => x.id === dpId);
+    if (!dp) continue;
+    const medLat = median(samples.map(s => s.lat));
+    const medLng = median(samples.map(s => s.lng));
+    if (dp.lat != null && dp.lng != null) {
+      const distKm = haversineKm(dp.lat, dp.lng, medLat, medLng);
+      if (distKm < COORD_CORRECTION_THRESHOLD_KM) continue; // 落差在正常GPS誤差範圍內，不動
+    }
+    const oldLat = dp.lat, oldLng = dp.lng;
+    try {
+      await saveDropPointCoord(dpId, medLat, medLng);
+      await supabase.from('drop_point_coord_adjustments').insert({
+        drop_point_id: dpId, old_lat: oldLat, old_lng: oldLng, new_lat: medLat, new_lng: medLng, sample_count: samples.length
+      });
+      applied.push({ dpId, label: dpLabel(dp), oldLat, oldLng, newLat: medLat, newLng: medLng, sampleCount: samples.length });
+    } catch (e) { console.error('座標自動校正失敗', dpId, e.message); }
+  }
+  return applied;
 }
 async function saveOriginCoord(originId, lat, lng) {
   const supabase = getSupabase();
@@ -1701,7 +1768,7 @@ async function updateAssignmentFinance(assignmentId, { fare, distanceKm, billing
   }
 }
 
-async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
+async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl, coords) {
   const { bytes, contentType } = dataUrlToBytesAndType(dataUrl);
   const path = `${assignmentId}/${dropPointId}.jpg`;
   const supabase = getSupabase();
@@ -1715,14 +1782,22 @@ async function uploadDropPointPhoto(assignmentId, dropPointId, dataUrl) {
   const dp = assignment?.dropPoints.find(x => x.id === dropPointId);
 
   const completedAt = new Date().toISOString();
+  // coords（拍照那一刻的GPS，跟燒進浮水印的是同一次定位）跟著這次送達一起存，
+  // 給之後的 suggestDropPointCoordCorrections() 拿「真實送達位置」比對地圖座標用；
+  // 拒絕定位授權或定位逾時時 coords 是 null，就只存送達狀態，不影響拍照本身。
+  const updatePayload = { status: 'completed', photo_url: path, completed_at: completedAt, issue_reason: null };
+  if (coords) { updatePayload.delivery_lat = coords.lat; updatePayload.delivery_lng = coords.lng; }
   // 補拍照片代表這個店點其實送達了，之前選的未完成原因（如果有）就不成立，
   // 一起清掉，避免畫面同時顯示「已完成」又掛著一個舊的未完成原因標籤。
   const { error: updErr } = await supabase.from('assignment_drop_points')
-    .update({ status: 'completed', photo_url: path, completed_at: completedAt, issue_reason: null })
+    .update(updatePayload)
     .eq('id', dropPointId);
   if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
 
-  if (dp) { dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; dp.completedAt = completedAt; }
+  if (dp) {
+    dp.status = 'completed'; dp.photoPath = path; dp.photo = dataUrl; dp.issueReason = null; dp.completedAt = completedAt;
+    if (coords) { dp.deliveryLat = coords.lat; dp.deliveryLng = coords.lng; }
+  }
 
   // 資料庫會在第一張照片時自動「出發」、最後一個店點拍完時自動「完成」（見 schema PART 32 auto_progress_assignment），
   // 這裡把畫面上的任務狀態同步過來，夥伴不用等即時推送才看到。
@@ -1782,6 +1857,101 @@ async function uploadDropPointMedia(assignmentId, dropPointId, items) {
   if (signErr) console.error('取得附加媒體連結失敗', signErr.message);
   else signed.forEach((s, i) => { uploaded[i].url = s?.signedUrl || null; });
   return uploaded;
+}
+
+// ---------- 離線上傳佇列（IndexedDB） ----------
+// 訊號差的店家（地下室、倉庫）拍完照上傳失敗，不該直接把照片丟掉逼夥伴重拍——
+// 先把整筆「要做的事」存進手機本地，恢復上網後自動補送。用IndexedDB不用
+// localStorage：照片dataURL常常1-2MB，localStorage單一網域通常只有5-10MB
+// 上限，存幾張就會爆。
+const PENDING_DB_NAME = 'fleet_pending_uploads';
+const PENDING_STORE = 'queue';
+
+function openPendingDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(PENDING_DB_NAME, 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore(PENDING_STORE, { keyPath: 'id', autoIncrement: true }); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function queuePendingUpload(task) {
+  const db = await openPendingDb();
+  const id = await new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE, 'readwrite');
+    const req = tx.objectStore(PENDING_STORE).add({ ...task, queuedAt: Date.now() });
+    req.onsuccess = () => resolve(req.result);
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+  return id;
+}
+
+async function listPendingUploads() {
+  const db = await openPendingDb();
+  const items = await new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE, 'readonly');
+    const req = tx.objectStore(PENDING_STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return items;
+}
+
+async function removePendingUpload(id) {
+  const db = await openPendingDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(PENDING_STORE, 'readwrite');
+    tx.objectStore(PENDING_STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+// 判斷失敗是不是「網路真的不通」造成的——業務邏輯錯誤（RLS擋掉、店點不存在…）
+// 重試也不會成功，不該排進佇列假裝之後會好，應該直接把錯誤丟回去讓夥伴知道。
+function isNetworkError(err) {
+  if (!err) return false;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  const msg = String((err && err.message) || err);
+  return /fetch|network|NetworkError|ERR_INTERNET|timed? ?out/i.test(msg);
+}
+
+// 恢復上網／App回到前景時呼叫：依序補送佇列（刻意一筆一筆送，不是Promise.all
+// 同時送，避免跟夥伴當下操作搶頻寬，也避免一筆卡住時搞不清楚是哪一筆的問題）。
+let _flushingPending = false;
+async function flushPendingUploads(onItemDone) {
+  if (_flushingPending) return;
+  _flushingPending = true;
+  try {
+    const items = await listPendingUploads();
+    for (const item of items) {
+      try {
+        if (item.kind === 'photo') await uploadDropPointPhoto(item.assignmentId, item.dropPointId, item.dataUrl, item.coords || null);
+        else await uploadDropPointMedia(item.assignmentId, item.dropPointId, [{ ...dataUrlToBytesAndType(item.dataUrl), mediaType: 'image' }]);
+        await removePendingUpload(item.id);
+        if (onItemDone) onItemDone({ ok: true, item });
+      } catch (e) {
+        if (!isNetworkError(e)) { await removePendingUpload(item.id); if (onItemDone) onItemDone({ ok: false, item, error: e }); }
+        else break; // 還是沒網路，剩下的留著等下次再試
+      }
+    }
+  } finally {
+    _flushingPending = false;
+  }
+}
+
+// 簡單雜湊（非加密用途，只用來判斷「是不是同一張照片」）：定點取樣字串而非
+// 整串逐字元跑——base64常常上百萬字元，全跑一次會卡住UI一下。
+function quickImageHash(dataUrl) {
+  const s = dataUrl || '';
+  let h = 5381;
+  const step = Math.max(1, Math.floor(s.length / 2000));
+  for (let i = 0; i < s.length; i += step) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36) + '_' + s.length;
 }
 
 async function bulkDeleteAssignments(ids) {

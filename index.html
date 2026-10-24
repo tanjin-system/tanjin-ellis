@@ -566,7 +566,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=1"></script>
+<script defer src="js/data-layer.js?v=2"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=1"></script>
 <script>
@@ -712,11 +712,22 @@ async function compressImageFile(file, maxDim=1000, quality=0.6){
 // {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
 // 相機權限），呼叫端應該退回原本 <input capture multiple> 的方式讓
 // 使用者至少還能選現成的照片，不會整個功能卡死。
+// 浮水印用的座標：疊層一開啟就先要一次定位（不是每拍一張才要，避免拖慢
+// 連續拍照），抓不到或夥伴拒絕授權也不擋住拍照——那浮水印就只疊時間、
+// 註明「GPS 未取得」，不會讓整個拍照功能卡住。
 function openCameraCapture(maxShots){
   return new Promise((resolve)=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       resolve({ fallback:true });
       return;
+    }
+    let geoCoords = null;
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(
+        pos=>{ geoCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; },
+        ()=>{},
+        { enableHighAccuracy:false, timeout:6000, maximumAge:60000 }
+      );
     }
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
@@ -753,23 +764,25 @@ function openCameraCapture(maxShots){
       video.srcObject = s;
       video.play().catch(()=>{}); // 部分裝置的autoplay政策較嚴格，明確呼叫一次play()避免畫面停在黑屏
     }).catch(()=>{ settle({ fallback:true }); });
-    overlay.querySelector('[data-camcancel]').onclick = ()=> settle(shots.length ? { dataUrls:shots } : { cancelled:true });
-    doneBtn.onclick = ()=> settle({ dataUrls: shots });
+    overlay.querySelector('[data-camcancel]').onclick = ()=> settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { cancelled:true });
+    doneBtn.onclick = ()=> settle({ dataUrls: shots, coords:geoCoords });
     shootBtn.onclick = ()=>{
       // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
       // 是黑的），這種情況直接當作失敗退回檔案選擇，不要硬拍出一張空白
       // 照片讓夥伴以為拍成功了。
-      if(!video.videoWidth || !video.videoHeight){ settle(shots.length ? { dataUrls:shots } : { fallback:true }); return; }
+      if(!video.videoWidth || !video.videoHeight){ settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { fallback:true }); return; }
       const maxDim = 1000;
       let width = video.videoWidth, height = video.videoHeight;
       if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
       else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = height;
-      canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, width, height);
+      drawPhotoWatermark(ctx, width, height, geoCoords);
       let dataUrl;
       try{ dataUrl = canvas.toDataURL('image/jpeg', 0.7); }
-      catch(e){ settle(shots.length ? { dataUrls:shots } : { fallback:true }); return; }
+      catch(e){ settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { fallback:true }); return; }
       shots.push(dataUrl);
       countEl.textContent = shots.length;
       const thumb = document.createElement('img');
@@ -777,8 +790,54 @@ function openCameraCapture(maxShots){
       thumb.style.cssText = 'width:48px; height:48px; object-fit:cover; border-radius:4px; border:2px solid #fff;';
       thumbsEl.appendChild(thumb);
       doneBtn.style.display = 'block';
-      if(shots.length>=maxShots) settle({ dataUrls:shots });
+      if(shots.length>=maxShots) settle({ dataUrls:shots, coords:geoCoords });
     };
+  });
+}
+// 浮水印直接畫進canvas像素（燒錄在圖片上），不是寫EXIF——EXIF可以被工具
+// 清掉，燒進畫面才能當送達時間/地點的證明，事後沒辦法無痛抽換時間或地點。
+function drawPhotoWatermark(ctx, width, height, coords){
+  const lines = [
+    new Date().toLocaleString('zh-TW', { hour12:false }),
+    coords ? `GPS ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'GPS 未取得'
+  ];
+  const fontSize = Math.max(13, Math.round(width*0.032));
+  const lineHeight = Math.round(fontSize*1.35);
+  const padding = Math.round(fontSize*0.6);
+  const boxHeight = lineHeight*lines.length + padding*2;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, height-boxHeight, width, boxHeight);
+  ctx.fillStyle = '#fff';
+  ctx.font = `${fontSize}px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif`;
+  ctx.textBaseline = 'top';
+  lines.forEach((line,i)=>{ ctx.fillText(line, padding, height-boxHeight+padding+i*lineHeight); });
+}
+// 自建相機（openCameraCapture）在拍照當下已經疊過浮水印；但「上傳照片」
+// 走相簿選現成檔案，沒有經過那段流程，另外在這裡補疊一次，兩條路徑最後
+// 看到的都是已經燒好浮水印的照片，不會因為上傳方式不同而有的有、有的沒有。
+function watermarkDataUrl(dataUrl){
+  return new Promise((resolve)=>{
+    let geoCoords = null;
+    const draw = ()=>{
+      const im = new Image();
+      im.onload = ()=>{
+        const c = document.createElement('canvas');
+        c.width = im.width; c.height = im.height;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(im, 0, 0);
+        drawPhotoWatermark(ctx, im.width, im.height, geoCoords);
+        try{ resolve({ dataUrl: c.toDataURL('image/jpeg', 0.75), coords:geoCoords }); }catch(e){ resolve({ dataUrl, coords:geoCoords }); }
+      };
+      im.onerror = ()=> resolve({ dataUrl, coords:null });
+      im.src = dataUrl;
+    };
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(
+        pos=>{ geoCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; draw(); },
+        ()=> draw(),
+        { enableHighAccuracy:false, timeout:4000, maximumAge:60000 }
+      );
+    } else draw();
   });
 }
 // 拍照按鈕的統一入口：先試自建相機（一定是相機，不會跳相簿），拿不到
@@ -786,7 +845,7 @@ function openCameraCapture(maxShots){
 // （fallbackInput）。onDataUrls收到的是陣列，即使maxShots是1也一樣。
 async function capturePhoto(fallbackInput, maxShots, onDataUrls){
   const result = await openCameraCapture(maxShots);
-  if(result.dataUrls && result.dataUrls.length){ onDataUrls(result.dataUrls); }
+  if(result.dataUrls && result.dataUrls.length){ onDataUrls(result.dataUrls, result.coords||null); }
   else if(result.fallback){ fallbackInput.click(); }
   // cancelled：使用者自己取消，什麼都不做。
 }
@@ -3068,6 +3127,12 @@ function renderDropPoints(c){
   document.getElementById('dpCollapseAll').onclick = ()=>{ dpExpandedChannels.clear(); renderDpListBody(); };
   renderCoveragePanel();
   renderDpListBody();
+  // 地圖座標自動校正：機會性執行一次（不是每家店都會符合條件，見data-layer.js
+  // suggestDropPointCoordCorrections 旁邊的說明），純粹讓地圖/導航更準，跟計價
+  // 公式無關，不需要跳確認視窗，但校正完要重畫列表讓目前畫面上的座標跟著更新。
+  suggestDropPointCoordCorrections().then(applied=>{
+    if(applied.length){ toast(`📍 已依送貨照片定位自動校正 ${applied.length} 家店的地圖座標`, { type:'info' }); renderDpListBody(); }
+  }).catch(e=> console.error('座標自動校正失敗', e));
 }
 // 地圖座標：把店點地址轉成經緯度（路線管理的地圖路線、預計時間用）。免費、只查一次，每秒一家，所以一次補齊很多家要幾分鐘。
 let geoCancel = { stop:false }, geoRunning = false;
@@ -7321,6 +7386,32 @@ function thumbsPrune(){
     });
   }catch(e){}
 }
+// 離線佇列中的店點：只存在記憶體裡（跟this次開啟畫面同生命週期），單純用來
+// 在畫面上標一個「等待上傳」的提示——實際佇列內容在IndexedDB(見data-layer.js)，
+// 重新整理畫面後仍在，只是這個小提示要等flushPendingOfflineBadges()重新掃一次。
+state._offlinePendingDp = state._offlinePendingDp || new Set();
+function markDpOfflinePending(dpId){ state._offlinePendingDp.add(dpId); }
+async function refreshOfflinePendingBadges(){
+  try{
+    const items = await listPendingUploads();
+    state._offlinePendingDp = new Set(items.map(x=>x.dropPointId));
+  }catch(e){}
+}
+// 恢復網路／App回到前景／剛開啟App時都試著補送一次離線佇列——這三個
+// 時機涵蓋「訊號差的店離開了」「切到別的App再切回來」「昨天沒傳完，
+// 今天重新登入」幾種實際會發生的情況。只註冊一次監聽，避免登出再登入
+// 時重複掛好幾份一樣的事件。
+let _offlineFlushWired = false;
+function setupOfflineUploadFlush(){
+  if(_offlineFlushWired) return;
+  _offlineFlushWired = true;
+  const tryFlush = ()=>{
+    flushPendingUploads().then(()=> refreshOfflinePendingBadges().then(()=>renderContent()));
+  };
+  window.addEventListener('online', tryFlush);
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') tryFlush(); });
+  tryFlush();
+}
 async function thumbsAdd(dpId, dataUrl){
   const t = await makeThumb(dataUrl);
   if(!t) return;
@@ -7427,10 +7518,12 @@ function renderTodayDetail(todays){
           <div class="drop-point-driver ${dp.id===nextDpId?'next-stop':''} ${dp.id===flashId?'flash':''}" data-dpid="${dp.id}">
             <span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}）
             ${statusBadge}
+            ${state._offlinePendingDp && state._offlinePendingDp.has(dp.id) ? '<span class="badge" style="background:#E7E9EC; color:#555;">📦 離線佇列中・恢復網路後自動上傳</span>' : ''}
             ${photoCount ? `<span class="upok"><b>✓</b>已上傳 ${photoCount} 張</span>` : ''}
             ${(()=>{ const th = thumbsGet(dp.id); return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="" loading="lazy">`).join('')}</div>` : ''; })()}
             ${readonly ? `<span class="badge" style="background:#E3EEF7; color:#2F6EA5;">由${escapeHtml(dp.helperName||'支援夥伴')}支援</span>` : ''}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未完成：${dp.issueReason}</span>` : ''}
+            ${(()=>{ const note = state.data.dropPoints.find(x=>x.id===dp.sourceDpId)?.unloadNote; return note ? `<div style="font-size:12.5px; background:#FFF6E0; border-radius:6px; padding:5px 8px; margin-top:6px;">📝 卸貨備註：${escapeHtml(note)}</div>` : ''; })()}
             ${readonly ? '' : `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
               ${photoCount<3 ? `
               <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>
@@ -7439,6 +7532,7 @@ function renderTodayDetail(todays){
               <input type="file" accept="image/*" multiple data-photolibinput="${a.id}|${dp.id}" style="display:none;">
               ` : '<span style="font-size:11.5px; color:var(--ink-soft);">已達3張上限</span>'}
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
+              <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-unloadnote="${dp.sourceDpId||''}">✏️ 卸貨備註</button>
             </div>
             ${!dp.photo && dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
             ${dp.status!=='completed' ? `<div style="margin-top:8px;">
@@ -7525,6 +7619,96 @@ function renderTodayDetail(todays){
     h += `<div class="tl-st"><div class="tl-rail">${flag}</div><div class="tl-body" style="padding-bottom:4px;"><div class="tl-sub" style="margin-top:3px;">收工　全部處理完後按下面「完成任務」</div></div></div>`;
     return h;
   };
+  // 地圖檢視：抽屜式UI，地圖本身重用既有Leaflet/OSRM（跟主控路線管理的
+  // renderRouteMap同一套，見loadLeaflet/fetchRoadRoute），只畫靜態路線/
+  // 停靠點，不含即時車輛位置——司機可能不同意授權定位、PWA切到背景後
+  // 定位也不可靠，討論後拿掉這塊，純粹顯示用，不影響上傳/備註等功能。
+  // 抽屜內容直接重用timelineHtml/dpRow，拍照、未完成原因、卸貨備註跟
+  // 平常畫面一模一樣；因為這個疊層是另外掛在document.body底下的DOM，
+  // 不在box底下，box自己的querySelectorAll碰不到它，所以要重新呼叫
+  // wireStopPhotoControls / 補上data-tlpick、data-tldone的點擊處理。
+  async function openTripMapOverlay(a, mine){
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#12161C; z-index:9000; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:#1B2A41; color:#fff; flex:0 0 auto;">
+        <strong style="font-size:14px;">${escapeHtml(routeName(a.routeId))}</strong>
+        <button type="button" data-mapclose style="background:none; border:none; color:#fff; font-size:20px; padding:4px 8px; line-height:1;">✕</button>
+      </div>
+      <div id="tripMapEl" style="flex:1; position:relative; min-height:0;"></div>
+      <div id="tripDrawer" style="position:relative; background:var(--surface,#fff); border-radius:16px 16px 0 0; box-shadow:0 -4px 16px rgba(0,0,0,.3); overflow:hidden; display:flex; flex-direction:column; flex:0 0 auto;">
+        <div data-draghandle style="flex:0 0 auto; padding:10px 0 6px; display:flex; justify-content:center; cursor:grab; touch-action:none;"><div style="width:40px; height:5px; border-radius:3px; background:#ccc;"></div></div>
+        <div id="tripDrawerBody" style="flex:1; overflow:auto; padding:0 14px 14px;"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const drawer = overlay.querySelector('#tripDrawer');
+    const drawerBody = overlay.querySelector('#tripDrawerBody');
+    const SHEET_H = { low: 96, mid: Math.round(window.innerHeight*0.42), high: Math.round(window.innerHeight*0.82) };
+    let sheetPos = 'mid';
+    const applySheetPos = ()=>{ drawer.style.transition = 'height .25s ease'; drawer.style.height = SHEET_H[sheetPos]+'px'; };
+    applySheetPos();
+    const paintDrawer = ()=>{ drawerBody.innerHTML = timelineHtml(a, mine); wireStopPhotoControls(overlay, paintDrawer); };
+    paintDrawer();
+    // data-tlpick/data-tldone 用事件代理（委派在drawerBody上），而不是每次
+    // paintDrawer()重畫內容後都要重新querySelectorAll綁一次，寫法跟box那邊
+    // （靠外層renderTodayDetail整頁重繪）不同，是因為這裡只想重畫抽屜本身。
+    drawerBody.addEventListener('click', e=>{
+      const pickEl = e.target.closest('[data-tlpick]');
+      if(pickEl){ const [aid, dpid] = pickEl.dataset.tlpick.split('|'); const st = tlState(aid); st.focus = (st.eff===dpid) ? '__none' : dpid; paintDrawer(); return; }
+      const doneEl = e.target.closest('[data-tldone]');
+      if(doneEl){ const st = tlState(doneEl.dataset.tldone); st.doneOpen = !st.doneOpen; paintDrawer(); }
+    });
+    const handle = overlay.querySelector('[data-draghandle]');
+    let dragStartY = null, startHeight = null;
+    handle.onclick = ()=>{ if(dragStartY!=null) return; sheetPos = sheetPos==='low' ? 'mid' : sheetPos==='mid' ? 'high' : 'low'; applySheetPos(); };
+    handle.addEventListener('pointerdown', e=>{ dragStartY = e.clientY; startHeight = drawer.getBoundingClientRect().height; handle.setPointerCapture(e.pointerId); });
+    handle.addEventListener('pointermove', e=>{
+      if(dragStartY==null) return;
+      const h = Math.min(SHEET_H.high, Math.max(SHEET_H.low, startHeight + (dragStartY - e.clientY)));
+      drawer.style.transition = 'none'; drawer.style.height = h+'px';
+    });
+    handle.addEventListener('pointerup', ()=>{
+      if(dragStartY==null) return;
+      dragStartY = null;
+      const h = drawer.getBoundingClientRect().height;
+      sheetPos = Object.entries(SHEET_H).sort((x,y)=>Math.abs(x[1]-h)-Math.abs(y[1]-h))[0][0];
+      applySheetPos();
+    });
+    const closeOverlay = ()=>{ if(window._tripMap){ try{ window._tripMap.remove(); }catch(e){} window._tripMap = null; } overlay.remove(); };
+    overlay.querySelector('[data-mapclose]').onclick = closeOverlay;
+    const mapEl = overlay.querySelector('#tripMapEl');
+    mapEl.innerHTML = '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px;">地圖載入中…</div>';
+    try{ await loadLeaflet(); }catch(e){ if(overlay.isConnected) mapEl.innerHTML = `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px; text-align:center; padding:0 20px;">${escapeHtml(e.message)}</div>`; return; }
+    if(!overlay.isConnected) return;
+    mapEl.innerHTML = '';
+    const map = L.map(mapEl, { scrollWheelZoom:true });
+    window._tripMap = map;
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+    const pin = (html, bg)=> L.divIcon({ className:'', html:`<div style="background:${bg};color:#fff;border-radius:50%;width:24px;height:24px;line-height:20px;text-align:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);font-size:13px;">${html}</div>`, iconSize:[24,24], iconAnchor:[12,12] });
+    // 跑車圖示：代表還沒送達的店，送達後換成打勾——純美術/顯示用，不是即時車輛位置。
+    const carIcon = L.divIcon({ className:'', html:'<div style="font-size:24px; line-height:1; filter:drop-shadow(0 1px 3px rgba(0,0,0,.5));">🏎️</div>', iconSize:[28,28], iconAnchor:[14,14] });
+    const og = state.data.origins.find(o=>o.address===a.origin);
+    const all = [], seq = [];
+    if(og && og.lat!=null && og.lng!=null){ L.marker([og.lat, og.lng], { icon: pin('⌂','#5B6472') }).addTo(map).bindTooltip('出發：'+(og.address||'')); all.push([og.lat, og.lng]); seq.push([og.lat, og.lng]); }
+    mine.forEach(dp=>{
+      const full = state.data.dropPoints.find(x=>x.id===dp.sourceDpId);
+      if(!full || full.lat==null || full.lng==null) return;
+      L.marker([full.lat, full.lng], { icon: dp.status==='completed' ? pin('✓','#2C6B44') : carIcon }).addTo(map).bindTooltip(dpLabel(dp));
+      all.push([full.lat, full.lng]); seq.push([full.lat, full.lng]);
+    });
+    if(all.length) map.fitBounds(all, { padding:[30,30], maxZoom:16 }); else map.setView([25.05, 121.52], 11);
+    if(seq.length>=2){
+      try{
+        const rt = await fetchRoadRoute(seq);
+        if(!overlay.isConnected) return;
+        const line = rt ? rt.line : seq;
+        // 賽道造型：深色外線＋橘色主線＋白色中線虛線三層疊畫，純美術效果，不影響底層路徑資料。
+        L.polyline(line, { color:'#1B2A41', weight:9, opacity:.9, lineCap:'round' }).addTo(map);
+        L.polyline(line, { color:'#E0902E', weight:5, opacity:rt?1:0.7, dashArray: rt?null:'6 8' }).addTo(map);
+        if(rt) L.polyline(line, { color:'#fff', weight:1.5, opacity:.9, dashArray:'8 10' }).addTo(map);
+      }catch(e){ console.error('路線計算失敗', e); }
+    }
+  }
   box.innerHTML = progHtml + nextHtml + todays.map(a=>{
     const mine = ownDropPoints(a);
     const allHandled = mine.length>0 && mine.every(dp=>dp.status==='completed' || dp.issueReason);
@@ -7537,7 +7721,7 @@ function renderTodayDetail(todays){
           <a class="btn ghost" href="${lineShareLink(`【任務提醒】${a.date} ${routeName(a.routeId)}\n任務起點：${a.origin||'—'}\n店點：${mine.map(dpLabel).join('、')||'尚未建立'}`)}" target="_blank" style="text-decoration:none; display:inline-block;">分享至LINE</a>
         </span>
       </div>
-      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, mine); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}</p>
+      <p style="font-size:12.5px;">任務起點：${a.origin||'—'} ${(()=>{ const link = buildMultiStopMapsLink(a.origin, mine); return link ? `<a class="link" href="${link}" target="_blank">開啟多點導航</a>` : ''; })()}${mine.length ? ` ・ <a class="link" data-mapview="${a.id}" href="javascript:void(0)">🗺️ 地圖檢視</a>` : ''}</p>
       ${a===todays[0] ? supportToday.map(supBlock).join('') : ''}
       ${a.status==='scheduled' ? `<button class="btn amber" data-start="${a.id}">開始任務</button>` : `
         ${timelineHtml(a, mine)}
@@ -7551,11 +7735,108 @@ function renderTodayDetail(todays){
   // 重複下載很多次，是 Storage 流量爆量的主因之一。
   const dpById = {};
   [...todays, ...supportToday].forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
-  box.querySelectorAll('[data-dpid]').forEach(el=>{
-    const dp = dpById[el.dataset.dpid];
-    const urls = dp ? dpPhotoUrls(dp) : [];
-    if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
-  });
+  // 店點的拍照/上傳/未完成原因/卸貨備註控制項獨立成一支函式（接受任意 root），
+  // 是因為地圖檢視（openTripMapOverlay）裡的抽屜用同一套 dpRow() 畫面，
+  // 但那是另外一棵 DOM（掛在 document.body 底下的全螢幕疊層），不是 box
+  // 的子節點，不能靠 box.querySelectorAll 選到，兩處都呼叫這支函式各自
+  // 在自己的 root 底下把按鈕點亮，不用寫兩份一樣的邏輯。
+  // onDone：地圖檢視的抽屜是另一棵獨立DOM（不在box底下），box重畫不會連帶
+  // 更新抽屜內容，所以抽屜呼叫這支函式時會多傳一個onDone，在每個會改到
+  // 店點狀態的動作完成後也重畫一次抽屜本身；平常box自己呼叫不用傳，box
+  // 已經靠外層renderContent()整頁重畫涵蓋到了。
+  function wireStopPhotoControls(root, onDone){
+    const refresh = ()=>{ renderContent(); if(onDone) onDone(); };
+    root.querySelectorAll('[data-dpid]').forEach(el=>{
+      const dp = dpById[el.dataset.dpid];
+      const urls = dp ? dpPhotoUrls(dp) : [];
+      const vp = el.querySelector('[data-viewphoto]');
+      if(urls.length && vp) vp.onclick = ()=> openPhotoLightbox(urls);
+    });
+    root.querySelectorAll('[data-photo]').forEach(btn=>{
+      const [aid, dpid] = btn.dataset.photo.split('|');
+      const fallbackInput = root.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
+      async function goMany(dataUrls, coords){
+        const up = toast(`📤 照片上傳中（${dataUrls.length} 張），請稍候…`, { type:'info', sticky:true });
+        try{
+          for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl, coords);
+          up.dismiss();
+          state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
+          refresh();
+          showCheckOverlay(dataUrls.length);
+        }catch(err){
+          up.dismiss();
+          if(err.queued){ toast('📦 '+err.message, { type:'info' }); refresh(); }
+          else { console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
+        }
+      }
+      btn.onclick = ()=>{
+        const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+        const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
+        const budget = Math.max(1, 3 - photoCount);
+        capturePhoto(fallbackInput, budget, goMany);
+      };
+      fallbackInput.onchange = (e)=>{
+        const files = [...e.target.files]; if(!files.length) return;
+        (async ()=>{
+          try{
+            const shots = [];
+            for(const f of files) shots.push(await watermarkDataUrl(await compressImageFile(f)));
+            await goMany(shots.map(x=>x.dataUrl), shots[0]?.coords||null);
+          }catch(err){
+            console.error('照片處理失敗', err);
+            alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
+          }
+        })();
+      };
+    });
+    root.querySelectorAll('[data-photolib]').forEach(btn=>{
+      const [aid, dpid] = btn.dataset.photolib.split('|');
+      const libInput = root.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
+      btn.onclick = ()=> libInput.click();
+      libInput.onchange = (e)=>{
+        const files = [...e.target.files]; if(!files.length) return;
+        const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+        const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
+        const budget = Math.max(0, 3 - photoCount);
+        const acceptFiles = files.slice(0, budget);
+        const droppedCount = files.length - acceptFiles.length;
+        (async ()=>{
+          try{
+            const shots = [];
+            for(const f of acceptFiles) shots.push(await watermarkDataUrl(await compressImageFile(f)));
+            for(const s of shots) await fillNextPhotoSlot(aid, dpid, s.dataUrl, s.coords);
+            state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
+            showCheckOverlay(acceptFiles.length);
+            if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
+            refresh();
+          }catch(err){
+            if(err.queued){ toast('📦 '+err.message, { type:'info' }); refresh(); return; }
+            console.error('照片處理失敗', err);
+            alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
+          }
+        })();
+      };
+    });
+    root.querySelectorAll('[data-issue]').forEach(sel=>{
+      sel.onchange = async ()=>{
+        const [aid, dpid] = sel.dataset.issue.split('|');
+        try{ await setDropPointIssueReason(aid, dpid, sel.value || null); refresh(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    root.querySelectorAll('[data-unloadnote]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const sourceDpId = btn.dataset.unloadnote;
+        if(!sourceDpId){ alert('這個店點還沒有建檔完整的店點資料，無法寫備註。'); return; }
+        const current = state.data.dropPoints.find(x=>x.id===sourceDpId)?.unloadNote || '';
+        const note = prompt('卸貨備註（其他司機排到這個店也會看到，留空代表清除）：', current);
+        if(note===null) return;
+        try{ await saveUnloadNote(sourceDpId, note.trim()); refresh(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+  }
+  wireStopPhotoControls(box);
   box.querySelectorAll('[data-tlpick]').forEach(el=>{
     el.onclick = ()=>{ const [aid, dpid] = el.dataset.tlpick.split('|'); const st = tlState(aid); st.focus = (st.eff===dpid) ? '__none' : dpid; renderTodayDetail(todays); };
   });
@@ -7564,6 +7845,12 @@ function renderTodayDetail(todays){
   });
   box.querySelectorAll('[data-gonext]').forEach(btn=>{
     btn.onclick = ()=>{ const el = box.querySelector(`[data-dpid="${btn.dataset.gonext}"]`); if(el) el.scrollIntoView({behavior:'smooth', block:'center'}); };
+  });
+  box.querySelectorAll('[data-mapview]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const a = state.data.assignments.find(x=>x.id===btn.dataset.mapview);
+      if(a) openTripMapOverlay(a, ownDropPoints(a));
+    };
   });
   box.querySelectorAll('[data-gostart]').forEach(btn=>{
     btn.onclick = async ()=>{ try{ await markAssignmentDeparted(btn.dataset.gostart); renderContent(); } catch(err){ alert(err.message); } };
@@ -7596,102 +7883,32 @@ function renderTodayDetail(todays){
   // 名稱/行為固定，同一顆「拍照上傳」按第一次拍主要照片，再按同一顆按
   // 鈕拍第二、第三張，都是往後補上附加照片，直到補滿3格按鈕才會消失
   // （見上面模板 photoCount<3 的判斷）。
-  async function fillNextPhotoSlot(aid, dpid, dataUrl){
+  async function fillNextPhotoSlot(aid, dpid, dataUrl, coords){
+    // 重複照片偵測：同一張(或幾乎同一張)照片被送了兩次——例如相簿多選時
+    // 不小心選到同一張、或網路重試時同一張被送了第二次——擋下來，不要讓
+    // 同一個店點塞進兩張一樣的證明照。雜湊只存在這次畫面存活期間（不用
+    // 跨登入階段記），夠用來擋這種短時間內的重複。
+    const hash = quickImageHash(dataUrl);
+    if(!state._recentPhotoHashes) state._recentPhotoHashes = new Set();
+    if(state._recentPhotoHashes.has(hash)) throw new Error('偵測到重複照片，請重新拍攝或選擇不同照片。');
     const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-    if(dp && dp.status!=='completed') await uploadDropPointPhoto(aid, dpid, dataUrl);
-    else await handleExtraMediaUpload(aid, dpid, [dataUrl]);
+    const kind = (dp && dp.status!=='completed') ? 'photo' : 'media';
+    try{
+      if(kind==='photo') await uploadDropPointPhoto(aid, dpid, dataUrl, coords);
+      else await handleExtraMediaUpload(aid, dpid, [dataUrl]);
+    }catch(err){
+      // 網路真的不通才排進離線佇列——業務邏輯錯誤（RLS擋掉、資料不存在…）
+      // 重試也不會成功，直接把原始錯誤丟回去讓夥伴知道，不要假裝排隊等好。
+      if(!isNetworkError(err)) throw err;
+      await queuePendingUpload({ kind, assignmentId:aid, dropPointId:dpid, dataUrl, coords: kind==='photo' ? coords : null });
+      markDpOfflinePending(dpid);
+      state._recentPhotoHashes.add(hash);
+      await thumbsAdd(dpid, dataUrl);
+      throw Object.assign(new Error('目前沒有網路，已將照片存在裝置上，恢復網路後會自動上傳。'), { queued:true });
+    }
+    state._recentPhotoHashes.add(hash);
     await thumbsAdd(dpid, dataUrl); // 上傳成功才存縮圖（只存本機，不佔流量）
   }
-  // 拍照按鈕改成自己拉相機串流（openCameraCapture/capturePhoto，見上面
-  // compressImageFile旁邊的說明），不再依賴 input[capture] ——那個屬性在
-  // Android上很不可靠，很多系統/瀏覽器版本即使寫了 capture="environment"
-  // 還是會跳系統相簿選擇器，不是我們程式碼的問題，是瀏覽器不理它。真的
-  // 拿不到相機權限或裝置不支援時，才退回旁邊那顆隱藏的 input[capture]
-  // 讓夥伴至少還能選一張既有照片，不會整個卡住。
-  box.querySelectorAll('[data-photo]').forEach(btn=>{
-    const [aid, dpid] = btn.dataset.photo.split('|');
-    const fallbackInput = box.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
-    async function goMany(dataUrls){
-      const up = toast(`📤 照片上傳中（${dataUrls.length} 張），請稍候…`, { type:'info', sticky:true });
-      try{
-        for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
-        up.dismiss();
-        state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
-        renderContent();
-        showCheckOverlay(dataUrls.length);
-      }catch(err){ up.dismiss(); console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
-    }
-    btn.onclick = ()=>{
-      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-      const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
-      const budget = Math.max(1, 3 - photoCount);
-      // 一次開一個「多拍模式」的鏡頭視窗，budget是這一次最多還能拍幾張
-      // （例如已經有主要照片、還剩2格附加照片，budget就是2）——同一個
-      // 視窗裡連拍到budget張或按「完成」才關閉，不會每拍一張就關掉鏡頭
-      // 再重開一次（見openCameraCapture()旁邊的說明，這是為了避開連續
-      // 拍照時部分手機會失敗/黑屏的問題）。
-      capturePhoto(fallbackInput, budget, goMany);
-    };
-    fallbackInput.onchange = (e)=>{
-      const files = [...e.target.files]; if(!files.length) return;
-      (async ()=>{
-        try{
-          const dataUrls = [];
-          for(const f of files) dataUrls.push(await compressImageFile(f));
-          await goMany(dataUrls);
-        }catch(err){
-          console.error('照片處理失敗', err);
-          alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
-        }
-      })();
-    };
-  });
-  // 「上傳照片」：不開相機，直接跳手機相簿/檔案選擇——鏡頭串流在部分
-  // 手機上不穩定時，讓夥伴可以直接用手機原生相機APP先拍好，再從相簿
-  // 選照片上傳，不用依賴我們這個自建相機。可以一次多選，依序填入還空著
-  // 的格子（最多3格），選超過的部分不會上傳，會提示哪些沒傳成功。
-  box.querySelectorAll('[data-photolib]').forEach(btn=>{
-    const [aid, dpid] = btn.dataset.photolib.split('|');
-    const libInput = box.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
-    btn.onclick = ()=> libInput.click();
-    libInput.onchange = (e)=>{
-      const files = [...e.target.files]; if(!files.length) return;
-      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-      const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
-      const budget = Math.max(0, 3 - photoCount);
-      const acceptFiles = files.slice(0, budget);
-      const droppedCount = files.length - acceptFiles.length;
-      // 一次多選時故意「一張一張依序」處理（不是Promise.all同時平行處理）：
-      // heic2any底層是WASM解碼器，同時平行轉好幾張HEIC會搶同一份共用
-      // 記憶體，轉出來的圖片會互相干擾、變成整張黑屏——這正是實測回報的
-      // 「照片可以傳但黑屏」的原因，改成依序等每一張處理完才處理下一張
-      // 就不會有這個問題，代價是多選幾張時處理時間會拉長一點。
-      (async ()=>{
-        try{
-          const dataUrls = [];
-          for(const f of acceptFiles) dataUrls.push(await compressImageFile(f));
-          for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl);
-          state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
-          showCheckOverlay(acceptFiles.length);
-          if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
-          renderContent();
-        }catch(err){
-          console.error('照片處理失敗', err);
-          alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
-        }
-      })();
-    };
-  });
-  // 未完成原因：選了代表這個店點暫時不會有送達照片，直接存檔，不用等到
-  // 整趟結束才統一填一個籠統的備註；選完之後如果夥伴還是補拍了照片，
-  // uploadDropPointPhoto() 會自動把這裡的原因清掉（見 data-layer.js）。
-  box.querySelectorAll('[data-issue]').forEach(sel=>{
-    sel.onchange = async ()=>{
-      const [aid, dpid] = sel.dataset.issue.split('|');
-      try{ await setDropPointIssueReason(aid, dpid, sel.value || null); renderContent(); }
-      catch(err){ alert(err.message); }
-    };
-  });
 }
 
 // ---------- 夥伴端：歷史任務 ----------
@@ -8327,6 +8544,7 @@ function showApp(){
   // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
   startRealtimeSync(handleLiveEvent);
+  if(state.role==='driver') setupOfflineUploadFlush();
   if(typeof pushAutoSync==='function') pushAutoSync();
   if(state.role==='admin') (window.requestIdleCallback || (f=>setTimeout(f, 2500)))(()=>{ loadPdfLibs().catch(()=>{}); });
 }

@@ -1529,6 +1529,38 @@ alter table catalog_meta add column if not exists drop_points_version timestampt
 alter table catalog_meta add column if not exists routes_version timestamptz not null default now();
 -- 舊的 version 欄位不再更新、保留著不動（避免刪欄位這種不可逆動作），之後確認沒有其他地方在用可以再清掉。
 
+-- PART 40：司機拍照座標回饋＋下貨點備註＋地圖座標自動校正紀錄（2026-10-24）
+-- 1) assignment_drop_points.delivery_lat/delivery_lng：司機拍主要送達照片那一刻抓到的GPS座標
+--    （跟燒進照片浮水印的是同一次定位，見index.html openCameraCapture），跟照片本身分開存，
+--    用途是之後拿「真實送達位置」去跟drop_points目前用地址反查出來的座標比對/校正準確度。
+alter table assignment_drop_points add column if not exists delivery_lat double precision, add column if not exists delivery_lng double precision;
+grant update (delivery_lat, delivery_lng) on assignment_drop_points to app_driver;
+
+-- 2) drop_points.unload_note：司機自己寫的卸貨備註（例如「貨要從側門進」「警衛室換證」），是跟著
+--    店本身走的共用筆記，不是單趟任務的欄位——所以開在drop_points、不開在assignment_drop_points，
+--    任何司機之後排到這個店都能看到/補充，算是司機之間互相留言提醒。
+alter table drop_points add column if not exists unload_note text;
+grant update (unload_note) on drop_points to app_driver;
+create policy driver_update_note on drop_points for update to app_driver using (true) with check (true);
+
+-- 3) drop_point_coord_adjustments：地圖座標自動校正的異動紀錄。校正本身（比對多次送達座標的
+--    中位數跟目前座標的落差、超過門檻就直接改掉drop_points.lat/lng）純粹是提升地圖/導航精準度，
+--    跟計價公式無關（里程/費用是主控按「採用地圖里程」當下寫入的快照，不會被座標變動連動改掉），
+--    所以不用主控先確認，但留一筆紀錄方便事後對帳查「這個座標是什麼時候、依據什麼改的」。
+-- 校正邏輯本身在前端（跟geocodeMissingDropPoints/suspectDropPoints同一類，見js/data-layer.js），
+-- 由主控開啟「店點資料庫」頁面時機會性計算並寫入，不是背景排程（這個系統本來就沒有後端排程）。
+create table if not exists drop_point_coord_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  drop_point_id uuid not null references drop_points(id) on delete cascade,
+  old_lat double precision, old_lng double precision,
+  new_lat double precision not null, new_lng double precision not null,
+  sample_count int not null,
+  created_at timestamptz not null default now()
+);
+alter table drop_point_coord_adjustments enable row level security;
+grant select, insert on drop_point_coord_adjustments to app_admin;
+create policy admin_all on drop_point_coord_adjustments for all to app_admin using (true) with check (true);
+
 -- bump_catalog_version() 改成吃一個參數（要更新哪個版本欄位），觸發器用 TG_ARGV[0] 傳進來；
 -- 一支函式服務全部 7 個觸發器，不用為每張表各寫一份幾乎一樣的函式。
 create or replace function bump_catalog_version() returns trigger
