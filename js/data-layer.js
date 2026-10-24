@@ -296,8 +296,13 @@ function catalogCacheSuffix() {
   const driverId = state.role === 'driver' ? (state.activeDriverId || 'unknown') : null;
   return driverId ? `driver_${driverId}` : 'admin';
 }
-const catalogCacheKey = () => `fleet_catalog_cache_v3_${catalogCacheSuffix()}`;
-const catalogVersionKey = () => `fleet_catalog_version_v3_${catalogCacheSuffix()}`;
+// v4 起快取拆成 5 類（drivers/channels/origins/dropPoints/routes）各自獨立一把 key，
+// 不再是一個combined blob——見 schema.sql PART 39：改一條路線不該連帶讓司機/通路/
+// 起點/店點的快取也一起失效。part 是這 5 個字串之一。
+const CATALOG_PARTS = ['drivers', 'channels', 'origins', 'dropPoints', 'routes'];
+const CATALOG_VERSION_COL = { drivers: 'drivers_version', channels: 'channels_version', origins: 'origins_version', dropPoints: 'drop_points_version', routes: 'routes_version' };
+const catalogCacheKey = (part) => `fleet_catalog_cache_v4_${part}_${catalogCacheSuffix()}`;
+const catalogVersionKey = (part) => `fleet_catalog_version_v4_${part}_${catalogCacheSuffix()}`;
 
 async function loadAllData() {
   const supabase = getSupabase();
@@ -305,17 +310,28 @@ async function loadAllData() {
   try { localStorage.removeItem('fleet_catalog_cache_v1'); localStorage.removeItem('fleet_catalog_version_v1'); } catch (e) { /* 忽略 */ }
   // v2 快取裡存有完整的通路費率／路線版本金額，改成白名單欄位後一律作廢並刪除（夥伴手機上不該再留著）
   try { Object.keys(localStorage).filter(k => /^fleet_catalog_(cache|version)_v2_/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { /* 忽略 */ }
+  // v3 是拆成 5 類之前的「整包合併存一個 blob」格式，跟 v4 的 key 結構不相容，清掉釋放空間。
+  try { Object.keys(localStorage).filter(k => /^fleet_catalog_(cache|version)_v3_/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { /* 忽略 */ }
 
-  let cachedCatalog = null;
-  let remoteCatalogVersion = null;
+  // 目錄資料（drivers/channels/origins/dropPoints/routes）5 類各自獨立比對版本號、各自決定
+  // 要不要用快取——改一條路線只會讓 routes 這一類重抓，其他 4 類繼續吃本機快取。
+  // cachedParts[part] 有值＝這一類直接用快取，不用查資料庫；remoteVersions[part] 存遠端版本號，
+  // 不管有沒有用到快取都要記住，等一下決定要不要寫回本機快取時會用到。
+  let cachedParts = {};
+  let remoteVersions = {};
   try {
-    const { data: meta, error: metaErr } = await supabase.from('catalog_meta').select('version').eq('id', 1).maybeSingle();
-    if (!metaErr && meta?.version) {
-      remoteCatalogVersion = meta.version;
-      if (remoteCatalogVersion === localStorage.getItem(catalogVersionKey())) {
-        const cachedJson = localStorage.getItem(catalogCacheKey());
-        if (cachedJson) cachedCatalog = JSON.parse(cachedJson);
-      }
+    const { data: meta, error: metaErr } = await supabase.from('catalog_meta')
+      .select('drivers_version, channels_version, origins_version, drop_points_version, routes_version').eq('id', 1).maybeSingle();
+    if (!metaErr && meta) {
+      CATALOG_PARTS.forEach(part => {
+        const remoteV = meta[CATALOG_VERSION_COL[part]];
+        if (!remoteV) return;
+        remoteVersions[part] = remoteV;
+        if (remoteV === localStorage.getItem(catalogVersionKey(part))) {
+          const cachedJson = localStorage.getItem(catalogCacheKey(part));
+          if (cachedJson) { try { cachedParts[part] = JSON.parse(cachedJson); } catch (e) { /* 壞掉的快取當作沒有 */ } }
+        }
+      });
     }
   } catch (e) { /* 版本比對只是加速用，任何失敗都當作沒快取，退回正常整包重抓 */ }
 
@@ -341,13 +357,11 @@ async function loadAllData() {
   const fuelClaimsWindowStart = ymd(addDays(todayStr(), -ADJUSTMENTS_WINDOW_DAYS));
   const queries = {
     ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
-    ...(cachedCatalog ? {} : {
-      driversRes: supabase.from('drivers').select('*').order('created_at'),
-      channelsRes: supabase.from('channels').select(isAdmin ? '*' : CHANNEL_COLS_PARTNER).order('created_at'),
-      originsRes: supabase.from('origins').select('*').order('created_at'),
-      dropPointsRes: supabase.from('drop_points').select('*').order('created_at'),
-      routesRes: supabase.from('routes').select('*, origins(address), route_versions(' + (isAdmin ? '*' : ROUTE_VERSION_COLS_PARTNER) + ', route_version_points(*))')
-    }),
+    ...(cachedParts.drivers ? {} : { driversRes: supabase.from('drivers').select('*').order('created_at') }),
+    ...(cachedParts.channels ? {} : { channelsRes: supabase.from('channels').select(isAdmin ? '*' : CHANNEL_COLS_PARTNER).order('created_at') }),
+    ...(cachedParts.origins ? {} : { originsRes: supabase.from('origins').select('*').order('created_at') }),
+    ...(cachedParts.dropPoints ? {} : { dropPointsRes: supabase.from('drop_points').select('*').order('created_at') }),
+    ...(cachedParts.routes ? {} : { routesRes: supabase.from('routes').select('*, origins(address), route_versions(' + (isAdmin ? '*' : ROUTE_VERSION_COLS_PARTNER) + ', route_version_points(*))') }),
     assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select(assignmentSelect()).gte('trip_date', assignmentsWindowStart)),
     adjustmentsRes: supabase.from('adjustments').select('*').gte('adjustment_month', adjustmentsWindowStart),
     statementsRes: supabase.from('statements').select('*'),
@@ -369,11 +383,11 @@ async function loadAllData() {
 
   const data = {
     settings: { adminPin: byKey.settingsRes?.data?.admin_pin || '', lastBackupAt: byKey.settingsRes?.data?.last_backup_at || null, warroomConfig: byKey.settingsRes?.data?.warroom_config || null, warroomToken: byKey.settingsRes?.data?.warroom_token || null },
-    drivers: cachedCatalog ? cachedCatalog.drivers : (byKey.driversRes.data || []).map(mapDriver),
-    channels: cachedCatalog ? cachedCatalog.channels : (byKey.channelsRes.data || []).map(mapChannel),
-    origins: cachedCatalog ? cachedCatalog.origins : (byKey.originsRes.data || []).map(mapOrigin),
-    dropPoints: cachedCatalog ? cachedCatalog.dropPoints : (byKey.dropPointsRes.data || []).map(mapDropPoint),
-    routes: cachedCatalog ? cachedCatalog.routes : (byKey.routesRes.data || []).map(mapRoute),
+    drivers: cachedParts.drivers || (byKey.driversRes.data || []).map(mapDriver),
+    channels: cachedParts.channels || (byKey.channelsRes.data || []).map(mapChannel),
+    origins: cachedParts.origins || (byKey.originsRes.data || []).map(mapOrigin),
+    dropPoints: cachedParts.dropPoints || (byKey.dropPointsRes.data || []).map(mapDropPoint),
+    routes: cachedParts.routes || (byKey.routesRes.data || []).map(mapRoute),
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
     assignmentsWindowStart,
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
@@ -385,18 +399,17 @@ async function loadAllData() {
     fuelClaimsWindowStart
   };
 
-  if (!cachedCatalog && remoteCatalogVersion) {
-    // 剛才是整包重抓目錄資料，把這次抓到的資料連同版本寫回本地快取，下次
-    // 登入版本沒變就吃得到——寫入失敗（例如瀏覽器localStorage被塞滿）不影響
-    // 正常運作，純粹放棄這次快取，下次登入照樣會走一樣的判斷、不會壞掉。
+  // 剛才真的重抓過、而且有拿到遠端版本號的那幾類，才把這次抓到的資料連同版本寫回本地快取，
+  // 下次登入版本沒變就吃得到；本來就是用快取的那幾類不用重寫（內容沒變，寫了也是白工）。
+  // 寫入失敗（例如瀏覽器localStorage被塞滿）不影響正常運作，純粹放棄這一類的快取，
+  // 下次登入照樣會走一樣的判斷、不會壞掉。
+  CATALOG_PARTS.forEach(part => {
+    if (cachedParts[part] || !remoteVersions[part]) return;
     try {
-      localStorage.setItem(catalogVersionKey(), remoteCatalogVersion);
-      localStorage.setItem(catalogCacheKey(), JSON.stringify({
-        drivers: data.drivers, channels: data.channels, origins: data.origins,
-        dropPoints: data.dropPoints, routes: data.routes
-      }));
+      localStorage.setItem(catalogVersionKey(part), remoteVersions[part]);
+      localStorage.setItem(catalogCacheKey(part), JSON.stringify(data[part]));
     } catch (e) { /* 忽略快取寫入失敗 */ }
-  }
+  });
 
   await resolvePhotoUrls(data.assignments);
   await resolveSignatureUrls(data.statements);

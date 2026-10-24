@@ -1513,3 +1513,51 @@ alter table admin_security add column if not exists trusted_devices jsonb not nu
 -- （客戶查詢頁）是同一套做法：隨機亂碼，資料庫對 anon 角色完全鎖死，實際查詢一律經過 api/origin-data.js
 -- 用 service role 執行。
 alter table origins add column if not exists access_token text unique;
+
+-- PART 39：目錄快取版本號拆成每張表各自獨立（2026-10-24）
+-- 背景：前端登入時，司機／通路／起點／店點／路線這包「目錄資料」（路線還巢狀帶著全部歷史版本，是
+-- 這包裡最肥大的一塊）原本共用 catalog_meta 裡單一一個 version 時間戳記，任何一張表有異動，全部
+-- 快取一起失效，逼所有使用者下次登入都要重抓整包——即使只是改了一條路線，司機/通路/起點/店點明明
+-- 沒變，也要跟著一起重抓。這在目前規模（幾十條路線）感覺不出來，但照「~100 位夥伴、1000+ 店家」
+-- 的目標規模換算，路線數會到 100-125 條、累積的歷史版本可能上千筆，屆時「改一條路線，全部人重抓
+-- 整包目錄」會變成常態性的登入延遲，需要趁現在資料量還小、改起來風險低的時候處理掉。
+-- 拆成 5 個各自獨立的版本欄位，改哪張表只讓那張表的版本號往前跳，其他 4 類快取繼續有效。
+alter table catalog_meta add column if not exists drivers_version timestamptz not null default now();
+alter table catalog_meta add column if not exists channels_version timestamptz not null default now();
+alter table catalog_meta add column if not exists origins_version timestamptz not null default now();
+alter table catalog_meta add column if not exists drop_points_version timestamptz not null default now();
+alter table catalog_meta add column if not exists routes_version timestamptz not null default now();
+-- 舊的 version 欄位不再更新、保留著不動（避免刪欄位這種不可逆動作），之後確認沒有其他地方在用可以再清掉。
+
+-- bump_catalog_version() 改成吃一個參數（要更新哪個版本欄位），觸發器用 TG_ARGV[0] 傳進來；
+-- 一支函式服務全部 7 個觸發器，不用為每張表各寫一份幾乎一樣的函式。
+create or replace function bump_catalog_version() returns trigger
+language plpgsql as $$
+begin
+  execute format('update catalog_meta set %I = now() where id = 1', TG_ARGV[0]);
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_catalog_version_drivers on drivers;
+create trigger trg_catalog_version_drivers after insert or update or delete on drivers
+  for each statement execute function bump_catalog_version('drivers_version');
+drop trigger if exists trg_catalog_version_channels on channels;
+create trigger trg_catalog_version_channels after insert or update or delete on channels
+  for each statement execute function bump_catalog_version('channels_version');
+drop trigger if exists trg_catalog_version_origins on origins;
+create trigger trg_catalog_version_origins after insert or update or delete on origins
+  for each statement execute function bump_catalog_version('origins_version');
+drop trigger if exists trg_catalog_version_drop_points on drop_points;
+create trigger trg_catalog_version_drop_points after insert or update or delete on drop_points
+  for each statement execute function bump_catalog_version('drop_points_version');
+-- 路線本身、路線版本、路線版本店點，三張表的異動都算「路線這一類」，統一讓 routes_version 跳動。
+drop trigger if exists trg_catalog_version_routes on routes;
+create trigger trg_catalog_version_routes after insert or update or delete on routes
+  for each statement execute function bump_catalog_version('routes_version');
+drop trigger if exists trg_catalog_version_route_versions on route_versions;
+create trigger trg_catalog_version_route_versions after insert or update or delete on route_versions
+  for each statement execute function bump_catalog_version('routes_version');
+drop trigger if exists trg_catalog_version_route_version_points on route_version_points;
+create trigger trg_catalog_version_route_version_points after insert or update or delete on route_version_points
+  for each statement execute function bump_catalog_version('routes_version');
