@@ -5644,7 +5644,10 @@ function renderPayrollPage(c, mode){
     const btn = document.getElementById('printAllStatements');
     btn.disabled = true; const originalText = btn.textContent; btn.textContent = '讀取資料中…';
     let monthAssignments;
-    try{ monthAssignments = await fetchAssignmentsInRange(rangeStart, rangeEnd); }
+    try{
+      monthAssignments = await fetchAssignmentsInRange(rangeStart, rangeEnd);
+      await ensureAdjustmentsRange(rangeStart); await ensureFuelClaimsRange(rangeStart);
+    }
     catch(err){ alert(err.message); btn.disabled=false; btn.textContent=originalText; return; }
     btn.disabled = false; btn.textContent = originalText;
     const slips = records.map(record=>{
@@ -5826,7 +5829,10 @@ function renderPayrollPage(c, mode){
     if(end < start){ box.innerHTML = listHtml + '<div class="panel"><div class="empty">結束日期不能早於開始日期</div></div>'; wireList(); return; }
     box.innerHTML = listHtml + '<div class="empty">載入中...</div>';
     let rangeAssignments;
-    try{ rangeAssignments = await fetchAssignmentsInRange(start, end); }
+    try{
+      rangeAssignments = await fetchAssignmentsInRange(start, end);
+      await ensureAdjustmentsRange(start); await ensureFuelClaimsRange(start);
+    }
     catch(err){ box.innerHTML = listHtml + `<div class="panel"><div class="empty">${err.message}</div></div>`; wireList(); return; }
     const cur = state._periodSel;
     if(cur.driverId!==driverId || cur.start!==start || cur.end!==end) return; // 使用者可能已經改選
@@ -5920,7 +5926,10 @@ function renderPayrollPage(c, mode){
     // 也不影響其他畫面的效能，查哪個月份都一樣快。
     document.getElementById('payrollResult').innerHTML = '<div class="empty">載入中...</div>';
     let monthAssignments;
-    try{ monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr)); }
+    try{
+      monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr));
+      await ensureAdjustmentsRange(monthStr+'-01'); await ensureFuelClaimsRange(monthStr+'-01');
+    }
     catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的夥伴/月份
     const live = driverMonthly(driverId, monthStr, monthAssignments);
@@ -7083,13 +7092,19 @@ function renderExport(c){
     const preStart = document.getElementById('exStart').value;
     const preEnd = document.getElementById('exEnd').value;
     if(!preStart || !preEnd){ alert('請選擇起訖日期'); return; }
-    // 任務／班表紀錄這裡是唯一需要任意查回更久以前資料的地方（匯出封存的
-    // 目的就是處理舊資料），直接跟資料庫要這段區間，不影響/不依賴共用的
-    // state.data.assignments，查完這個函式結束就丟，不會佔用記憶體。
+    // 匯出封存的目的就是處理舊資料，區間可能比預設窗口（assignments 14天／
+    // adjustments 1年）更早，這裡要確保選到的區間已經補抓進來，不然會預覽出
+    // 不完整的資料、照著刪就把沒匯出到的資料弄丟了。routeVersions 不走窗口
+    // （直接從 state.data.routes 攤平），不用在這裡處理。
     let exAssignments;
     if(preType==='assignments'){
       document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
       try{ exAssignments = await fetchAssignmentsInRange(preStart, preEnd); }
+      catch(err){ document.getElementById('exResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+      if(document.getElementById('exStart')?.value!==preStart || document.getElementById('exEnd')?.value!==preEnd) return; // 使用者可能已經改了區間
+    } else if(preType==='adjustments'){
+      document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
+      try{ await ensureAdjustmentsRange(preStart); }
       catch(err){ document.getElementById('exResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
       if(document.getElementById('exStart')?.value!==preStart || document.getElementById('exEnd')?.value!==preEnd) return; // 使用者可能已經改了區間
     }
@@ -7878,7 +7893,10 @@ async function renderMyEarnings(c){
     const resultEl = document.getElementById('meResult');
     resultEl.innerHTML = '<div class="empty">載入中...</div>';
     let monthAssignments;
-    try{ monthAssignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m)); }
+    try{
+      monthAssignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m));
+      await ensureAdjustmentsRange(m+'-01'); await ensureFuelClaimsRange(m+'-01');
+    }
     catch(err){ resultEl.innerHTML = `<div class="empty">載入失敗：${err.message}</div>`; return; }
     if(state.tab!=='my-earnings') return; // 使用者可能已經切走這一頁
     const r = driverMonthly(dId, m, monthAssignments);
@@ -8199,7 +8217,10 @@ function renderMyStatement(c){
     box.innerHTML = '<div class="empty">載入中...</div>';
     let monthAssignments;
     const [rangeStart, rangeEnd] = statementRange(record);
-    try{ monthAssignments = await fetchAssignmentsInRange(rangeStart, rangeEnd); }
+    try{
+      monthAssignments = await fetchAssignmentsInRange(rangeStart, rangeEnd);
+      await ensureAdjustmentsRange(rangeStart); await ensureFuelClaimsRange(rangeStart);
+    }
     catch(err){ box.innerHTML = `<div class="panel"><div class="empty">載入失敗：${err.message}</div></div>`; return; }
     if(document.getElementById('smMonth')?.value!==m) return; // 使用者可能已經改選別的月份
     if((state._myStatementPeriodId||null)!==currentPeriodId) return;

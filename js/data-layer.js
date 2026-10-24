@@ -248,6 +248,12 @@ function dataUrlToBytesAndType(dataUrl) {
 // 按需補抓缺口，不受這個預設窗口大小影響。
 const ASSIGNMENTS_WINDOW_DAYS = 14;
 
+// adjustments（薪資調整項）／fuel_claims（加油申報）窗口：這兩張表每筆都是單純的
+// 數字/文字欄位，沒有像 assignments 那樣巢狀的店點/照片陣列，不需要抓得像 14 天
+// 那麼緊；抓寬鬆一點（1年）確保絕大多數日常操作（查最近幾個月薪資、處理最近的
+// 加油申報）都不用觸發補抓，同時還是會隨公司長期營運持續變大的量設個上限。
+const ADJUSTMENTS_WINDOW_DAYS = 365;
+
 // 目錄資料（夥伴/通路/任務起點/店點/路線，含路線巢狀的全部版本跟版本店點）
 // 幾乎不會變動，但份量是 loadAllData() 裡最大的一塊（尤其是路線，每條都
 // 巢狀帶著全部歷史版本）。這裡先查 catalog_meta 這個單一時間戳記（見
@@ -321,6 +327,18 @@ async function loadAllData() {
   // 沒有任何畫面會用到 adminPin）。
   const isAdmin = state.role === 'admin';
   const assignmentsWindowStart = ymd(addDays(todayStr(), -ASSIGNMENTS_WINDOW_DAYS));
+  // adjustments／fuel_claims 不像 assignments 有巢狀的店點/照片陣列，單筆資料很小，
+  // 不需要 assignments 那麼緊的窗口；但主控身份看得到全系統所有夥伴的資料（RLS
+  // admin_all 是 using(true)），公司長期營運下去這兩張表還是會一直變大，所以一樣
+  // 照「預設抓近期＋要查更早的資料才按需補抓」處理，窗口抓寬鬆一點（1年）即可，
+  // 見 ensureAdjustmentsRange()／ensureFuelClaimsRange()。
+  // statements 沒有照做同一套：主控「勞報單」頁預設就會列出「各夥伴全部月份」
+  // 的完整列表（找出歷史哪個月有缺單、有沒有結清是這頁的核心用途），窗口化之後
+  // 這個清單要嘛要另外做「按需補抓全部」、要嘛會漏掉舊資料，兩種都沒有實質
+  // 省到東西，所以 statements 维持整包查詢。billing_adjustments 是以「通路」
+  // （全系統不到10個）而不是「夥伴」為單位累積，資料量本來就小，也不需要窗口化。
+  const adjustmentsWindowStart = ymd(addDays(todayStr(), -ADJUSTMENTS_WINDOW_DAYS));
+  const fuelClaimsWindowStart = ymd(addDays(todayStr(), -ADJUSTMENTS_WINDOW_DAYS));
   const queries = {
     ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
     ...(cachedCatalog ? {} : {
@@ -331,7 +349,7 @@ async function loadAllData() {
       routesRes: supabase.from('routes').select('*, origins(address), route_versions(' + (isAdmin ? '*' : ROUTE_VERSION_COLS_PARTNER) + ', route_version_points(*))')
     }),
     assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select(assignmentSelect()).gte('trip_date', assignmentsWindowStart)),
-    adjustmentsRes: supabase.from('adjustments').select('*'),
+    adjustmentsRes: supabase.from('adjustments').select('*').gte('adjustment_month', adjustmentsWindowStart),
     statementsRes: supabase.from('statements').select('*'),
     // billing_adjustments 只 grant app_admin，夥伴身份查會 permission denied，只有 admin 才查。
     ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
@@ -339,7 +357,7 @@ async function loadAllData() {
     // 不需要另外分身份寫兩個查詢。
     announcementsRes: supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false }),
     // 夥伴加油申報：夥伴只查得到自己的（RLS），主控看全部。
-    fuelClaimsRes: supabase.from('fuel_claims').select('*').order('fuel_date', { ascending: false })
+    fuelClaimsRes: supabase.from('fuel_claims').select('*').gte('fuel_date', fuelClaimsWindowStart).order('fuel_date', { ascending: false })
   };
   const keys = Object.keys(queries);
   const results = await Promise.all(Object.values(queries));
@@ -359,10 +377,12 @@ async function loadAllData() {
     assignments: (byKey.assignmentsRes.data || []).map(mapAssignment),
     assignmentsWindowStart,
     adjustments: (byKey.adjustmentsRes.data || []).map(mapAdjustment),
+    adjustmentsWindowStart,
     statements: (byKey.statementsRes.data || []).map(mapStatement),
     billingAdjustments: (byKey.billingAdjustmentsRes?.data || []).map(mapBillingAdjustment),
     announcements: (byKey.announcementsRes.data || []).map(mapAnnouncement),
-    fuelClaims: (byKey.fuelClaimsRes.data || []).map(mapFuelClaim)
+    fuelClaims: (byKey.fuelClaimsRes.data || []).map(mapFuelClaim),
+    fuelClaimsWindowStart
   };
 
   if (!cachedCatalog && remoteCatalogVersion) {
@@ -405,6 +425,38 @@ async function ensureAssignmentsRange(startDate) {
   extra.forEach(a => { if (!existingIds.has(a.id)) state.data.assignments.push(a); });
   state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
   state.data.assignmentsWindowStart = startDate;
+}
+
+// 補抓 adjustments 窗口（見 ADJUSTMENTS_WINDOW_DAYS）之外更早的薪資調整項，道理
+// 跟 ensureAssignmentsRange() 一樣：只補缺口、依 id 去重併入、窗口往前推。
+async function ensureAdjustmentsRange(startDate) {
+  if (!startDate) return;
+  const windowStart = state.data.adjustmentsWindowStart;
+  if (!windowStart || startDate >= windowStart) return;
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('adjustments').select('*')
+    .gte('adjustment_month', startDate).lt('adjustment_month', windowStart);
+  if (error) throw new Error('讀取較早的薪資調整項失敗：' + error.message);
+  const extra = (data || []).map(mapAdjustment);
+  const existingIds = new Set(state.data.adjustments.map(a => a.id));
+  extra.forEach(a => { if (!existingIds.has(a.id)) state.data.adjustments.push(a); });
+  state.data.adjustmentsWindowStart = startDate;
+}
+
+// 補抓 fuel_claims 窗口之外更早的加油申報，同上述模式。
+async function ensureFuelClaimsRange(startDate) {
+  if (!startDate) return;
+  const windowStart = state.data.fuelClaimsWindowStart;
+  if (!windowStart || startDate >= windowStart) return;
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('fuel_claims').select('*')
+    .gte('fuel_date', startDate).lt('fuel_date', windowStart);
+  if (error) throw new Error('讀取較早的加油申報失敗：' + error.message);
+  const extra = (data || []).map(mapFuelClaim);
+  state.data.fuelClaims = state.data.fuelClaims || [];
+  const existingIds = new Set(state.data.fuelClaims.map(f => f.id));
+  extra.forEach(f => { if (!existingIds.has(f.id)) state.data.fuelClaims.push(f); });
+  state.data.fuelClaimsWindowStart = startDate;
 }
 
 // 首頁待著不動時的背景自動刷新（見 index.html refreshHomeDataIfIdle）原本是
