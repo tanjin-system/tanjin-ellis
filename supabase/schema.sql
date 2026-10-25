@@ -1579,15 +1579,9 @@ end;
 $$;
 
 -- bump_catalog_version() 改成吃一個參數（要更新哪個版本欄位），觸發器用 TG_ARGV[0] 傳進來；
--- 一支函式服務全部 7 個觸發器，不用為每張表各寫一份幾乎一樣的函式。
-create or replace function bump_catalog_version() returns trigger
-language plpgsql as $$
-begin
-  execute format('update catalog_meta set %I = now() where id = 1', TG_ARGV[0]);
-  return null;
-end;
-$$;
-
+-- 一支函式服務全部 7 個觸發器，不用為每張表各寫一份幾乎一樣的函式。（這支函式的正式定義在
+-- 上面PART 41那段——直接把schema.sql當rebuild腳本從頭跑時，不能在這裡再定義一次沒有
+-- security definer的版本，不然會把上面才剛修好的regression原地重新引入一次。）
 drop trigger if exists trg_catalog_version_drivers on drivers;
 create trigger trg_catalog_version_drivers after insert or update or delete on drivers
   for each statement execute function bump_catalog_version('drivers_version');
@@ -1610,3 +1604,11 @@ create trigger trg_catalog_version_route_versions after insert or update or dele
 drop trigger if exists trg_catalog_version_route_version_points on route_version_points;
 create trigger trg_catalog_version_route_version_points after insert or update or delete on route_version_points
   for each statement execute function bump_catalog_version('routes_version');
+
+-- PART 42：移除 catalog_meta 的舊版 version 欄位（2026-10-25）
+-- 已被 PART 39 拆成的 5 個獨立版本欄位完全取代：確認過 js/data-layer.js 現在只選
+-- drivers_version/channels_version/origins_version/drop_points_version/routes_version 這5欄，
+-- 從沒讀過 version；bump_catalog_version() 觸發器自 PART 39 起也只更新這5欄，從沒再寫過
+-- version。這欄位從 PART 39 上線那一刻起就是完全沒人讀也沒人寫的殭屍欄位，當時特地留著
+-- 沒刪是怕刪欄位這種不可逆動作太倉促，現在已確認清楚沒有風險，刪掉。
+alter table catalog_meta drop column if exists version;
