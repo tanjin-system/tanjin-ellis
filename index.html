@@ -706,7 +706,11 @@ async function compressImageFile(file, maxDim=1000, quality=0.6){
 // 使用者至少還能選現成的照片，不會整個功能卡死。
 // 浮水印用的座標：疊層一開啟就先要一次定位（不是每拍一張才要，避免拖慢
 // 連續拍照），抓不到或夥伴拒絕授權也不擋住拍照——那浮水印就只疊時間、
-// 註明「GPS 未取得」，不會讓整個拍照功能卡住。
+// 註明「GPS 未取得」，不會讓整個拍照功能卡住。改用高精度定位（真正的GPS衛星
+// 定位，不是WiFi/基地台粗估），逾時時間也拉長到15秒讓它有足夠機會拿到準確
+// 定位——因為這段本來就是背景跑、不卡快門，拉長逾時不影響拍照速度，只是讓
+// 「抓得到的話,抓到的會更準」這件事機率更高；店家在室內/騎樓收訊不好時，
+// 高精度定位本來就可能逾時仍抓不到，照舊顯示「GPS 未取得」，不會卡住拍照。
 function openCameraCapture(maxShots, storeName){
   return new Promise((resolve)=>{
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -718,7 +722,7 @@ function openCameraCapture(maxShots, storeName){
       navigator.geolocation.getCurrentPosition(
         pos=>{ geoCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; },
         ()=>{},
-        { enableHighAccuracy:false, timeout:6000, maximumAge:60000 }
+        { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
       );
     }
     const overlay = document.createElement('div');
