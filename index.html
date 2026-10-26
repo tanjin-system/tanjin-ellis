@@ -812,32 +812,96 @@ function drawPhotoWatermark(ctx, width, height, coords, storeName){
     y += lineHeights[i];
   });
 }
+// 從相簿選的照片檔案本身讀EXIF GPS（手機相機拍照當下、有開定位的話會寫進檔案裡）。
+// 刻意不是「上傳那一刻重新定位」——夥伴可能拍完照才離開現場好幾百公尺才想到要上傳，
+// 那樣抓到的會是「上傳時人在哪」不是「拍照時站在哪」，兩者可能差很多，比低精度GPS
+// 本身的誤差還嚴重。讀不到EXIF GPS（例如手機相機定位權限沒開、HEIC格式暫不支援解析、
+// 或照片本身就沒有）就老實回傳null，讓浮水印顯示「GPS未取得」，不要拿上傳位置冒充。
+function readExifGps(file){
+  return new Promise((resolve)=>{
+    if(!file || !/^image\/jpe?g$/i.test(file.type)){ resolve(null); return; }
+    const reader = new FileReader();
+    reader.onload = ()=>{ try{ resolve(parseJpegExifGps(reader.result)); }catch(e){ resolve(null); } };
+    reader.onerror = ()=> resolve(null);
+    // EXIF段落依JPEG規格上限64KB，前面頂多再加APP0等少量段落，讀前256KB綽綽有餘，
+    // 不用把整張照片（可能幾MB）都讀進記憶體只為了找GPS。
+    reader.readAsArrayBuffer(file.slice(0, 262144));
+  });
+}
+function parseJpegExifGps(buf){
+  const view = new DataView(buf);
+  if(view.byteLength < 4 || view.getUint16(0,false) !== 0xFFD8) return null;
+  let offset = 2;
+  while(offset + 4 <= view.byteLength){
+    const marker = view.getUint16(offset, false);
+    if((marker & 0xFF00) !== 0xFF00) break;
+    if(marker === 0xFFDA) break; // 進到影像資料了，後面不會再有EXIF
+    const segLen = view.getUint16(offset+2, false);
+    if(marker === 0xFFE1){
+      const segStart = offset + 4;
+      if(segStart + 6 <= view.byteLength && view.getUint32(segStart,false) === 0x45786966 && view.getUint16(segStart+4,false) === 0x0000){
+        return parseExifTiffGps(view, segStart + 6);
+      }
+    }
+    offset += 2 + segLen;
+  }
+  return null;
+}
+function parseExifTiffGps(view, tiffStart){
+  const little = view.getUint16(tiffStart, false) === 0x4949; // 'II' = little-endian, 'MM' = big-endian
+  const u16 = (o)=> view.getUint16(o, little);
+  const u32 = (o)=> view.getUint32(o, little);
+  const ifd0Offset = tiffStart + u32(tiffStart+4);
+  const gpsIfdRel = findExifTagValue(view, ifd0Offset, 0x8825, little); // GPSInfo IFD指標
+  if(gpsIfdRel == null) return null;
+  const gpsOffset = tiffStart + gpsIfdRel;
+  const count = u16(gpsOffset);
+  let latRef=null, lngRef=null, lat=null, lng=null;
+  const readDMS = (relOff)=>{
+    const o = tiffStart + relOff;
+    const rat = (ro)=> u32(ro) / u32(ro+4);
+    return rat(o) + rat(o+8)/60 + rat(o+16)/3600;
+  };
+  for(let i=0;i<count;i++){
+    const eOff = gpsOffset + 2 + i*12;
+    const tag = u16(eOff), type = u16(eOff+2), cnt = u32(eOff+4), valOff = eOff+8;
+    if(tag === 0x0001) latRef = String.fromCharCode(view.getUint8(valOff));
+    else if(tag === 0x0003) lngRef = String.fromCharCode(view.getUint8(valOff));
+    else if(tag === 0x0002 && type === 5 && cnt === 3) lat = readDMS(u32(valOff));
+    else if(tag === 0x0004 && type === 5 && cnt === 3) lng = readDMS(u32(valOff));
+  }
+  if(lat == null || lng == null) return null;
+  if(latRef === 'S') lat = -lat;
+  if(lngRef === 'W') lng = -lng;
+  return { lat, lng };
+}
+function findExifTagValue(view, ifdOffset, wantTag, little){
+  const u16 = (o)=> view.getUint16(o, little);
+  const u32 = (o)=> view.getUint32(o, little);
+  const count = u16(ifdOffset);
+  for(let i=0;i<count;i++){
+    const eOff = ifdOffset + 2 + i*12;
+    if(u16(eOff) === wantTag) return u32(eOff+8);
+  }
+  return null;
+}
 // 自建相機（openCameraCapture）在拍照當下已經疊過浮水印；但「上傳照片」
 // 走相簿選現成檔案，沒有經過那段流程，另外在這裡補疊一次，兩條路徑最後
 // 看到的都是已經燒好浮水印的照片，不會因為上傳方式不同而有的有、有的沒有。
-function watermarkDataUrl(dataUrl, storeName){
+// coords由呼叫端傳入（見readExifGps），不在這裡重新定位。
+function watermarkDataUrl(dataUrl, storeName, coords){
   return new Promise((resolve)=>{
-    let geoCoords = null;
-    const draw = ()=>{
-      const im = new Image();
-      im.onload = ()=>{
-        const c = document.createElement('canvas');
-        c.width = im.width; c.height = im.height;
-        const ctx = c.getContext('2d');
-        ctx.drawImage(im, 0, 0);
-        drawPhotoWatermark(ctx, im.width, im.height, geoCoords, storeName);
-        try{ resolve({ dataUrl: c.toDataURL('image/jpeg', 0.75), coords:geoCoords }); }catch(e){ resolve({ dataUrl, coords:geoCoords }); }
-      };
-      im.onerror = ()=> resolve({ dataUrl, coords:null });
-      im.src = dataUrl;
+    const im = new Image();
+    im.onload = ()=>{
+      const c = document.createElement('canvas');
+      c.width = im.width; c.height = im.height;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(im, 0, 0);
+      drawPhotoWatermark(ctx, im.width, im.height, coords||null, storeName);
+      try{ resolve({ dataUrl: c.toDataURL('image/jpeg', 0.75), coords:coords||null }); }catch(e){ resolve({ dataUrl, coords:coords||null }); }
     };
-    if(navigator.geolocation){
-      navigator.geolocation.getCurrentPosition(
-        pos=>{ geoCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; draw(); },
-        ()=> draw(),
-        { enableHighAccuracy:false, timeout:4000, maximumAge:60000 }
-      );
-    } else draw();
+    im.onerror = ()=> resolve({ dataUrl, coords:null });
+    im.src = dataUrl;
   });
 }
 // 拍照按鈕的統一入口：先試自建相機（一定是相機，不會跳相簿），拿不到
@@ -7618,7 +7682,7 @@ function renderTodayDetail(todays){
         (async ()=>{
           try{
             const shots = [];
-            for(const f of files) shots.push(await watermarkDataUrl(await compressImageFile(f), storeName));
+            for(const f of files){ const coords = await readExifGps(f); shots.push(await watermarkDataUrl(await compressImageFile(f), storeName, coords)); }
             await goMany(shots.map(x=>x.dataUrl), shots[0]?.coords||null);
           }catch(err){
             console.error('照片處理失敗', err);
@@ -7641,7 +7705,7 @@ function renderTodayDetail(todays){
         (async ()=>{
           try{
             const shots = [];
-            for(const f of acceptFiles) shots.push(await watermarkDataUrl(await compressImageFile(f), dpLabel(dp)));
+            for(const f of acceptFiles){ const coords = await readExifGps(f); shots.push(await watermarkDataUrl(await compressImageFile(f), dpLabel(dp), coords)); }
             for(const s of shots) await fillNextPhotoSlot(aid, dpid, s.dataUrl, s.coords);
             state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
             showCheckOverlay(acceptFiles.length);
