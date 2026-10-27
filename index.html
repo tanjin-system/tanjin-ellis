@@ -623,7 +623,7 @@ function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURICom
 // 載完才會開始畫畫面），夥伴手機尤其慢；改成要用才載入，主控登入後閒置時先預載好 PDF 用的兩個，按下去不用等。
 // 外部程式庫一律鎖定版本＋完整性雜湊（SRI）：CDN 上的檔案只要有任何一個位元組不同，瀏覽器就拒絕執行。
 // 更新程式庫版本時，要同步重新計算雜湊（openssl dgst -sha384 -binary 檔案 | openssl base64 -A）。
-const LIB_SRI = {"https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js": "sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H", "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js": "sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk", "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js": "sha384-OTofQ0MEeiSgh62havBcemCIK0gqj809wX6UA0uPISNMRnR6NZyCdGzX3SbLrgwL", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css": "sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js": "sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH", "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js": "sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz"};
+const LIB_SRI = {"https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js": "sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H", "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js": "sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk", "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js": "sha384-OTofQ0MEeiSgh62havBcemCIK0gqj809wX6UA0uPISNMRnR6NZyCdGzX3SbLrgwL", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css": "sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js": "sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH", "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js": "sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz", "https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js": "sha384-KrOocIA+lZcNUz2MDavnT/FuX+CbTREJihUi0bp8QUSwhE2AkGTNpv2b7yMbBkx5"};
 const _libP = {};
 function loadLib(url){
   if(_libP[url]) return _libP[url];
@@ -732,7 +732,7 @@ function openCameraCapture(maxShots, storeName){
       <div data-camthumbs style="display:flex; gap:6px; padding:8px; background:#111; overflow-x:auto;"></div>
       <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
         <button type="button" data-camcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
-        <button type="button" data-camshoot style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">拍照（<span data-camcount>0</span>/${maxShots}）</button>
+        <button type="button" data-camshoot disabled style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700; opacity:0.5;">拍照（<span data-camcount>0</span>/${maxShots}）</button>
         <button type="button" data-camdone style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#2C6B44; color:#fff; font-size:15px; font-weight:700; display:none;">完成</button>
       </div>`;
     document.body.appendChild(overlay);
@@ -754,6 +754,20 @@ function openCameraCapture(maxShots, storeName){
       cleanup();
       resolve(result);
     }
+    // 快門鍵先停用，等video元素真的畫出第一格畫面（loadeddata）才開放拍照——
+    // videoWidth/videoHeight在畫面實際有內容之前就可能已經有值了，只看尺寸
+    // 不夠，夥伴手快的話會拍到還沒真正接上影像串流的黑畫面。loadeddata理論上
+    // 一定會觸發，但還是留一個3秒逾時保險，避免極少數裝置不發這個事件時
+    // 快門被永久卡死。
+    let frameReady = false;
+    function markFrameReady(){
+      if(frameReady) return;
+      frameReady = true;
+      shootBtn.disabled = false;
+      shootBtn.style.opacity = '';
+    }
+    video.addEventListener('loadeddata', markFrameReady);
+    setTimeout(markFrameReady, 3000);
     navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
       if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
       stream = s;
@@ -765,7 +779,8 @@ function openCameraCapture(maxShots, storeName){
     shootBtn.onclick = ()=>{
       // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
       // 是黑的），這種情況直接當作失敗退回檔案選擇，不要硬拍出一張空白
-      // 照片讓夥伴以為拍成功了。
+      // 照片讓夥伴以為拍成功了。快門鍵本來就要等frameReady才會被啟用，這裡
+      // 是最後一道防線。
       if(!video.videoWidth || !video.videoHeight){ settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { fallback:true }); return; }
       const maxDim = 1000;
       let width = video.videoWidth, height = video.videoHeight;
@@ -819,75 +834,24 @@ function drawPhotoWatermark(ctx, width, height, coords, storeName){
 // 從相簿選的照片檔案本身讀EXIF GPS（手機相機拍照當下、有開定位的話會寫進檔案裡）。
 // 刻意不是「上傳那一刻重新定位」——夥伴可能拍完照才離開現場好幾百公尺才想到要上傳，
 // 那樣抓到的會是「上傳時人在哪」不是「拍照時站在哪」，兩者可能差很多，比低精度GPS
-// 本身的誤差還嚴重。讀不到EXIF GPS（例如手機相機定位權限沒開、HEIC格式暫不支援解析、
-// 或照片本身就沒有）就老實回傳null，讓浮水印顯示「GPS未取得」，不要拿上傳位置冒充。
+// 本身的誤差還嚴重。讀不到EXIF GPS（例如手機相機定位權限沒開、或照片本身就沒有）
+// 就老實回傳null，讓浮水印顯示「GPS未取得」，不要拿上傳位置冒充。
+// 用exifr這個函式庫而不是自己手刻解析——iPhone預設拍照存的是HEIC格式，GPS資訊
+// 存在跟JPEG完全不同的容器結構裡（ISOBMFF box，不是JPEG的markers），自己刻一個
+// JPEG-only的簡易解析器在iPhone夥伴身上會整批讀不到GPS，這也是之前版本上線後
+// 「少數GPS無法定位」的其中一個真正原因。exifr同時支援JPEG跟HEIC，實測兩種格式
+// 都能正確讀出GPS，比自己刻的更可靠。
+const EXIFR_LIB = 'https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js';
 function readExifGps(file){
-  return new Promise((resolve)=>{
-    if(!file || !/^image\/jpe?g$/i.test(file.type)){ resolve(null); return; }
-    const reader = new FileReader();
-    reader.onload = ()=>{ try{ resolve(parseJpegExifGps(reader.result)); }catch(e){ resolve(null); } };
-    reader.onerror = ()=> resolve(null);
-    // EXIF段落依JPEG規格上限64KB，前面頂多再加APP0等少量段落，讀前256KB綽綽有餘，
-    // 不用把整張照片（可能幾MB）都讀進記憶體只為了找GPS。
-    reader.readAsArrayBuffer(file.slice(0, 262144));
-  });
-}
-function parseJpegExifGps(buf){
-  const view = new DataView(buf);
-  if(view.byteLength < 4 || view.getUint16(0,false) !== 0xFFD8) return null;
-  let offset = 2;
-  while(offset + 4 <= view.byteLength){
-    const marker = view.getUint16(offset, false);
-    if((marker & 0xFF00) !== 0xFF00) break;
-    if(marker === 0xFFDA) break; // 進到影像資料了，後面不會再有EXIF
-    const segLen = view.getUint16(offset+2, false);
-    if(marker === 0xFFE1){
-      const segStart = offset + 4;
-      if(segStart + 6 <= view.byteLength && view.getUint32(segStart,false) === 0x45786966 && view.getUint16(segStart+4,false) === 0x0000){
-        return parseExifTiffGps(view, segStart + 6);
-      }
-    }
-    offset += 2 + segLen;
-  }
-  return null;
-}
-function parseExifTiffGps(view, tiffStart){
-  const little = view.getUint16(tiffStart, false) === 0x4949; // 'II' = little-endian, 'MM' = big-endian
-  const u16 = (o)=> view.getUint16(o, little);
-  const u32 = (o)=> view.getUint32(o, little);
-  const ifd0Offset = tiffStart + u32(tiffStart+4);
-  const gpsIfdRel = findExifTagValue(view, ifd0Offset, 0x8825, little); // GPSInfo IFD指標
-  if(gpsIfdRel == null) return null;
-  const gpsOffset = tiffStart + gpsIfdRel;
-  const count = u16(gpsOffset);
-  let latRef=null, lngRef=null, lat=null, lng=null;
-  const readDMS = (relOff)=>{
-    const o = tiffStart + relOff;
-    const rat = (ro)=> u32(ro) / u32(ro+4);
-    return rat(o) + rat(o+8)/60 + rat(o+16)/3600;
-  };
-  for(let i=0;i<count;i++){
-    const eOff = gpsOffset + 2 + i*12;
-    const tag = u16(eOff), type = u16(eOff+2), cnt = u32(eOff+4), valOff = eOff+8;
-    if(tag === 0x0001) latRef = String.fromCharCode(view.getUint8(valOff));
-    else if(tag === 0x0003) lngRef = String.fromCharCode(view.getUint8(valOff));
-    else if(tag === 0x0002 && type === 5 && cnt === 3) lat = readDMS(u32(valOff));
-    else if(tag === 0x0004 && type === 5 && cnt === 3) lng = readDMS(u32(valOff));
-  }
-  if(lat == null || lng == null) return null;
-  if(latRef === 'S') lat = -lat;
-  if(lngRef === 'W') lng = -lng;
-  return { lat, lng };
-}
-function findExifTagValue(view, ifdOffset, wantTag, little){
-  const u16 = (o)=> view.getUint16(o, little);
-  const u32 = (o)=> view.getUint32(o, little);
-  const count = u16(ifdOffset);
-  for(let i=0;i<count;i++){
-    const eOff = ifdOffset + 2 + i*12;
-    if(u16(eOff) === wantTag) return u32(eOff+8);
-  }
-  return null;
+  return (async ()=>{
+    if(!file) return null;
+    try{
+      await loadLib(EXIFR_LIB);
+      const gps = await exifr.gps(file);
+      if(!gps || gps.latitude == null || gps.longitude == null) return null;
+      return { lat: gps.latitude, lng: gps.longitude };
+    }catch(e){ console.error('讀取照片GPS失敗，改標示GPS未取得', e); return null; }
+  })();
 }
 // 自建相機（openCameraCapture）在拍照當下已經疊過浮水印；但「上傳照片」
 // 走相簿選現成檔案，沒有經過那段流程，另外在這裡補疊一次，兩條路徑最後
