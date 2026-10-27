@@ -6009,9 +6009,37 @@ function renderPayrollPage(c, mode){
     // 存檔時算的邏輯一致），不能直接用live.net（那個是含預支扣減的即時參考值）。
     const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
     const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
-    const ded = isFrozen
-      ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet }
-      : computePayrollDeductions(r.net, r.reimbursement);
+    // 扣不扣稅要看「主控實際拉出來開單的那段期間」自己的金額夠不夠20000（已
+    // 跟會計確認過，是依實際開出的那張勞報單自己的金額認定，不是行事曆月份
+    // 累計——2026-10-27 小安的案例：全月$20,560但分4張區間各自都沒過2萬，
+    // 每張都正確地沒扣稅；這裡如果直接拿整月總額試算扣稅，會跟實際已經開出
+    // 的勞報單對不起來，變成假警報）。沒有整月月結勞報單時，改成：已經實際
+    // 開出的區間／月結勞報單各自依自己期間正確算過，直接採用其實領金額；還
+    // 沒被任何勞報單涵蓋的部分，不假設扣稅，用原始金額顯示——真正會不會扣
+    // 稅，要等實際開單那天依那筆自己的金額才知道。
+    let ded, coveringStatements = [];
+    if(isFrozen){
+      ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
+    } else {
+      const monthStart = monthStr+'-01', monthEnd = monthEndStr(monthStr);
+      coveringStatements = state.data.statements.filter(s=>{
+        if(s.driverId!==driverId) return false;
+        const [a,b] = statementRange(s);
+        return a<=monthEnd && b>=monthStart;
+      });
+      const documentedActual = coveringStatements.reduce((s,x)=>s+x.actualNet, 0);
+      const documentedTax = coveringStatements.reduce((s,x)=>s+x.taxAmount, 0);
+      const documentedNhi = coveringStatements.reduce((s,x)=>s+x.nhiAmount, 0);
+      const isCovered = date => coveringStatements.some(s=>{ const [a,b]=statementRange(s); return date>=a && date<=b; });
+      const undocTripTotal = live.trips.filter(a=>!isCovered(a.date)).reduce((s,a)=>s+tripPay(a), 0);
+      const undocAdjustments = live.adjustments.filter(a=>!isCovered(adjustmentEffectiveDate(a)));
+      const undocNet = statementNetFromAdjustments(undocTripTotal, undocAdjustments).net;
+      ded = {
+        incomeType: PAYROLL_INCOME_TYPE, withholdTax: documentedTax>0, taxRate: PAYROLL_TAX_RATE, taxAmount: documentedTax,
+        withholdNhi: documentedNhi>0, nhiRate: PAYROLL_NHI_RATE, nhiAmount: documentedNhi,
+        actualNet: documentedActual + undocNet
+      };
+    }
     const driver = state.data.drivers.find(d=>d.id===driverId);
     const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">夥伴已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">夥伴已回簽（未鎖定）</span>' : '<span class="badge progress">等待夥伴回簽</span>';
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
@@ -6032,7 +6060,8 @@ function renderPayrollPage(c, mode){
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
           <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看報酬結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
-        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方預覽是整月的即時資料，僅供參考，請改用上方「區間勞報單」處理。</div>` : ''}
+        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方「可領淨額」已經改用已開出的區間勞報單金額＋尚未開單部分原始金額計算（不會假設整月合併扣稅），請改用上方「區間勞報單」處理尚未開單的日期。</div>` : ''}
+        ${!isFrozen && coveringStatements.length ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}），下方金額已採用各自實際扣稅後的實領金額；其餘尚未開單的日期以原始金額顯示，實際扣不扣稅要等開單那天依那筆自己的金額才知道。</div>` : ''}
         ${statementDriftNote(record, live)}
         ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放夥伴回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放夥伴簽名。'}</div>` : ''}
         <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
@@ -8001,6 +8030,33 @@ async function renderMyEarnings(c){
     catch(err){ resultEl.innerHTML = `<div class="empty">載入失敗：${err.message}</div>`; return; }
     if(state.tab!=='my-earnings') return; // 使用者可能已經切走這一頁
     const r = driverMonthly(dId, m, monthAssignments);
+    const driver = state.data.drivers.find(x=>x.id===dId);
+    // 勞報單預覽跟扣稅/補充保費提醒：不能假設「整月合併開一張單」去試算扣稅
+    // ——扣不扣稅要看主控實際拉出來開單的那段期間自己的金額夠不夠20000，不是
+    // 行事曆月份累計（跟報酬結算頁同一套邏輯跟理由，見renderPayroll那邊的
+    // 說明；2026-10-27跟會計確認過）。已經實際開出的區間／月結勞報單，各自
+    // 依自己期間正確算過，直接採用其實領金額；還沒被任何勞報單涵蓋的部分，
+    // 不假設扣稅，用原始金額顯示。
+    const monthStart = m+'-01', monthEnd = monthEndStr(m);
+    const coveringStatements = state.data.statements.filter(s=>{
+      if(s.driverId!==dId) return false;
+      const [a,b] = statementRange(s);
+      return a<=monthEnd && b>=monthStart;
+    });
+    const documentedActual = coveringStatements.reduce((s,x)=>s+x.actualNet, 0);
+    const documentedTax = coveringStatements.reduce((s,x)=>s+x.taxAmount, 0);
+    const documentedNhi = coveringStatements.reduce((s,x)=>s+x.nhiAmount, 0);
+    const isCovered = date => coveringStatements.some(s=>{ const [a,b]=statementRange(s); return date>=a && date<=b; });
+    const undocTripTotal = r.trips.filter(a=>!isCovered(a.date)).reduce((s,a)=>s+tripPay(a), 0);
+    const undocAdjustments = r.adjustments.filter(a=>!isCovered(adjustmentEffectiveDate(a)));
+    const undocCalc = statementNetFromAdjustments(undocTripTotal, undocAdjustments);
+    const statementCalc = statementNetFromAdjustments(r.tripTotal, r.adjustments);
+    const previewR = { ...r, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
+    const ded = {
+      incomeType: PAYROLL_INCOME_TYPE, withholdTax: documentedTax>0, taxRate: PAYROLL_TAX_RATE, taxAmount: documentedTax,
+      withholdNhi: documentedNhi>0, nhiRate: PAYROLL_NHI_RATE, nhiAmount: documentedNhi,
+      actualNet: documentedActual + undocCalc.net
+    };
     let defTrips = [];
     try{ defTrips = await fetchDeferredTrips(dId); }catch(e){}
     const defSplit = deferredSplit(defTrips, m+'-01', monthEndStr(m));
@@ -8020,7 +8076,14 @@ async function renderMyEarnings(c){
         <div class="eh-leg"><span>🟩 已付 $${money(paidAmt)}</span><span>🟧 未付 $${money(unpaidAmt)}</span></div>` : ''}
       <div class="mini-bars" title="每日報酬">${dayVals.map(([d,v])=>`<div class="mb" title="${m}-${String(d).padStart(2,'0')}：$${money(v)}"><i class="${v?'':'z'}" style="height:${v?Math.max(4,Math.round(v*100/dayMax)):4}%"></i><span>${d%5===0||d===1?d:''}</span></div>`).join('')}</div>
     </div>`;
-    resultEl.innerHTML = hero + `
+    // 扣不扣稅要看「主控實際開出的那張勞報單」自己的金額夠不夠NT$20,000起扣
+    // 門檻，不是行事曆月份累計（已跟會計確認，2026-10-27）——所以這裡只在
+    // 「這個月已經有實際開出的勞報單被扣了稅／補充保費」時才提醒，不會因為
+    // 本月累計金額看起來快超過20000就提早誤報（分批小額開單、每張都沒過
+    // 門檻的話，依規定本來就不扣）。⚠️ 門檻是否仍適用、要不要另外準備收據／
+    // 憑證，請洽主控或會計師確認，這裡不是正式稅務建議。
+    const nhiNotice = ded.withholdTax ? `<div class="note" style="border-color:var(--amber); color:#8A5A17; margin-bottom:10px;">⚠️ ${isCurrent?'本月':m}已有勞報單金額達 NT$${money(PAYROLL_WITHHOLD_THRESHOLD)}起扣門檻，依規定扣繳了 10% 所得稅＋2.11% 二代健保補充保費（下方「本月勞報單預覽」可以看到詳細金額）。</div>` : '';
+    resultEl.innerHTML = nhiNotice + hero + `
       <div class="panel">
         <table>
           <tr><td>已完成任務數</td><td class="amount">${r.trips.length}</td></tr>
@@ -8066,7 +8129,12 @@ async function renderMyEarnings(c){
           </table>
         `;
         })()}
-      </div>`;
+      </div>
+      <details class="fold-d" ${state._meSlipPreviewOpen?'open':''} ontoggle="state._meSlipPreviewOpen=this.open">
+        <summary style="font-weight:600; padding:10px 0;">📝 ${m} 勞報單預覽<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　（需要時點開查看）</span></summary>
+        <p class="note" style="margin-top:0;">依目前已完成任務與調整項即時算出，僅供參考；正式勞報單由主控完成月結確認後才會產生、開放回簽，內容與金額可能因後續調整而變動。</p>
+        ${driver ? payrollSlipHtml(driver, m, previewR, ded, { v2:true, serviceName:driver.serviceName }) + payrollAttachmentHtml(driver, m, previewR) : ''}
+      </details>`;
   }
   await refresh();
 }
