@@ -6270,7 +6270,7 @@ function computeChannelBillingReport(channelId, start, end, assignmentsList = st
 // 同一條路線如果連續好幾天店點組成、金額都完全相同（代表路線沒有異動），
 // 會自動合併成一列「生效區間＋天數」；只有真的異動過的路線才會拆成好幾列，
 // 不需要像人工作業一樣，一有異動就整個任務起點的車都重新複製一份。
-function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assignments){
+function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assignments, channelPeriods = null){
   const rows = assignmentsList.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
   const byOriginRoute = {};
   rows.forEach(a=>{
@@ -6296,8 +6296,14 @@ function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assi
 
     const byChannel = {}; const storeCounts = {}; let dailyTotal = 0; let relevant = false;
     channelIds.forEach(cid=>{
-      const amt = Math.round(fullByChannel[cid]||0);
-      const cnt = (displayDropPoints||[]).filter(dp=>dp.channelId===cid).length;
+      // 各通路自己的請款週期可能跟上面「抓取範圍」（所有已選通路週期的聯集）不一樣長
+      // （例如 7-11 是每月27日~次月26日、康達盛通是整月）；這天如果落在抓取範圍內、
+      // 卻不在這個通路自己的週期內，這個通路這一天就不能算錯進明細，否則明細合計會
+      // 跟上面「請款總覽」用各自週期算出來的正式總額對不起來（2026-10-27修正）。
+      const period = channelPeriods && channelPeriods[cid];
+      const inPeriod = !period || (a.date>=period.start && a.date<=period.end);
+      const amt = inPeriod ? Math.round(fullByChannel[cid]||0) : 0;
+      const cnt = inPeriod ? (displayDropPoints||[]).filter(dp=>dp.channelId===cid).length : 0;
       byChannel[cid] = amt; storeCounts[cid] = cnt; dailyTotal += amt;
       if(amt>0 || cnt>0) relevant = true;
     });
@@ -6775,11 +6781,13 @@ function renderBilling(c){
       document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">請至少勾選一個通路</div></div>';
       return;
     }
+    const channelPeriods = {};
+    channelIds.forEach(cid=>{ channelPeriods[cid] = ownPeriodFor(cid, monthStr, channelIds, start, end); });
     const reports = channelIds.map(cid=>{
-      const own = ownPeriodFor(cid, monthStr, channelIds, start, end);
+      const own = channelPeriods[cid];
       return own ? computeChannelBillingReport(cid, own.start, own.end, billingAssignments) : null;
     }).filter(Boolean);
-    const merged = mergedRunRows(channelIds, start, end, billingAssignments);
+    const merged = mergedRunRows(channelIds, start, end, billingAssignments, channelPeriods);
     document.getElementById('billingResult').innerHTML = `
       <div id="billingPrintArea">
         <h2 style="text-align:center; margin:0 0 14px;">信興行銷有限公司</h2>
