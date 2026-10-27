@@ -7361,6 +7361,58 @@ function showGreeting(){
   const close = ()=>{ if(closed) return; closed = true; el.classList.add('out'); setTimeout(()=>el.remove(), 550); if(state.tab!=='home') switchTab('home'); else renderContent(); };
   el.onclick = close;
 }
+// 登入當下提醒：本月所得（整月原始金額試算，不是看已經實際開單扣了多少——
+// 這裡是前瞻性提醒「之後開單可能會被扣稅，記得先申報代墊費用」，跟報酬結算/
+// 我的報酬正式顯示「已經被扣了多少稅」的邏輯是不同用途，沿用整月合併試算
+// 沒關係，2026-10-27）達起扣門檻時跳出，提醒夥伴常常忘記申報加油／保養發票
+// ——代墊費用不算所得，愈早申報愈有機會降低這個月要課稅的金額。夥伴可以
+// 勾選「這個月不再提醒」，勾了之後這個月份都不會再跳出（跟下面沒勾選時
+// 的「每天只出現一次」是兩層不同的節流：沒勾就每天出現一次，勾了就整個
+// 月都不出現，直到下個月門檻又重新判斷）。主控「檢視夥伴」不會觸發。
+async function maybeShowNhiReminder(){
+  if(state.role!=='driver' || state.adminViewDriver || !state.activeDriverId) return;
+  const dId = state.activeDriverId, today = todayStr(), m = today.slice(0,7);
+  try{ if(localStorage.getItem(`nhiNoticeMute|${dId}|${m}`)) return; }catch(e){}
+  const key = `nhiNotice|${dId}|${today}`;
+  try{
+    if(localStorage.getItem(key)) return;
+    localStorage.setItem(key, '1');
+    Object.keys(localStorage).filter(k=>k.startsWith('nhiNotice|') && k!==key).forEach(k=>localStorage.removeItem(k));
+  }catch(e){
+    if(state._nhiNoticeDay===today) return; // 瀏覽器不讓存資料時，退而求其次：這次開啟只出現一次
+    state._nhiNoticeDay = today;
+  }
+  let monthAssignments;
+  try{
+    monthAssignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m));
+    await ensureAdjustmentsRange(m+'-01');
+  }catch(e){ return; } // 查失敗就安靜放棄，不影響正常登入流程
+  if(state.role!=='driver' || state.activeDriverId!==dId) return; // 查詢期間可能已經登出／切換身份
+  const r = driverMonthly(dId, m, monthAssignments);
+  const calc = statementNetFromAdjustments(r.tripTotal, r.adjustments);
+  const ded = computePayrollDeductions(calc.net, r.reimbursement);
+  if(!ded.withholdTax) return;
+  showNhiReminderModal();
+}
+function showNhiReminderModal(){
+  let host = document.getElementById('nhiReminderHost');
+  if(!host){ host = document.createElement('div'); host.id = 'nhiReminderHost'; document.body.appendChild(host); }
+  const dId = state.activeDriverId, m = todayStr().slice(0,7);
+  host.innerHTML = `<div class="modal-backdrop" id="nhiReminderBackdrop">
+    <div class="modal-box" style="max-width:420px;">
+      <h3 style="margin-top:0;">⚠️ 本月所得已達 NT$${money(PAYROLL_WITHHOLD_THRESHOLD)}</h3>
+      <p style="font-size:13.5px; line-height:1.7;">之後勞報單如果涵蓋到這段金額，依規定會被扣 10% 所得稅＋2.11% 二代健保補充保費。如果這個月有加油或車輛保養還沒申報，記得先申報發票——代墊費用不算所得，可以降低要課稅的金額。</p>
+      <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-soft); margin:10px 0 14px;"><input type="checkbox" id="nhiReminderMute" style="width:auto;">這個月不再提醒</label>
+      <button class="btn amber" id="nhiReminderOk" style="width:100%;">我知道了，查看勞報單預覽</button>
+    </div>
+  </div>`;
+  const applyMuteIfChecked = ()=>{
+    const cb = document.getElementById('nhiReminderMute');
+    if(cb && cb.checked){ try{ localStorage.setItem(`nhiNoticeMute|${dId}|${m}`, '1'); }catch(e){} }
+  };
+  document.getElementById('nhiReminderOk').onclick = ()=>{ applyMuteIfChecked(); host.innerHTML=''; state._meSlipPreviewOpen = true; switchTab('my-earnings'); };
+  document.getElementById('nhiReminderBackdrop').onclick = (e)=>{ if(e.target.id==='nhiReminderBackdrop'){ applyMuteIfChecked(); host.innerHTML=''; } };
+}
 // 今天全部完成的慶祝動畫：彩帶＋卡片彈出＋金額數字跳動，每位夥伴每天只播一次；之後同一天再進來就維持靜態完成畫面，隔天（午夜 12 點後）自動換新的一天。
 // 夥伴自己拍的照片縮圖：只存在這支手機的瀏覽器裡（約 4KB 的小圖，上傳當下就地縮出來），
 // 完全不用網路、不會向伺服器多要任何照片資料（不佔流量）。只暫存當天（過了午夜就清掉），每個店點最多 3 張；歷史任務不顯示縮圖、維持原本的樣子；換手機看不到縮圖，但「✓ 已上傳 N 張」仍在。
@@ -8493,6 +8545,7 @@ function showApp(){
   // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
   startRealtimeSync(handleLiveEvent);
   if(state.role==='driver') setupOfflineUploadFlush();
+  if(state.role==='driver' && !state.adminViewDriver) maybeShowNhiReminder();
   if(typeof pushAutoSync==='function') pushAutoSync();
   if(state.role==='admin') (window.requestIdleCallback || (f=>setTimeout(f, 2500)))(()=>{ loadPdfLibs().catch(()=>{}); });
 }
