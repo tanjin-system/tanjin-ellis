@@ -41,7 +41,7 @@ function mapOrigin(row) {
 }
 
 function mapDropPoint(row) {
-  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null, unloadNote: row.unload_note || '' };
+  return { id: row.id, address: row.address, channelId: row.channel_id, code: row.code || '', status: row.status, allowDuplicate: !!row.allow_duplicate, lat: row.lat != null ? Number(row.lat) : null, lng: row.lng != null ? Number(row.lng) : null, unloadNote: row.unload_note || '', geocodeExact: row.geocode_exact == null ? null : !!row.geocode_exact };
 }
 
 function mapRoute(row) {
@@ -805,12 +805,22 @@ async function geocodeAddress(addr) {
   }
   return null;
 }
-async function saveDropPointCoord(dpId, lat, lng) {
+async function saveDropPointCoord(dpId, lat, lng, exact) {
   const supabase = getSupabase();
   const { error } = await supabase.from('drop_points').update({ lat, lng }).eq('id', dpId);
   if (error) throw new Error('儲存座標失敗：' + error.message);
   const dp = state.data.dropPoints.find(x => x.id === dpId);
   if (dp) { dp.lat = lat; dp.lng = lng; }
+  // geocode_exact 記錄這次座標是不是真的對到完整門牌（見PART 43）：之後店點
+  // 涵蓋檢查面板會把exact===false的店列出來，提醒要用Google地圖人工覆查——
+  // 這欄位是PART 43才加的，資料庫還沒跑過那段migration時這裡會更新失敗，
+  // 但座標本身已經存成功了，不應該讓這個附加標記的失敗擋住整個儲存動作。
+  if (exact !== undefined) {
+    try {
+      const { error: e2 } = await supabase.from('drop_points').update({ geocode_exact: exact }).eq('id', dpId);
+      if (!e2 && dp) dp.geocodeExact = exact;
+    } catch (e) { /* 欄位還沒建立，忽略，等migration跑過就會正常 */ }
+  }
 }
 // 卸貨備註：跟著店本身走的共用筆記（見schema PART 40），任何司機都能補寫，
 // 不是單趟任務的欄位，所以直接存回 drop_points，不是 assignment_drop_points。
@@ -890,7 +900,7 @@ async function geocodeMissingDropPoints(onProgress, cancel) {
   for (const dp of todo) {
     if (cancel && cancel.stop) break;
     const g = await geocodeAddress(dp.address);
-    if (g) await saveDropPointCoord(dp.id, g.lat, g.lng); else failed.push(dp);
+    if (g) await saveDropPointCoord(dp.id, g.lat, g.lng, g.exact); else failed.push(dp);
     done++;
     if (onProgress) onProgress({ done, total: todo.length, name: dp.code || dp.address, failed: failed.length });
     await new Promise(res => setTimeout(res, 1100));
@@ -1066,17 +1076,22 @@ function computeCoverage(asOf, override) {
       if (conflicts.length) info.within = false;
     });
   });
-  const missing = [], dups = [], inactiveIn = [];
+  const missing = [], dups = [], inactiveIn = [], imprecise = [];
   let activeCount = 0;
   state.data.dropPoints.forEach(dp => {
     const rs = byDp.get(dp.id) || [];
     if (dp.status === 'inactive') { if (rs.length) inactiveIn.push({ dp, routes: rs }); return; }
     activeCount++;
     if (!rs.length) { missing.push(dp); return; }
+    // geocode_exact===false：地址轉座標時沒找到完整門牌，退而求其次抓了路段
+    // 概略點，容易跟附近其他店座標重疊（見PART 43、2026-10-27正原門市/萬家福
+    // 中和店座標重疊事件）。null代表這欄還沒標記過（舊資料或migration還沒跑），
+    // 不當成有問題，只有明確標記false的才提醒。
+    if (dp.geocodeExact === false) imprecise.push(dp);
     const info = dupInfo.get(dp.id);
     if (info) dups.push({ dp, routes: [...info.routes], within: info.within, days: [...info.days].sort() });
   });
-  return { byDp, missing, dups, inactiveIn, activeCount };
+  return { byDp, missing, dups, inactiveIn, imprecise, activeCount };
 }
 // ---------- 修正歷史版本（不動店點、不動其他版本的內容） ----------
 // 這條路線在某段日期內「已完成」的任務日期（每趟一筆，用來顯示影響幾趟）。

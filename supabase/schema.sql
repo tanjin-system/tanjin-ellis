@@ -1612,3 +1612,17 @@ create trigger trg_catalog_version_route_version_points after insert or update o
 -- version。這欄位從 PART 39 上線那一刻起就是完全沒人讀也沒人寫的殭屍欄位，當時特地留著
 -- 沒刪是怕刪欄位這種不可逆動作太倉促，現在已確認清楚沒有風險，刪掉。
 alter table catalog_meta drop column if exists version;
+
+-- PART 43：drop_points 加 geocode_exact，標記地址轉座標是否真的對到完整門牌（2026-10-27）
+-- 起因：正原門市／萬家福中和店兩家不同店座標完全重疊——查出來是Nominatim（OSM）對
+-- 中和區中山路二段這段門牌資料不夠細，兩個地址都查不到精確門牌，退而求其次抓了路段
+-- 概略點，兩家店因此撞在同一個座標上（不是打字打錯）。當天用Google地圖人工核對重新
+-- 定位了這兩家，加上規劃文件第6節原本就列出的新東帝/敦化南路店、德瑞/墘運、復北/朱崙、
+-- 久陽鑫港醫，一共9家。
+-- 這欄位讓「這次地址轉座標有沒有找到完整門牌」這個早就算得出來、之前卻直接丟掉的資訊
+-- 存下來：true=對到完整門牌（含人工用Google地圖核對過的）、false=只抓到路段概略點
+-- 建議人工覆查、null=舊資料或還沒標記過（不當成有問題）。店點涵蓋檢查面板會把false
+-- 的店列成「📍 座標可能不精確」，附Google地圖連結方便人工核對，不用每家店都靠猜的去
+-- 懷疑有問題。
+alter table drop_points add column if not exists geocode_exact boolean;
+comment on column drop_points.geocode_exact is '地址轉座標是否精確定位到完整門牌：true=精確（含人工用Google地圖核對過的），false=只抓到路段概略點建議人工覆查，null=舊資料/尚未標記';

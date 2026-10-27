@@ -558,7 +558,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=5"></script>
+<script defer src="js/data-layer.js?v=6"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
 <script>
@@ -2381,14 +2381,14 @@ async function renderHomeAdmin(c){
     }catch(e){ console.error('讀取月結名單失敗', e); }
   }
   const covNow = computeCoverage(todayStr());
-  const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length;
+  const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length + covNow.imprecise.length;
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
     ${emptyTrips.length || covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
       <h3>⏰ 待辦提醒 <span class="rem-count">${[emptyTrips.length,covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
       ${emptyTrips.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${emptyTrips.length} 趟任務沒有任何店點（夥伴會看到空的行程）：${emptyTrips.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${emptyTrips.length>6?'…':''}。請到週期任務清單刪掉重排，或到路線管理重新套用。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
-      ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
+      ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:'', covNow.imprecise.length?`📍 ${covNow.imprecise.length} 家店座標可能不精確`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
       ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="slips">前往勞報單</button></div>` : ''}
       ${stuckTasks.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
       ${draftWeekCount ? `<div class="rem" data-lv="info"><div class="rem-t">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
@@ -3008,7 +3008,7 @@ function renderCoveragePanel(){
   if(!host) return;
   const cov = computeCoverage(covAsOfDate());
   const open = state._cov.open;
-  const bad = cov.missing.length + cov.dups.length + cov.inactiveIn.length;
+  const bad = cov.missing.length + cov.dups.length + cov.inactiveIn.length + cov.imprecise.length;
   const routed = cov.activeCount - cov.missing.length;
   const chip = (key, label, n)=> n ? `<button class="btn ${open===key?'amber':'ghost'}" data-cov="${key}">${label} ${n}</button>` : '';
   const dpRow = dp=>`${escapeHtml(dp.code||'')} ${escapeHtml(dp.address)}（${escapeHtml(channelName(dp.channelId))}）`;
@@ -3040,13 +3040,21 @@ function renderCoveragePanel(){
         <div>${dpRow(x.dp)}</div>
         <div>${covRouteLinks(x.routes)} <button class="btn ghost" data-resumedp="${x.dp.id}" style="padding:2px 8px; font-size:11.5px;">恢復使用</button></div></div>`).join('')}
     </div>`;
+  } else if(open==='imprecise' && cov.imprecise.length){
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">這些店的地址轉座標時沒抓到完整門牌，退而求其次抓了路段概略位置，容易跟附近其他店座標重疊，影響路線里程估算。按「查地圖」用Google地圖核對實際位置，確認後回店點資料手動修正座標。</div>
+      ${cov.imprecise.map(dp=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>${dpRow(dp)}</span>
+        <a class="btn ghost" style="padding:2px 8px; font-size:11.5px;" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(dp.address)}">查地圖</a>
+      </div>`).join('')}
+    </div>`;
   }
   host.innerHTML = `<div class="panel no-print" style="border-color:${bad?'var(--danger)':'var(--ok,#2E7D32)'}; border-width:2px;">
     <div class="toolbar" style="margin-bottom:6px;"><b>店點涵蓋檢查</b>
       <select id="covAsOf" style="width:auto;"><option value="today" ${state._cov.asOf==='today'?'selected':''}>依今天生效的路線</option><option value="latest" ${state._cov.asOf==='latest'?'selected':''}>依最新版本（含未來才生效的）</option></select>
     </div>
     <div style="font-size:13.5px;">使用中店點 <b>${cov.activeCount}</b> 家　已排入路線 <b>${routed}</b> 家${bad?'':'　✅ 全部都有路線，沒有誤重複'}</div>
-    ${bad ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">${chip('missing','🔴 未排入路線',cov.missing.length)}${chip('dup','🟡 同班次重複',cov.dups.length)}${chip('inactive','⚠️ 已停用卻還在路線裡',cov.inactiveIn.length)}</div>` : ''}
+    ${bad ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">${chip('missing','🔴 未排入路線',cov.missing.length)}${chip('dup','🟡 同班次重複',cov.dups.length)}${chip('inactive','⚠️ 已停用卻還在路線裡',cov.inactiveIn.length)}${chip('imprecise','📍 座標可能不精確',cov.imprecise.length)}</div>` : ''}
     ${detail}
     <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">規則：檢查從今天起連續 7 天，每天只看當天實際會跑（依路線名稱括號的星期標註）、當天生效版本的路線；已停用的店不檢查。調整路線儲存時也會即時提醒。</div>
   </div>`;
