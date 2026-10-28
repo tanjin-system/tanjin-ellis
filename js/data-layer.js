@@ -2918,6 +2918,34 @@ async function refreshFuelClaims() {
   state.data.fuelClaims = (data || []).map(mapFuelClaim);
 }
 
+// ---------- 夥伴請假/不可排班紀錄（2026-10-28，雙大腦架構骨架，語音助理還沒接上）----------
+// 跟 drivers/channels 那種一次全部載入不一樣：請假紀錄會持續累積，沒必要每次開系統
+// 都整包抓，改成「要查哪段期間才去資料庫查」，不放進 loadAllData() 的初始載入。
+function mapDriverUnavailability(row) {
+  return { id: row.id, driverId: row.driver_id, date: row.date, note: row.note || '', source: row.source, createdAt: row.created_at };
+}
+async function fetchDriverUnavailabilities(startDate, endDate) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('driver_unavailabilities').select('*').gte('date', startDate).lte('date', endDate).order('date');
+  if (error) throw new Error('查詢請假紀錄失敗：' + error.message);
+  return (data || []).map(mapDriverUnavailability);
+}
+// source：'manual'＝主控或夥伴手動填的；'voice'＝語音助理解析、夥伴在確認卡片點過確認的
+// （2026-10-28定案：語音解析結果一定要經過這個函式呼叫前的二次確認，不能解析完直接呼叫）。
+async function createDriverUnavailability(driverId, date, note, source) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('driver_unavailabilities').insert({
+    driver_id: driverId, date, note: (note || '').trim() || null, source: source === 'voice' ? 'voice' : 'manual'
+  }).select().single();
+  if (error) throw new Error(error.code === '23505' ? '這天已經登記過不可排班了' : '登記失敗：' + error.message);
+  return mapDriverUnavailability(data);
+}
+async function deleteDriverUnavailability(id) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('driver_unavailabilities').delete().eq('id', id);
+  if (error) throw new Error('刪除失敗：' + error.message);
+}
+
 // 「尚未月結確認」名單用：只抓指定月份已完成任務的精簡欄位（沒有店點），一樣分頁避開1000筆上限。
 // 同一個月份在這個 session 只查一次（state._settleCache），首頁提醒與勞報單頁共用。
 async function fetchCompletedTripsLite(monthStr) {

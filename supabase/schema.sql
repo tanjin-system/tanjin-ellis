@@ -1699,3 +1699,34 @@ where dp_pickup.code = '21Plus八德門市' and dp_deliver.code in ('7-11總部�
   and dp_pickup.status = 'active' and dp_deliver.status = 'active'
 group by dp_pickup.id
 on conflict (pickup_drop_point_id) do nothing;
+
+-- ============================================================
+-- PART 45：夥伴請假/不可排班紀錄（2026-10-28，雙大腦架構賈維斯語音助理的骨架）
+-- 起因：雙大腦架構規劃裡，Gemini（賈維斯）負責聽夥伴口語請假（「下週二家裡有事請假」），
+-- 解析成結構化資料寫進資料庫，主控排班時就能看到誰哪天不能排。這張表是這個流程的
+-- 資料落地點——語音解析＋PWA前端確認卡片還沒做，這張表先準備好，之後接語音功能時
+-- 直接寫進來即可，不用再臨時設計資料結構。
+-- source：'voice'＝語音助理解析後、夥伴在PWA確認卡片點確認才寫入的（二次確認關卡，
+-- 2026-10-28討論定案：絕不讓語音解析結果不經確認直接寫入）；'manual'＝主控或夥伴自己
+-- 用一般表單填的。兩種來源存進同一張表，排班時不用管是哪個管道來的。
+-- ============================================================
+create table driver_unavailabilities (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references drivers(id) on delete cascade,
+  date date not null,
+  note text check (note is null or char_length(note) <= 100),
+  source text not null default 'manual' check (source in ('manual','voice')),
+  created_at timestamptz not null default now(),
+  constraint driver_unavailabilities_uq unique (driver_id, date)
+);
+comment on table driver_unavailabilities is '夥伴某天不可排班的紀錄（請假/不可配合）。source標記這筆是語音助理解析（經夥伴二次確認）還是一般手動填寫，排班時不分來源一律視為同一種限制。';
+create index idx_driver_unavailabilities_date on driver_unavailabilities(date);
+alter table driver_unavailabilities enable row level security;
+grant select, insert, update, delete on driver_unavailabilities to app_admin;
+create policy admin_all on driver_unavailabilities for all to app_admin using (true) with check (true);
+-- 夥伴只能看/新增/刪除自己的紀錄（請假是自己講的，不能幫別人請假；不開放update，
+-- 備註打錯就刪掉重填，比允許改日期更不容易誤用）。
+grant select, insert, delete on driver_unavailabilities to app_driver;
+create policy driver_select_own on driver_unavailabilities for select to app_driver using (driver_id = auth_driver_id());
+create policy driver_insert_own on driver_unavailabilities for insert to app_driver with check (driver_id = auth_driver_id());
+create policy driver_delete_own on driver_unavailabilities for delete to app_driver using (driver_id = auth_driver_id());
