@@ -3023,7 +3023,14 @@ function renderCoveragePanel(){
       </div>
       <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">「加到草稿」只是放進該路線的編輯草稿，到路線管理設定生效日期並儲存才會生效；「停止配送」是這家店已經不送了（歷史紀錄都保留）。</div>
       <label style="font-size:12.5px;"><input type="checkbox" id="covAll" style="width:auto;"> 全選</label>
-      <div style="max-height:320px; overflow:auto;">${rows.map(dp=>`<label style="display:block; font-size:13px; padding:3px 0;"><input type="checkbox" class="covPick" value="${dp.id}" style="width:auto;"> ${dpRow(dp)}</label>`).join('')}</div>
+      <div style="max-height:320px; overflow:auto;">${rows.map(dp=>`
+        <div style="padding:3px 0;">
+          <label style="display:block; font-size:13px;"><input type="checkbox" class="covPick" value="${dp.id}" style="width:auto;"> ${dpRow(dp)}</label>
+          <div style="margin-left:20px;">
+            <button class="btn ghost" data-aitoggle="${dp.id}" style="padding:1px 8px; font-size:11px;">🤖 AI建議插入哪台車</button>
+            <div class="ai-suggest-body" id="aiBody-${dp.id}" style="display:none; margin-top:4px;"></div>
+          </div>
+        </div>`).join('')}</div>
       ${cov.missing.length>rows.length ? `<div style="font-size:12px;">…還有 ${cov.missing.length-rows.length} 家，處理完上面的再看。</div>` : ''}
     </div>`;
   } else if(open==='dup' && cov.dups.length){
@@ -3066,6 +3073,41 @@ function renderCoveragePanel(){
   });
   host.querySelectorAll('[data-resumedp]').forEach(b=>{
     b.onclick = async ()=>{ try{ await setDropPointsStatus([b.dataset.resumedp], 'active'); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  host.querySelectorAll('[data-aitoggle]').forEach(b=>{
+    b.onclick = ()=>{
+      const dpId = b.dataset.aitoggle;
+      const body = document.getElementById('aiBody-'+dpId);
+      if(!body) return;
+      const showing = body.style.display!=='none';
+      if(showing){ body.style.display='none'; return; }
+      body.style.display='block';
+      if(body.dataset.inited) return;
+      body.dataset.inited = '1';
+      const origOpts = state.data.origins.filter(og=>og.status!=='inactive').map(og=>`<option value="${og.id}">${escapeHtml(og.label||og.address)}</option>`).join('');
+      body.innerHTML = `<div class="note" style="font-size:12px;">
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <select class="aiOrigin" style="width:auto; max-width:200px; font-size:12px;">${origOpts}</select>
+          <select class="aiShift" style="width:auto; font-size:12px;"><option value="AM">上午</option><option value="PM">下午</option></select>
+          <button class="btn ghost aiQuery" style="padding:2px 10px; font-size:11.5px;">查詢建議</button>
+        </div>
+        <div class="aiResultArea" style="margin-top:6px;"></div>
+      </div>`;
+      const resultArea = body.querySelector('.aiResultArea');
+      body.querySelector('.aiQuery').onclick = async ()=>{
+        const originId = body.querySelector('.aiOrigin').value;
+        const shift = body.querySelector('.aiShift').value;
+        if(!originId){ resultArea.innerHTML = '<span style="color:var(--danger);">請先選擇任務起點</span>'; return; }
+        resultArea.innerHTML = '查詢中…（需要呼叫外部路網服務，可能要幾秒到十幾秒）';
+        try{
+          const results = await suggestRouteInsertion(originId, shift, dpId);
+          if(!results.length){ resultArea.innerHTML = '這個起點＋班次目前沒有可用的現有路線。'; return; }
+          resultArea.innerHTML = `<div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:4px;">僅供參考，不會自動修改任何路線；覺得合適的話，到上面選單選這條路線、按「加到草稿」，再自己去路線管理調整順序。</div>
+            <table style="font-size:12px;"><thead><tr><th>路線</th><th>插入在</th><th>多跑</th><th>新車趟時間</th><th>新店數</th></tr></thead>
+            <tbody>${results.map(r=>`<tr${r.overTimeLimit?' style="color:var(--danger);"':''}><td>${escapeHtml(r.routeName)}</td><td>${escapeHtml(r.insertAfterStopCode)}之後</td><td>${r.addedKm}km／${r.addedMin}分</td><td>${r.newTotalMin}分${r.overTimeLimit?'　⚠️超過上限':''}</td><td>${r.newStopCount}</td></tr>`).join('')}</tbody></table>`;
+        }catch(err){ resultArea.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`; }
+      };
+    };
   });
   const all = host.querySelector('#covAll');
   if(all) all.onchange = ()=> host.querySelectorAll('.covPick').forEach(x=>x.checked = all.checked);
