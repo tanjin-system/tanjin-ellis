@@ -923,6 +923,110 @@ async function fetchRoadRoute(coords) {
   } catch (e) { return null; } finally { clearTimeout(tm); }
 }
 
+// 單店新增/停配排線建議（2026-10-28，PART 44規則資料表的第一個使用者）：給定要新增的
+// 店點，在某個起點＋班別底下的所有現有路線裡，算出插入每條路線的最佳位置與多跑的
+// 里程/時間，依route_planning_rules的規則標出哪些會超過最長車趟時間，其餘依多跑里程
+// 由小到大排序。只讀資料、完全不會寫入或修改任何路線，建議結果給主控自己決定要不要
+// 採用、手動調整——這是2026-10-27用橙泰橙早班實測驗證過的同一套方法（OSRM table API
+// 一次算距離矩陣＋純數學算插入成本），不是重新發明的邏輯。
+// 注意：如果這個店點本身有取貨配送綁定規則（drop_point_pickup_rules），目前這個函式
+// 還不會處理這種情況，會直接丟出錯誤訊息，請人工排線（綁定關係牽涉到「同一台車、
+// 順序要對」，比單純插入複雜，之後要做再另外設計）。
+async function suggestRouteInsertion(originId, shift, newDropPointId) {
+  const supabase = getSupabase();
+  const { data: origin, error: originErr } = await supabase.from('origins').select('id,address,lat,lng').eq('id', originId).single();
+  if (originErr || !origin) throw new Error('找不到這個任務起點');
+  if (origin.lat == null || origin.lng == null) throw new Error('這個任務起點還沒有座標，無法計算路網距離');
+
+  const { data: newDp, error: dpErr } = await supabase.from('drop_points').select('id,code,address,lat,lng').eq('id', newDropPointId).single();
+  if (dpErr || !newDp) throw new Error('找不到這個店點');
+  if (newDp.lat == null || newDp.lng == null) throw new Error('這個店點還沒有座標，無法計算路網距離');
+
+  // 規則：有這個起點專屬設定就用，沒有就用全系統預設(origin_id is null)；資料表還沒建立
+  // 時（PART 44尚未在這個資料庫執行），沿用2026-10-27實測討論出的預設值，功能不中斷。
+  let rule = { min_stops: 6, min_pay: 600, max_duration_min: 90, dwell_min_per_stop: 4 };
+  try {
+    const { data: rules } = await supabase.from('route_planning_rules').select('*').or(`origin_id.eq.${originId},origin_id.is.null`);
+    if (rules && rules.length) {
+      const own = rules.find(r => r.origin_id === originId) || rules.find(r => r.origin_id === null);
+      if (own) rule = {
+        min_stops: own.min_stops ?? rule.min_stops, min_pay: own.min_pay ?? rule.min_pay,
+        max_duration_min: own.max_duration_min ?? rule.max_duration_min, dwell_min_per_stop: own.dwell_min_per_stop ?? rule.dwell_min_per_stop
+      };
+    }
+  } catch (e) { /* 資料表還沒建立或查詢失敗，沿用上面寫死的預設值 */ }
+
+  try {
+    const { data: pickupRule } = await supabase.from('drop_point_pickup_rules').select('id').eq('pickup_drop_point_id', newDropPointId).eq('active', true).maybeSingle();
+    if (pickupRule) throw new Error('這個店點有取貨配送綁定規則，目前的自動建議還不支援這種情況，請人工排線');
+  } catch (e) { if ((e.message || '').includes('取貨配送綁定')) throw e; /* 資料表還沒建立或查詢失敗，忽略繼續 */ }
+
+  const { data: routes } = await supabase.from('routes').select('id,name,seq').eq('origin_id', originId).eq('shift', shift).eq('status', 'active');
+  if (!routes || !routes.length) return [];
+  const { data: versions } = await supabase.from('route_versions').select('id,route_id').in('route_id', routes.map(r => r.id)).is('end_date', null);
+  const versionIds = versions.map(v => v.id);
+  const { data: points } = await supabase.from('route_version_points').select('route_version_id,sequence_no,drop_point_id').in('route_version_id', versionIds).order('sequence_no');
+  const dpIds = [...new Set(points.map(p => p.drop_point_id))];
+  const { data: dps } = await supabase.from('drop_points').select('id,code,lat,lng').in('id', dpIds);
+  const dpMap = {}; dps.forEach(d => dpMap[d.id] = d);
+  const versionToRoute = {}; versions.forEach(v => versionToRoute[v.id] = v.route_id);
+
+  const routeStops = {}; // routeId -> [{id,code,lat,lng}]，依sequence_no順序
+  routes.forEach(r => routeStops[r.id] = []);
+  points.forEach(p => {
+    const rid = versionToRoute[p.route_version_id];
+    const dp = dpMap[p.drop_point_id];
+    if (rid && dp && dp.lat != null && dp.lng != null) routeStops[rid].push(dp);
+  });
+
+  const allPoints = [{ id: '__origin__', lat: origin.lat, lng: origin.lng }, { id: '__new__', lat: newDp.lat, lng: newDp.lng }];
+  const seen = new Set(['__origin__', '__new__']);
+  Object.values(routeStops).flat().forEach(dp => { if (!seen.has(dp.id)) { seen.add(dp.id); allPoints.push(dp); } });
+  const idToIdx = {}; allPoints.forEach((p, i) => idToIdx[p.id] = i);
+
+  const coordStr = allPoints.map(p => p.lng + ',' + p.lat).join(';');
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 15000);
+  let matrix;
+  try {
+    const res = await fetch(`https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=distance,duration`, { signal: ctl.signal });
+    matrix = await res.json();
+  } catch (e) { throw new Error('路網距離查詢失敗，請稍後再試：' + e.message); }
+  finally { clearTimeout(tm); }
+  if (matrix.code !== 'Ok') throw new Error('路網距離查詢失敗：' + (matrix.message || matrix.code));
+  const D = matrix.distances, T = matrix.durations;
+  const oIdx = idToIdx['__origin__'], nIdx = idToIdx['__new__'];
+  const dwellMin = rule.dwell_min_per_stop ?? 4;
+
+  const results = [];
+  routes.forEach(route => {
+    const stops = routeStops[route.id];
+    if (!stops.length) return; // 空路線（理論上不該發生）先跳過
+    const stopIdx = stops.map(s => idToIdx[s.id]);
+    let best = null;
+    for (let pos = 0; pos <= stopIdx.length; pos++) {
+      const prev = pos === 0 ? oIdx : stopIdx[pos - 1];
+      const next = pos === stopIdx.length ? null : stopIdx[pos];
+      const addedM = next === null ? D[prev][nIdx] : D[prev][nIdx] + D[nIdx][next] - D[prev][next];
+      const addedS = next === null ? T[prev][nIdx] : T[prev][nIdx] + T[nIdx][next] - T[prev][next];
+      if (!best || addedM < best.addedM) best = { pos, addedM, addedS };
+    }
+    // 這條路線目前（含卸貨估計）的總時間，加上插入後的增量，判斷插入後會不會超過門檻
+    let curSec = T[oIdx][stopIdx[0]];
+    for (let i = 0; i < stopIdx.length - 1; i++) curSec += T[stopIdx[i]][stopIdx[i + 1]];
+    const newTotalMin = (curSec + best.addedS) / 60 + (stops.length + 1) * dwellMin;
+    results.push({
+      routeId: route.id, routeName: route.name,
+      currentStopCount: stops.length, newStopCount: stops.length + 1,
+      addedKm: Math.round(best.addedM / 10) / 100, addedMin: Math.round(best.addedS / 6) / 10,
+      newTotalMin: Math.round(newTotalMin * 10) / 10,
+      overTimeLimit: rule.max_duration_min != null && newTotalMin > rule.max_duration_min,
+      insertAfterStopCode: best.pos === 0 ? '（起點後第一站）' : stops[best.pos - 1].code,
+    });
+  });
+  results.sort((a, b) => (a.overTimeLimit - b.overTimeLimit) || (a.addedKm - b.addedKm));
+  return results;
+}
+
 // ---------------- 店點 ----------------
 
 async function createDropPoint(input) {
