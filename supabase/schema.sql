@@ -1626,3 +1626,76 @@ alter table catalog_meta drop column if exists version;
 -- 懷疑有問題。
 alter table drop_points add column if not exists geocode_exact boolean;
 comment on column drop_points.geocode_exact is '地址轉座標是否精確定位到完整門牌：true=精確（含人工用Google地圖核對過的），false=只抓到路段概略點建議人工覆查，null=舊資料/尚未標記';
+
+-- ============================================================
+-- PART 44：排線建議規則存成資料（2026-10-28）
+-- 起因：討論「AI/演算法輔助排線」要不要做成正式功能時，實際拿橙泰橙早班（8台車、
+-- 74~78家店）用真實OSRM路網距離跑過模擬，比對老闆實際排法，發現純粹「里程最短」
+-- 跟實際排法只有約37%吻合——差距來自老闆腦袋裡一些沒寫下來的硬性底線（每台車不能
+-- 太少家、不能排到夥伴賺不到錢、不能超過表定時間），以及少數店家本身就有特殊限制
+-- （取貨要跟指定的配送店綁同一台車、特定時間之後才能取貨）。
+-- 這些規則如果寫死在程式碼裡，以後規則一變就要找工程師改code；存成資料表，老闆自己
+-- 就能在後台調整數字，不用動到程式碼。這次只先把資料表跟目前已知的規則存進去，
+-- 「單店新增/停配AI建議」這個會讀取這些規則的正式功能，之後再做。
+--
+-- route_planning_rules：數字門檻類規則，一列一組設定。origin_id 為 null 代表全系統
+-- 預設值；指定 origin_id 可以針對單一任務起點（例如橙泰橙）覆蓋預設值。每個門檻都
+-- 允許留空（null）＝沿用全系統預設，不是每個起點都要填滿全部欄位。
+-- ============================================================
+create table route_planning_rules (
+  id uuid primary key default gen_random_uuid(),
+  origin_id uuid references origins(id) on delete cascade, -- null = 全系統預設
+  min_stops int check (min_stops is null or min_stops > 0),
+  min_pay numeric check (min_pay is null or min_pay >= 0),
+  max_duration_min numeric check (max_duration_min is null or max_duration_min > 0),
+  dwell_min_per_stop numeric check (dwell_min_per_stop is null or dwell_min_per_stop >= 0), -- 估計值：系統沒有實際記錄每店卸貨花多久，供路線時間試算用
+  note text,
+  updated_at timestamptz not null default now(),
+  constraint route_planning_rules_origin_uq unique (origin_id)
+);
+comment on table route_planning_rules is '排線建議的數字門檻規則（最少店數、最低薪資、最長車趟時間、每店卸貨估計分鐘）。origin_id為null＝全系統預設，可針對單一任務起點覆蓋。';
+alter table route_planning_rules enable row level security;
+grant select, insert, update, delete on route_planning_rules to app_admin;
+create policy admin_all on route_planning_rules for all to app_admin using (true) with check (true);
+
+-- 全系統預設值：2026-10-27跟橙泰橙早班實測討論出來的門檻（夥伴每天至少6家才划算、
+-- 單趟薪資至少$600才值得出車、表定9點出發11:30前完成，路線本身抓90分鐘內含卸貨估計）。
+insert into route_planning_rules (origin_id, min_stops, min_pay, max_duration_min, dwell_min_per_stop, note)
+values (null, 6, 600, 90, 4, '2026-10-27跟橙泰橙早班實測討論出的全系統預設值，各起點可自行覆蓋');
+
+-- ------------------------------------------------------------
+-- drop_point_pickup_rules：少數店點本身是「取貨點」，有特殊限制：
+--   1) 取貨要跟哪些配送店綁在同一台車（must_deliver_to，取貨必須排在配送之前）
+--   2) 最早幾點才能去取貨（earliest_pickup_time，例如21Plus要10點後店家才會把貨準備好）
+-- 目前已知兩組（21Plus興隆→101門市、21Plus八德→總部+道生），其餘店點沒有特殊限制，
+-- 不需要在這張表出現。
+-- ------------------------------------------------------------
+create table drop_point_pickup_rules (
+  id uuid primary key default gen_random_uuid(),
+  pickup_drop_point_id uuid not null references drop_points(id) on delete cascade,
+  must_deliver_to uuid[] not null default '{}', -- 必須跟這個取貨點排在同一台車、且排在取貨之後的配送店 drop_point_id 清單
+  earliest_pickup_time time, -- 最早可以去取貨的時間，null＝沒有時段限制
+  note text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint drop_point_pickup_rules_uq unique (pickup_drop_point_id)
+);
+comment on table drop_point_pickup_rules is '店點的取貨特殊限制：取貨要跟哪些配送店綁同一台車（且排在取貨之後）、最早幾點才能取貨。只有真的有限制的店點才會出現在這張表。';
+alter table drop_point_pickup_rules enable row level security;
+grant select, insert, update, delete on drop_point_pickup_rules to app_admin;
+create policy admin_all on drop_point_pickup_rules for all to app_admin using (true) with check (true);
+
+insert into drop_point_pickup_rules (pickup_drop_point_id, must_deliver_to, earliest_pickup_time, note)
+select dp_pickup.id, array[dp_deliver.id], '10:00', '21興隆取貨、送到101門市；10點後店家才會準備好'
+from drop_points dp_pickup, drop_points dp_deliver
+where dp_pickup.code = '21Plus 興隆門市' and dp_deliver.code = '7-11台北101門市'
+  and dp_pickup.status = 'active' and dp_deliver.status = 'active'
+on conflict (pickup_drop_point_id) do nothing;
+
+insert into drop_point_pickup_rules (pickup_drop_point_id, must_deliver_to, earliest_pickup_time, note)
+select dp_pickup.id, array_agg(dp_deliver.id), '10:00', '21八德取貨、送到總部門市與道生門市；10點後店家才會準備好'
+from drop_points dp_pickup, drop_points dp_deliver
+where dp_pickup.code = '21Plus八德門市' and dp_deliver.code in ('7-11總部門市', '7-11道生門市')
+  and dp_pickup.status = 'active' and dp_deliver.status = 'active'
+group by dp_pickup.id
+on conflict (pickup_drop_point_id) do nothing;
