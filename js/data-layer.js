@@ -182,35 +182,42 @@ function mapAnnouncement(row) {
 // 沿用 demo 原本欄位名稱（dp.photo / statement.signatureDataUrl），
 // 這樣 index.html 裡 <img src="${dp.photo}"> 這類渲染程式碼完全不用改。
 
-async function resolvePhotoUrls(assignments) {
+// Supabase Storage 的 createSignedUrls 一次最多收 1000 個路徑，超過會整批被 API 擋掉
+// （400 body/paths must NOT have more than 1000 items）——不是我們這邊錯誤處理沒做好，
+// 是服務本身的硬性上限，而且是「全部一起失敗」，不是超過的那幾個失敗而已，資料量一大
+// （例如一次查好幾個月的歷史任務）就會整批連照片都讀不到。統一切成每批最多1000個分開
+// 呼叫、結果照順序合併起來，不管資料量多大都不會再整批炸掉。
+async function createSignedUrlsChunked(bucket, paths, expiresIn) {
+  const CHUNK = 1000;
   const supabase = getSupabase();
+  const results = [];
+  for (let i = 0; i < paths.length; i += CHUNK) {
+    const chunk = paths.slice(i, i + CHUNK);
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrls(chunk, expiresIn);
+    if (error) { console.error('取得連結失敗', error.message); results.push(...chunk.map(() => null)); continue; }
+    results.push(...data);
+  }
+  return results;
+}
+
+async function resolvePhotoUrls(assignments) {
   const targets = [];
   assignments.forEach(a => a.dropPoints.forEach(dp => { if (dp.photoPath) targets.push(dp); }));
   const mediaTargets = [];
   assignments.forEach(a => a.dropPoints.forEach(dp => (dp.media || []).forEach(m => mediaTargets.push(m))));
   if (mediaTargets.length) {
-    const { data: mediaSigned, error: mediaErr } = await supabase.storage
-      .from('assignment-photos')
-      .createSignedUrls(mediaTargets.map(m => m.path), 60 * 60 * 24 * 7);
-    if (mediaErr) console.error('取得附加媒體連結失敗', mediaErr.message);
-    else mediaSigned.forEach((item, i) => { mediaTargets[i].url = item?.signedUrl || null; });
+    const mediaSigned = await createSignedUrlsChunked('assignment-photos', mediaTargets.map(m => m.path), 60 * 60 * 24 * 7);
+    mediaSigned.forEach((item, i) => { mediaTargets[i].url = item?.signedUrl || null; });
   }
   if (!targets.length) return;
-  const { data, error } = await supabase.storage
-    .from('assignment-photos')
-    .createSignedUrls(targets.map(dp => dp.photoPath), 60 * 60 * 24 * 7);
-  if (error) { console.error('取得照片連結失敗', error.message); return; }
+  const data = await createSignedUrlsChunked('assignment-photos', targets.map(dp => dp.photoPath), 60 * 60 * 24 * 7);
   data.forEach((item, i) => { targets[i].photo = item?.signedUrl || null; });
 }
 
 async function resolveSignatureUrls(statements) {
-  const supabase = getSupabase();
   const targets = statements.filter(s => s.status === 'signed' || s.status === 'confirmed');
   if (!targets.length) return;
-  const { data, error } = await supabase.storage
-    .from('signatures')
-    .createSignedUrls(targets.map(s => `${s.id}.png`), 60 * 60 * 24 * 7);
-  if (error) { console.error('取得簽名連結失敗', error.message); return; }
+  const data = await createSignedUrlsChunked('signatures', targets.map(s => `${s.id}.png`), 60 * 60 * 24 * 7);
   data.forEach((item, i) => { targets[i].signatureDataUrl = item?.signedUrl || null; });
 }
 
@@ -1970,11 +1977,8 @@ async function uploadDropPointMedia(assignmentId, dropPointId, items) {
     const dp = a.dropPoints.find(x => x.id === dropPointId);
     if (dp) { if (!dp.media) dp.media = []; dp.media.push(...uploaded); break; }
   }
-  const { data: signed, error: signErr } = await supabase.storage
-    .from('assignment-photos')
-    .createSignedUrls(uploaded.map(u => u.path), 60 * 60 * 24 * 7);
-  if (signErr) console.error('取得附加媒體連結失敗', signErr.message);
-  else signed.forEach((s, i) => { uploaded[i].url = s?.signedUrl || null; });
+  const signed = await createSignedUrlsChunked('assignment-photos', uploaded.map(u => u.path), 60 * 60 * 24 * 7);
+  signed.forEach((s, i) => { uploaded[i].url = s?.signedUrl || null; });
   return uploaded;
 }
 
