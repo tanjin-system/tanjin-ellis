@@ -232,7 +232,17 @@ async function voiceToolAskCarbon(args) {
       try { await failCarbonTask(task.id, j.error || '未知錯誤'); } catch (e2) {}
       return '小碳處理時發生錯誤：' + (j.error || '請稍後再試') + '，不過我已經把這件事記錄下來了。';
     }
-    try { await completeCarbonTask(task.id, j.summary, j.actionType, j.actionPayload); } catch (e2) {}
+    // actionType==='announcement'：小碳只負責想標題/內容，真正「寫進系統」這一步
+    // 在這裡做——建一筆active:false（已下架）的公告草稿，老闆到「公告管理」看到、
+    // 編輯、按「重新上架」才算真的發布，小碳自己不會讓夥伴看到任何東西。
+    let actionType = j.actionType || null, actionPayload = j.actionPayload || null;
+    if (actionType === 'announcement' && actionPayload) {
+      try {
+        const draft = await createAnnouncement({ title: actionPayload.title, content: actionPayload.content, audience: 'all', active: false });
+        actionPayload = { announcementId: draft.id, title: draft.title, content: draft.content };
+      } catch (e) { actionType = null; actionPayload = null; } // 草稿建失敗就退化成純文字回覆，不要整個任務跟著失敗
+    }
+    try { await completeCarbonTask(task.id, j.summary, actionType, actionPayload); } catch (e2) {}
     return j.summary + '（完整內容我也存到後台「小碳任務」了）';
   } catch (e) {
     try { await failCarbonTask(task.id, e.message); } catch (e2) {}

@@ -2454,11 +2454,14 @@ async function deleteBillingAdjustment(id) {
 // ---------------- 公告（主控發布給全體夥伴看的訊息） ----------------
 
 // audience 'all'：全體夥伴；'selected'：只有 driverIds 列出的那幾位看得到。
+// active：預設true（一般手動發布就是立刻上架）；小碳草擬公告時會明確傳false，
+// 先建一筆「已下架」狀態的草稿，老闆到「公告管理」審核、按「重新上架」才算真的發布
+// ——跟rolloverNextWeekIfNeeded()自動建published:false草稿班表是同一套治理邏輯。
 async function createAnnouncement(input) {
   const supabase = getSupabase();
   const audience = input.audience === 'selected' ? 'selected' : 'all';
   const { data, error } = await supabase.from('announcements').insert({
-    title: input.title, content: input.content, audience
+    title: input.title, content: input.content, audience, active: input.active === false ? false : true
   }).select().single();
   if (error) throw new Error('發布公告失敗：' + error.message);
   let driverIds = [];
@@ -3013,15 +3016,20 @@ async function createCarbonTask(requestText, source) {
   if (error) throw new Error('建立小碳任務失敗：' + error.message);
   return mapCarbonTask(data);
 }
-// actionType/actionPayload：小碳如果草擬了一個可執行的動作（例如draft_announcement
-// 工具回傳的公告草稿），存進這兩欄；老闆在「小碳任務」畫面按確認時，前端（見
-// index.html renderCarbonInbox）才會真的去呼叫對應的createXxx()執行，執行成功後
-// 再呼叫markCarbonTaskExecuted()記錄——這支函式本身只負責存草稿，不執行任何動作。
+// actionType/actionPayload：小碳如果草擬了一個「改內容」的動作（例如
+// draft_announcement工具回傳的公告草稿），呼叫端（voice.js的voiceToolAskCarbon）
+// 會先把草稿真的寫進對應的表（例如用createAnnouncement({...,active:false})建一筆
+// 「已下架」狀態的公告），再呼叫這支函式存檔，actionPayload放實際建出來的那筆
+// 記錄（例如{announcementId,...}），executed_at記錄小碳準備好草稿的時間——
+// 跟rolloverNextWeekIfNeeded()自動建草稿班表同一套治理邏輯：草稿本身是隱藏、
+// 無害的，老闆到對應的管理畫面親自按「上架/發布」才算數，小碳任務這裡只負責
+// 列出來、提供「前往查看」的捷徑。
 async function completeCarbonTask(id, resultText, actionType, actionPayload) {
   const supabase = getSupabase();
   const { error } = await supabase.from('carbon_tasks').update({
     status: 'completed', result_text: resultText,
-    action_type: actionType || null, action_payload: actionPayload || null
+    action_type: actionType || null, action_payload: actionPayload || null,
+    executed_at: actionType ? new Date().toISOString() : null
   }).eq('id', id);
   if (error) throw new Error('更新小碳任務失敗：' + error.message);
 }
@@ -3033,17 +3041,6 @@ async function failCarbonTask(id, errorText) {
 async function reviewCarbonTask(id, adminStatus) {
   const supabase = getSupabase();
   const { error } = await supabase.from('carbon_tasks').update({ admin_status: adminStatus, reviewed_at: new Date().toISOString() }).eq('id', id);
-  if (error) throw new Error('更新小碳任務失敗：' + error.message);
-}
-// 老闆按「確認並發布」、前端已經成功執行完實際動作（例如createAnnouncement）之後
-// 才呼叫這個——finalPayload存的是真的拿去執行的內容（老闆可能有微調過文字），
-// 跟小碳原本的草稿可能不完全一樣，方便事後對照「小碳寫的」跟「最後真的發的」。
-async function markCarbonTaskExecuted(id, finalPayload) {
-  const supabase = getSupabase();
-  const { error } = await supabase.from('carbon_tasks').update({
-    admin_status: 'approved', reviewed_at: new Date().toISOString(),
-    executed_at: new Date().toISOString(), action_payload: finalPayload
-  }).eq('id', id);
   if (error) throw new Error('更新小碳任務失敗：' + error.message);
 }
 async function fetchCarbonTasks(limit) {

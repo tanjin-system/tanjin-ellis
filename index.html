@@ -567,10 +567,10 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=12"></script>
+<script defer src="js/data-layer.js?v=13"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
-<script defer src="js/voice.js?v=28"></script>
+<script defer src="js/voice.js?v=29"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -1489,7 +1489,6 @@ const ADMIN_TABS = [
   {id:'payroll', label:'報酬結算', icon:'💰', group:'帳務'},
   {id:'slips', label:'勞報單', icon:'📝', group:'帳務'},
   {id:'billing', label:'請款結算', icon:'🧾', group:'帳務'},
-  {id:'reconciliation', label:'財務稽核', icon:'🔍', group:'帳務'},
   {id:'export', label:'資料匯出', icon:'📤', group:'系統'},
   {id:'settings', label:'系統設定', icon:'⚙️', group:'系統'}
 ];
@@ -1698,7 +1697,7 @@ function renderContent(){
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
     ({home:renderHomeAdmin, carbon_inbox:renderCarbonInbox, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
-      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, reconciliation:renderReconciliation, export:renderExport, settings:renderSettings})[state.tab](c);
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
@@ -7310,12 +7309,23 @@ function renderSettings(c){
 // 「小碳想完了，但老闆還沒看過／還沒點頭」的東西，所以需要一個專門畫面讓老闆
 // 事後進來確認或駁回。小碳不會自己改任何資料，老闆按確認也只是「我看過了、
 // 知道了」，不會觸發任何自動動作——真的要改班表/金額，還是要去對應畫面手動做。
+// 2026-10-30使用者要求：小碳做的所有事情都該在這個畫面看到，不要分散在各個
+// 分頁——財務稽核是小碳的例行查驗工作，併進來（直接掛載renderReconciliation，
+// 核心邏輯不變，只是換位置）；交辦任務維持原本的清單。原則：查驗類的任務
+// （稽核、純問答/建議）直接在這個畫面顯示結果；會「改內容」的任務（目前只有
+// 公告），小碳準備好的是已下架的草稿，這裡只給「前往查看」的捷徑，真正的
+// 編輯/發布在該筆資料原本所屬的管理畫面（例如公告管理）操作，不在這裡重做
+// 一套編輯介面。
 async function renderCarbonInbox(c){
   c.innerHTML = `
     <h2 class="section-title">小碳任務</h2>
-    <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆（或草擬好的公告）會先進這裡。像公告這種有草稿的，你可以直接在這裡微調文字，按「確認並發布」系統才會真的發出去；其他單純的回覆或建議，按確認只代表你看過了，小碳不會自己改班表或改金額。</p>
+    <p class="section-sub">小碳的例行查驗工作，跟你透過小金交辦給他的所有任務，都在這個畫面。</p>
+    <div id="cbxRecon"></div>
+    <h3 style="margin-top:18px;">📋 交辦任務紀錄</h3>
+    <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆（或準備好的草稿）會先進這裡。</p>
     <div class="panel"><button class="btn ghost" id="cbxRefresh">🔄 重新整理</button></div>
     <div id="cbxList"><div class="empty">載入中…</div></div>`;
+  renderReconciliation(document.getElementById('cbxRecon'));
   document.getElementById('cbxRefresh').onclick = refresh;
   await refresh();
   async function refresh(){
@@ -7331,54 +7341,32 @@ async function renderCarbonInbox(c){
     tasks.forEach(t=>{
       const okBtn = document.getElementById('cbxOk_'+t.id);
       const noBtn = document.getElementById('cbxNo_'+t.id);
-      const pubBtn = document.getElementById('cbxPub_'+t.id);
+      const goBtn = document.getElementById('cbxGo_'+t.id);
       if(okBtn) okBtn.onclick = ()=>review(t.id, 'approved');
       if(noBtn) noBtn.onclick = ()=>review(t.id, 'dismissed');
-      if(pubBtn) pubBtn.onclick = ()=>publishAnnouncement(t);
+      if(goBtn) goBtn.onclick = ()=>{ review(t.id, 'approved'); switchTab('announcements'); };
     });
   }
   async function review(id, adminStatus){
-    try{ await reviewCarbonTask(id, adminStatus); await refresh(); }
+    try{ await reviewCarbonTask(id, adminStatus); if(state.tab==='carbon_inbox') await refresh(); }
     catch(err){ alert(err.message); }
   }
-  async function publishAnnouncement(t){
-    const titleEl = document.getElementById('cbxTitle_'+t.id);
-    const contentEl = document.getElementById('cbxContent_'+t.id);
-    const title = (titleEl.value||'').trim();
-    const content = (contentEl.value||'').trim();
-    if(!title || !content){ alert('標題跟內容都要填'); return; }
-    const btn = document.getElementById('cbxPub_'+t.id);
-    btn.disabled = true; btn.textContent = '發布中…';
-    try{
-      await createAnnouncement({ title, content, audience:'all' });
-      await markCarbonTaskExecuted(t.id, { title, content });
-      await refresh();
-    }catch(err){
-      alert('發布失敗：'+err.message);
-      btn.disabled = false; btn.textContent = '✅ 確認並發布';
-    }
-  }
+  const ACTION_TAB = { announcement: { tab:'announcements', label:'公告管理' } };
   function renderTaskCard(t){
     const when = (t.createdAt||'').replace('T',' ').slice(0,16);
     const srcLabel = t.source==='voice' ? '🎙️ 語音交辦' : '🖥️ 後台交辦';
     let body, borderColor = 'var(--border)', actions = '';
     if(t.status==='pending'){ body = `<div class="empty">小碳還在處理中…（如果一直停在這裡，可能是處理時中斷了，請重新交辦一次）</div>`; borderColor = 'var(--border)'; }
     else if(t.status==='failed'){ body = `<p style="color:var(--danger); font-size:13.5px;">⚠️ 小碳處理失敗：${escapeHtml(t.errorText||'未知錯誤')}</p>`; borderColor = 'var(--danger)'; actions = t.adminStatus==='unreviewed' ? `<button class="btn ghost" id="cbxNo_${t.id}">知道了，關閉</button>` : `<span class="badge">已關閉</span>`; }
-    else if(t.actionType==='announcement'){
+    else if(t.actionType && ACTION_TAB[t.actionType]){
       const p = t.actionPayload || {};
-      if(t.adminStatus==='unreviewed'){
-        body = `${t.resultText?`<p style="font-size:13px; color:var(--ink-soft); margin:0 0 8px 0;">${escapeHtml(t.resultText)}</p>`:''}
-          <div class="field"><label>公告標題（可修改）</label><input id="cbxTitle_${t.id}" type="text" value="${escapeHtml(p.title||'')}"></div>
-          <div class="field"><label>公告內容（可修改）</label><textarea id="cbxContent_${t.id}" rows="5">${escapeHtml(p.content||'')}</textarea></div>`;
-        borderColor = 'var(--accent)';
-        actions = `<button class="btn" id="cbxPub_${t.id}">✅ 確認並發布</button> <button class="btn ghost" id="cbxNo_${t.id}">駁回，不發布</button>`;
-      } else {
-        body = `<div class="panel" style="margin:0;"><p style="font-weight:600; margin:0 0 4px 0;">${escapeHtml(p.title||'')}</p><p style="white-space:pre-wrap; font-size:13.5px; margin:0;">${escapeHtml(p.content||'')}</p></div>`;
-        borderColor = 'var(--border)';
-        actions = t.adminStatus==='approved'
-          ? `<span class="badge completed">✅ 已發布${t.executedAt?'（'+t.executedAt.replace('T',' ').slice(0,16)+'）':''}</span>`
-          : `<span class="badge pending">已駁回，沒有發布</span>`;
-      }
+      const dest = ACTION_TAB[t.actionType];
+      body = `${t.resultText?`<p style="font-size:13px; color:var(--ink-soft); margin:0 0 8px 0;">${escapeHtml(t.resultText)}</p>`:''}
+        <div class="panel" style="margin:0;"><p style="font-weight:600; margin:0 0 4px 0;">${escapeHtml(p.title||'')}</p><p style="white-space:pre-wrap; font-size:13.5px; margin:0;">${escapeHtml(p.content||'')}</p></div>
+        <p style="font-size:12px; color:var(--ink-soft); margin:6px 0 0 0;">小碳已經把這份草稿存進「${dest.label}」（目前是下架狀態，夥伴看不到），到那邊編輯、按「重新上架」才算真的發布。</p>`;
+      borderColor = t.adminStatus==='unreviewed' ? 'var(--accent)' : 'var(--border)';
+      actions = `<button class="btn" id="cbxGo_${t.id}">📋 前往${dest.label}查看</button>` +
+        (t.adminStatus==='unreviewed' ? ` <button class="btn ghost" id="cbxNo_${t.id}">不需要，關閉</button>` : ` <span class="badge pending">已處理過</span>`);
     }
     else {
       body = `<p style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(t.resultText)}</p>`;
@@ -7396,10 +7384,13 @@ async function renderCarbonInbox(c){
   }
 }
 
+// 2026-10-30使用者要求併入「小碳任務」（由renderCarbonInbox掛載到子容器裡），
+// 財務稽核本來就是小碳的例行工作，不該另外開一個獨立分頁。這個函式本身不用改
+// 核心邏輯，只是標題降級成子段落、state.tab的判斷改認carbon_inbox。
 function renderReconciliation(c){
   const month = state._reconMonth || todayStr().slice(0,7);
   c.innerHTML = `
-    <h2 class="section-title">財務稽核</h2>
+    <h3 style="margin-top:0;">🔍 財務稽核（小碳的例行查驗）</h3>
     <p class="section-sub">掃過這個月所有通路、所有在職夥伴，找出請款/報酬可能需要留意的地方。這裡只負責找問題、列出來，不會自動改動任何金額或資料；確認要怎麼處理，請到「請款結算」「報酬結算」「勞報單」畫面操作。</p>
     <div class="panel">
       <div class="field" style="max-width:200px;"><label>稽核月份</label><select id="reconMonth">${(()=>{ const ms = recentMonthOptions(24); if(month && !ms.includes(month)) ms.push(month); ms.sort().reverse(); const thisMonth = todayStr().slice(0,7); return ms.map(m=>`<option value="${m}" ${m===month?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join(''); })()}</select></div>
@@ -7416,7 +7407,7 @@ function renderReconciliation(c){
     let assignments;
     try{ assignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m)); }
     catch(err){ resultEl.innerHTML = `<div class="empty">掃描失敗：${escapeHtml(err.message)}</div>`; return; }
-    if(state.tab!=='reconciliation' || !document.getElementById('reconResult')) return; // 使用者可能已經切走這一頁
+    if(state.tab!=='carbon_inbox' || !document.getElementById('reconResult')) return; // 使用者可能已經切走這一頁
 
     const statements = (state.data.statements||[]).filter(s=>s.month===m);
     const issues = computeReconciliationIssues(assignments, statements);
