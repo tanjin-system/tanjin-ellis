@@ -993,49 +993,11 @@ function resetInactivityTimer() {
 // ---------- 懸浮小助手（2026-10-29，使用者要求：不要把語音功能藏在面板裡，
 // 做一個隨時看得到的懸浮圖示，點了就能講話）----------
 function voiceFabAvatarSvg() {
-  // 2026-10-29使用者要求把頭像做得更好看：原本是扁平雙色的簡筆畫，改成有漸層、
-  // 層次感的版本（頭髮/皮膚/眼睛都加漸層，加一個蝴蝶結當招牌配件，眼睛改成
-  // 單顆大亮點比較有神），但因為實際顯示只有58px小圓，刻意不加太多細節
-  // （睫毛細線、多顆小亮點那種），不然縮小後只會糊成一團，寧可形狀簡單俐落、
-  // 顏色漂亮，也不要堆細節。
-  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
-    <defs>
-      <radialGradient id="voiceFabBg" cx="35%" cy="30%" r="75%">
-        <stop offset="0%" stop-color="#FFE3F2"/><stop offset="55%" stop-color="#F6AEE0"/><stop offset="100%" stop-color="#B98AF2"/>
-      </radialGradient>
-      <linearGradient id="voiceFabHair" x1="0" y1="0" x2="0.3" y2="1">
-        <stop offset="0%" stop-color="#A47FDE"/><stop offset="100%" stop-color="#6B4A9E"/>
-      </linearGradient>
-      <linearGradient id="voiceFabSkin" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#FFEEDF"/><stop offset="100%" stop-color="#FFDDC2"/>
-      </linearGradient>
-      <radialGradient id="voiceFabEye" cx="38%" cy="32%" r="75%">
-        <stop offset="0%" stop-color="#9B7CEA"/><stop offset="100%" stop-color="#352463"/>
-      </radialGradient>
-    </defs>
-    <circle cx="50" cy="50" r="50" fill="url(#voiceFabBg)"/>
-    <ellipse cx="17" cy="63" rx="11" ry="20" fill="url(#voiceFabHair)"/>
-    <ellipse cx="83" cy="63" rx="11" ry="20" fill="url(#voiceFabHair)"/>
-    <circle cx="50" cy="54" r="26" fill="url(#voiceFabSkin)"/>
-    <path d="M23 48 Q24 18 50 18 Q76 18 77 48 Q70 32 50 32 Q30 32 23 48 Z" fill="url(#voiceFabHair)"/>
-    <path d="M37 34 Q39 44 35 51" stroke="url(#voiceFabHair)" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-    <path d="M63 34 Q61 44 65 51" stroke="url(#voiceFabHair)" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-    <g transform="translate(67,22)">
-      <path d="M0 0 L-8 -5 Q-10 0 -8 5 Z" fill="#F178A6"/>
-      <path d="M0 0 L8 -5 Q10 0 8 5 Z" fill="#F178A6"/>
-      <circle cx="0" cy="0" r="3" fill="#D85D8C"/>
-    </g>
-    <path d="M26 46 Q50 27 74 46" stroke="#3A3A3A" stroke-width="2.6" fill="none" stroke-linecap="round"/>
-    <circle cx="76" cy="50" r="4.4" fill="#3A3A3A"/>
-    <circle cx="24" cy="50" r="4.4" fill="#3A3A3A"/>
-    <ellipse cx="34" cy="63" rx="4.6" ry="3.1" fill="#FF9FC2" opacity="0.8"/>
-    <ellipse cx="66" cy="63" rx="4.6" ry="3.1" fill="#FF9FC2" opacity="0.8"/>
-    <ellipse cx="41" cy="55" rx="5.6" ry="7.1" fill="url(#voiceFabEye)"/>
-    <ellipse cx="59" cy="55" rx="5.6" ry="7.1" fill="url(#voiceFabEye)"/>
-    <circle cx="43.3" cy="51.5" r="1.9" fill="#fff"/>
-    <circle cx="61.3" cy="51.5" r="1.9" fill="#fff"/>
-    <path d="M46 67 Q50 71 54 67" stroke="#C06080" stroke-width="2.3" fill="none" stroke-linecap="round"/>
-  </svg>`;
+  // 2026-10-30使用者要求換成一張實際圖片（珍珠玻璃球風格的頭像照片，存在
+  // assets/voice-avatar.png），不再用SVG手繪。函式名稱保留不改，是因為
+  // voiceFabEnsure()那邊呼叫的地方只有一處，直接回傳<img>標籤，呼叫端完全
+  // 不用跟著改。
+  return `<img src="assets/voice-avatar.png" alt="小金" draggable="false">`;
 }
 // 懸浮球拖曳＋記住位置（2026-10-29，使用者要求：球可能擋到畫面內容，要能自己拖去別的地方）。
 // 固定寬高跟.voice-fab CSS的width/height一致（58px），位置存這支手機的localStorage，

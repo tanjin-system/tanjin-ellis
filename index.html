@@ -466,7 +466,7 @@
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
   .voice-fab{ position:fixed; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); width:58px; height:58px; border-radius:50%; border:3px solid #fff; box-shadow:0 6px 18px rgba(122,90,160,.45); padding:0; overflow:hidden; cursor:pointer; z-index:90; display:none; align-items:center; justify-content:center; background:transparent; animation:voiceFabBreathe 2.6s ease-in-out infinite; touch-action:none; user-select:none; -webkit-user-select:none; }
-  .voice-fab svg{ width:100%; height:100%; display:block; }
+  .voice-fab svg, .voice-fab img{ width:100%; height:100%; display:block; object-fit:cover; border-radius:50%; }
   .voice-fab.active{ animation:voiceFabPulse 1s ease-in-out infinite; }
   @keyframes voiceFabBreathe{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.06); } }
   @keyframes voiceFabPulse{ 0%,100%{ box-shadow:0 0 0 4px rgba(224,89,79,.35), 0 6px 18px rgba(122,90,160,.45); } 50%{ box-shadow:0 0 0 10px rgba(224,89,79,.12), 0 6px 18px rgba(122,90,160,.45); } }
@@ -570,7 +570,7 @@
 <script defer src="js/data-layer.js?v=14"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
-<script defer src="js/voice.js?v=31"></script>
+<script defer src="js/voice.js?v=32"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
