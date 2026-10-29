@@ -1488,6 +1488,7 @@ const ADMIN_TABS = [
   {id:'payroll', label:'報酬結算', icon:'💰', group:'帳務'},
   {id:'slips', label:'勞報單', icon:'📝', group:'帳務'},
   {id:'billing', label:'請款結算', icon:'🧾', group:'帳務'},
+  {id:'reconciliation', label:'財務稽核', icon:'🔍', group:'帳務'},
   {id:'export', label:'資料匯出', icon:'📤', group:'系統'},
   {id:'settings', label:'系統設定', icon:'⚙️', group:'系統'}
 ];
@@ -1696,7 +1697,7 @@ function renderContent(){
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
     ({home:renderHomeAdmin, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
-      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, reconciliation:renderReconciliation, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
@@ -7260,6 +7261,72 @@ function renderSettings(c){
     }catch(err){ msg.textContent = ''; alert('備份失敗：' + err.message); }
     btn.disabled = false;
   };
+}
+
+// ---------- 財務稽核（2026-10-30，雙大腦計劃「後台」第一塊：掃過所有通路、
+// 所有在職夥伴，找出請款/報酬可能有問題的地方，列出來給主控人工複核。這個
+// 畫面只負責找問題、列出來，不會自動改動任何金額或資料——要處理請到「請款
+// 結算」「報酬結算」「勞報單」畫面操作，跟「AI只能提案、人要點頭才算數」
+// 同一個原則。
+//
+// 範圍刻意只挑「不需要猜測、對錯清楚」的規則，避免製造一堆似是而非的誤報：
+// A/B 已完成任務卻沒有報酬/沒有跟任何通路請款——純粹的資料缺口，不會誤判。
+// C 用computePayrollDeductions()（勞報單正式鎖定時用的同一套函式，不是
+//   另外猜的邏輯）反推已鎖定勞報單的起扣門檻判斷對不對。
+// D 勞報單過了期間還沒簽名超過2週。
+// 「全通路請款總額 vs 全夥伴報酬總額」這種總覽比較，因為不同通路的請款週期
+// 彼此不對齊（例如7-11是27日~次月26日，其他可能是自然月），要正確合併需要
+// 分別抓每個通路自己的區間再加總，這次先不做，避免倉促做出看起來權威、其實
+// 對不齊日期的誤導數字——這塊之後驗證過基本規則有用、信任建立起來再加。
+function renderReconciliation(c){
+  const month = state._reconMonth || todayStr().slice(0,7);
+  c.innerHTML = `
+    <h2 class="section-title">財務稽核</h2>
+    <p class="section-sub">掃過這個月所有通路、所有在職夥伴，找出請款/報酬可能需要留意的地方。這裡只負責找問題、列出來，不會自動改動任何金額或資料；確認要怎麼處理，請到「請款結算」「報酬結算」「勞報單」畫面操作。</p>
+    <div class="panel">
+      <div class="field" style="max-width:200px;"><label>稽核月份</label><select id="reconMonth">${(()=>{ const ms = recentMonthOptions(24); if(month && !ms.includes(month)) ms.push(month); ms.sort().reverse(); const thisMonth = todayStr().slice(0,7); return ms.map(m=>`<option value="${m}" ${m===month?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join(''); })()}</select></div>
+      <button class="btn amber" id="reconRun">重新掃描</button>
+    </div>
+    <div id="reconResult"><div class="empty">選好月份後按「重新掃描」</div></div>`;
+  document.getElementById('reconMonth').onchange = e => { state._reconMonth = e.target.value; };
+  document.getElementById('reconRun').onclick = refresh;
+  async function refresh(){
+    const m = document.getElementById('reconMonth').value;
+    state._reconMonth = m;
+    const resultEl = document.getElementById('reconResult');
+    resultEl.innerHTML = '<div class="empty">掃描中…</div>';
+    let assignments;
+    try{ assignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m)); }
+    catch(err){ resultEl.innerHTML = `<div class="empty">掃描失敗：${escapeHtml(err.message)}</div>`; return; }
+    if(state.tab!=='reconciliation' || !document.getElementById('reconResult')) return; // 使用者可能已經切走這一頁
+
+    const completed = assignments.filter(a=>a.status==='completed' && !a.isSupport && a.published!==false);
+    const issues = [];
+    completed.forEach(a=>{
+      if(tripPay(a)<=0) issues.push({ kind:'已完成卻沒有報酬', text:`${a.date} ${routeName(a.routeId)}・${driverName(a.driverId)}` });
+      const byCh = effectiveByChannelForAssignment(a) || {};
+      const chTotal = Object.values(byCh).reduce((s,v)=>s+(Number(v)||0), 0);
+      if(chTotal<=0) issues.push({ kind:'已完成卻沒有跟任何通路請款', text:`${a.date} ${routeName(a.routeId)}（${(a.dropPoints||[]).length}個店點）` });
+    });
+    const statements = (state.data.statements||[]).filter(s=>s.month===m);
+    statements.filter(s=>s.status!=='awaiting_signature').forEach(s=>{
+      const expected = computePayrollDeductions(s.tripTotal + s.adjTotal, s.reimbursementAmount);
+      if(expected.withholdTax !== s.withholdTax) issues.push({ kind:'勞報單起扣門檻判斷疑義', text:`${driverName(s.driverId)} ${s.month}勞報單：依目前金額反推應該${expected.withholdTax?'要':'不用'}扣稅，但單上記錄的是${s.withholdTax?'有扣':'沒扣'}，請人工複核（可能是調整項事後異動造成）` });
+    });
+    const today = todayStr();
+    statements.filter(s=>s.status==='awaiting_signature' && s.periodEnd && ymd(addDays(s.periodEnd,14))<today).forEach(s=>{
+      issues.push({ kind:'勞報單逾期未簽名（超過2週）', text:`${driverName(s.driverId)} ${s.month}勞報單（期間至${s.periodEnd}）` });
+    });
+
+    if(!issues.length){ resultEl.innerHTML = '<div class="empty">這個月掃描下來沒有發現需要留意的地方 🎉</div>'; return; }
+    const groups = new Map();
+    issues.forEach(it => { if(!groups.has(it.kind)) groups.set(it.kind, []); groups.get(it.kind).push(it); });
+    resultEl.innerHTML = Array.from(groups.entries()).map(([kind, list]) => `
+      <div class="panel" style="border-color:var(--danger); border-width:2px;">
+        <h3 style="margin-top:0;">⚠️ ${escapeHtml(kind)}（${list.length}筆）</h3>
+        ${list.map(it=>`<div style="padding:5px 0; border-top:1px solid var(--border); font-size:13px;">${escapeHtml(it.text)}</div>`).join('')}
+      </div>`).join('');
+  }
 }
 
 function renderExport(c){
