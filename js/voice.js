@@ -110,6 +110,98 @@ const VOICE_FN_BROWSE_INFO_ADMIN = {
   }, required: ['topic'] }
 };
 
+// 2026-10-29使用者要求：說出想查的夥伴/店點/路線，小金要能直接把畫面切過去，
+// 不是只用唸的。這是純畫面導覽（不寫資料庫、不改任何東西），所以不用像
+// report_unavailable那樣走確認卡片——跟點選單上的連結是同一件事，只是用講的。
+// 導覽到夥伴/店點直接重用現有的全域搜尋gsGo()，路線同理走openRouteForEdit()，
+// 不要另外發明一套導覽邏輯。姓名/名稱比對沿用「完全相符才直接動作、模糊相符
+// 要先確認」的同一套安全原則（跟查薪水那次事故修法一致）——切錯畫面雖然不會
+// 造成資料損失，但一樣是「講得很篤定其實搞錯對象」的同一種失誤，不要輕視。
+function voiceFindSingleRoute(rawQuery) {
+  const raw = (rawQuery || '').trim();
+  if (!raw) return { error: '沒有聽清楚要找哪條路線，請再說一次。' };
+  const routes = (state.data.routes || []).filter(r => r.status !== 'inactive');
+  const exact = routes.filter(r => routeDisplayName(r.name) === raw || r.name === raw);
+  if (exact.length === 1) return { entity: exact[0] };
+  if (exact.length > 1) return { error: `有${exact.length}條路線都叫「${raw}」，請提供更多資訊確認是哪一條。` };
+  const fuzzy = routes.filter(r => { const n = routeDisplayName(r.name); return n.includes(raw) || raw.includes(n); });
+  if (fuzzy.length === 1) return { error: `沒有完全符合「${raw}」的路線，最接近的是「${routeDisplayName(fuzzy[0].name)}」，要切到這條的話請講出完整正確的名稱確認一次。` };
+  if (fuzzy.length > 1) return { error: `有${fuzzy.length}條路線名稱接近「${raw}」（${fuzzy.map(r => routeDisplayName(r.name)).join('、')}），請講出完整正確的名稱。` };
+  return { error: `查不到名稱包含「${raw}」的路線。` };
+}
+function voiceFindSingleDropPoint(rawQuery) {
+  const raw = (rawQuery || '').trim();
+  if (!raw) return { error: '沒有聽清楚要找哪個店點，請再說一次。' };
+  const points = state.data.dropPoints || [];
+  const exact = points.filter(p => (p.code || '') === raw || (p.address || '') === raw);
+  if (exact.length === 1) return { entity: exact[0] };
+  if (exact.length > 1) return { error: `有${exact.length}個店點都叫「${raw}」，請提供更多資訊確認是哪一個。` };
+  const fuzzy = points.filter(p => (p.code || '').includes(raw) || (p.address || '').includes(raw));
+  if (fuzzy.length === 1) return { error: `沒有完全符合「${raw}」的店點，最接近的是「${dpLabel(fuzzy[0])}」，要切到這個的話請講出完整正確的名稱確認一次。` };
+  if (fuzzy.length > 1) return { error: `有${fuzzy.length}個店點名稱接近「${raw}」（${fuzzy.slice(0, 8).map(p => dpLabel(p)).join('、')}），請講出更完整的名稱。` };
+  return { error: `查不到代號或地址包含「${raw}」的店點。` };
+}
+
+const VOICE_FN_GOTO_SCREEN_ADMIN = {
+  name: 'goto_screen',
+  description: '幫主控把畫面切到想查看的地方（純畫面導覽，不會改動任何資料）。target用driver（某位夥伴的資料，keyword填姓名）、drop_point（某個店點，keyword填店名或代號）、route（某條路線的編輯畫面，keyword填路線名稱），或下面這些固定分頁之一：home（總覽首頁）、warroom（戰情室）、schedule（排班）、drivers（夥伴列表）、dropPoints（店點列表）、routes（路線列表）、payroll（報酬結算）、billing（請款結算）、channels（通路）、origins（任務起點）、announcements（公告）、slips（勞報單）、export（資料匯出）、settings（系統設定）。',
+  parameters: { type: 'OBJECT', properties: {
+    target: { type: 'STRING', description: 'driver, drop_point, route, 或上面列出的固定分頁名稱之一' },
+    keyword: { type: 'STRING', description: 'driver/drop_point/route需要填姓名或名稱，固定分頁不用填' }
+  }, required: ['target'] }
+};
+const VOICE_ADMIN_TAB_MAP = {
+  home: ['home', '總覽首頁'], warroom: ['warroom', '戰情室'], schedule: ['schedule', '排班'],
+  drivers: ['drivers', '夥伴列表'], dropPoints: ['dropPoints', '店點列表'], routes: ['routes', '路線列表'],
+  payroll: ['payroll', '報酬結算'], billing: ['billing', '請款結算'], channels: ['channels', '通路'],
+  origins: ['origins', '任務起點'], announcements: ['announcements', '公告'], slips: ['slips', '勞報單'],
+  export: ['export', '資料匯出'], settings: ['settings', '系統設定']
+};
+async function voiceToolGotoScreenAdmin(args) {
+  const target = (args && args.target) || '';
+  const keyword = (args && args.keyword) || '';
+  try {
+    if (target === 'driver') {
+      const found = voiceFindDriverByName(keyword);
+      if (found.error) return found.error;
+      gsGo('d|' + found.driver.id);
+      return `好，已經幫你切到${found.driver.name}的夥伴資料畫面了。`;
+    }
+    if (target === 'drop_point') {
+      const found = voiceFindSingleDropPoint(keyword);
+      if (found.error) return found.error;
+      gsGo('p|' + found.entity.id);
+      return `好，已經幫你切到${dpLabel(found.entity)}的店點畫面了。`;
+    }
+    if (target === 'route') {
+      const found = voiceFindSingleRoute(keyword);
+      if (found.error) return found.error;
+      gsGo('r|' + found.entity.id);
+      return `好，已經幫你打開${routeDisplayName(found.entity.name)}的編輯畫面了。`;
+    }
+    const mapped = VOICE_ADMIN_TAB_MAP[target];
+    if (mapped) { switchTab(mapped[0]); return `好，已經幫你切到${mapped[1]}了。`; }
+  } catch (e) { return '切換畫面時發生錯誤，請自己點選看看。'; }
+  return `還沒開放切到「${target}」這個畫面，可以自己從選單切換。`;
+}
+
+const VOICE_FN_GOTO_SCREEN_DRIVER = {
+  name: 'goto_screen',
+  description: '幫使用者把畫面切到想看的分頁（純畫面導覽，不會改動任何資料）。target固定用下面其中一個：home（首頁）、today（今日任務）、history（歷史任務）、myEarnings（我的報酬）、myStatement（對帳單）、profile（我的資料）。',
+  parameters: { type: 'OBJECT', properties: { target: { type: 'STRING', description: 'home, today, history, myEarnings, myStatement, 或 profile' } }, required: ['target'] }
+};
+const VOICE_DRIVER_TAB_MAP = {
+  home: ['home', '首頁'], today: ['today', '今日任務'], history: ['history', '歷史任務'],
+  myEarnings: ['my-earnings', '我的報酬'], myStatement: ['my-statement', '對帳單'], profile: ['profile', '我的資料']
+};
+async function voiceToolGotoScreenDriver(args) {
+  const target = (args && args.target) || '';
+  const mapped = VOICE_DRIVER_TAB_MAP[target];
+  if (!mapped) return `還沒開放切到「${target}」這個畫面。`;
+  try { switchTab(mapped[0]); } catch (e) { return '切換畫面時發生錯誤，請自己點選看看。'; }
+  return `好，已經幫你切到${mapped[1]}了。`;
+}
+
 function voiceIsAdminMode() { return state.role === 'admin' && !state.adminViewDriver; }
 
 function voiceFindRoute(keyword, admin) {
@@ -267,12 +359,23 @@ function voiceSystemInstructionAdmin() {
   return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切專業、像個得力
 助理。今天是${todayStr()}（星期${wd}）。
 
+⚠️最高原則（比任何其他規則都優先）：對任何查到的姓名、資料、數字，只要不是
+100%確定，一定要老實跟主控確認，絕對不能把猜測的結果當成肯定的答案講出去。
+查錯人、講錯數字造成的麻煩，遠比「多問一句、慢一點」嚴重得多——工具如果回傳
+的是確認用的問句（例如「最接近的是OOO，要查這位嗎」），那就是在問你，不是
+在給你答案，你要把問句完整唸給主控聽、等明確回答之後才能再查一次拿到真正的
+答案。
+
 現在跟你說話的是主控（公司管理者）本人，不是夥伴（司機）。你有以下工具可以用，
 該用就直接呼叫，不要說自己做不到：
 - get_fleet_status：主控問「今天/某一天車隊狀況怎樣」「有沒有異常」就呼叫這個。
 - get_driver_lookup：主控問某位夥伴的狀況（今天跑什麼、這個月跑幾趟/賺多少）
   就呼叫這個。
 - get_weather：主控問天氣就呼叫這個。
+- goto_screen：主控說「幫我切到/查一下某位夥伴的畫面」「幫我打開OO路線」
+  「切到戰情室/報酬結算」這種想要畫面跳轉的需求，就呼叫這個，target要用
+  goto_screen工具說明裡列出的其中一個。這個工具只是切換畫面給主控自己操作，
+  不會真的改動任何資料。
 - browse_info：問路線、店點、通路（含費率）、營收、公告這類目錄/營運資料，問
   「有哪些夥伴報酬超過OO元」這種條件篩選，問某位夥伴的匯款銀行資訊（要匯款時
   用），或問「還有哪些店沒送完」，就呼叫這個，topic要用browse_info工具說明裡
@@ -313,6 +416,9 @@ function voiceSystemInstructionDriver() {
   return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切自然、像個熟悉的
 同事。今天是${todayStr()}（星期${wd}）。
 
+⚠️最高原則（比任何其他規則都優先）：對任何查到的資料、數字，只要不是100%
+確定，一定要老實跟使用者確認，絕對不能把猜測的結果當成肯定的答案講出去。
+
 現在跟你說話的是夥伴本人「${who}」——這支手機就是${who}登入的帳號，下面提到的「使用者」
 都是指${who}這一個人，不是別人。查任務、查報酬、請假登記，一律只針對${who}自己，絕對
 不要查到或講到其他夥伴的資料（你本來也看不到別人的，不用假裝看得到）。如果使用者問
@@ -326,6 +432,8 @@ function voiceSystemInstructionDriver() {
 - get_my_earnings：使用者問「我這個月賺多少」「報酬多少」就呼叫這個。
 - get_weather：使用者問天氣就呼叫這個。
 - report_unavailable：使用者說要請假/不能排班就呼叫這個（詳見下方規則）。
+- goto_screen：使用者說「幫我切到OO」這種想要畫面跳轉的需求，就呼叫這個，
+  target要用goto_screen工具說明裡列出的其中一個。
 - browse_info：問公告、自己登記過哪些請假、或查路線/店點/通路資料（不含金額，
   那些是主控才看得到的）就呼叫這個，topic要用browse_info工具說明裡列出的其中
   一個，不要自己亂編topic名稱。
@@ -877,8 +985,8 @@ async function voiceStart() {
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
-            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN]
-            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER] }]
+            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN]
+            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER] }]
         }
       }));
     };
@@ -904,6 +1012,7 @@ async function voiceStart() {
             else if (fc.name === 'get_fleet_status') resultText = await voiceToolGetFleetStatus(fc.args || {});
             else if (fc.name === 'get_driver_lookup') resultText = await voiceToolGetDriverLookup(fc.args || {});
             else if (fc.name === 'browse_info') resultText = await voiceToolBrowseInfo(fc.args || {});
+            else if (fc.name === 'goto_screen') resultText = await (voiceIsAdminMode() ? voiceToolGotoScreenAdmin(fc.args || {}) : voiceToolGotoScreenDriver(fc.args || {}));
           } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
           try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
           if (fc.name === 'report_unavailable') {
