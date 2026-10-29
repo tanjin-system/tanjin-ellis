@@ -77,8 +77,140 @@ const VOICE_FN_GET_DRIVER_LOOKUP = {
   description: '查詢某一位夥伴的狀況：今天跑哪些任務、這個月跑幾趟、報酬大約多少。driverName填聽到的姓名，可以只有部分（例如「小沈」）。',
   parameters: { type: 'OBJECT', properties: { driverName: { type: 'STRING', description: '夥伴姓名或部分姓名' } }, required: ['driverName'] }
 };
+// 2026-10-29使用者要求：不要只開放幾個事先想好的問題，應該要能瀏覽系統裡「這個
+// 帳號看得到的」幾乎任何目錄/營運資料（路線、店點、通路、公告...），依帳號不同
+// 看得到的範圍不同。不是每種資料各寫一支工具（以後每多一種就要再改一次程式碼、
+// 再部署一次），改成一個通用的browse_info(topic, keyword, month)工具，搭配一張
+// topic→處理函式的對照表（VOICE_TOPICS_DRIVER/VOICE_TOPICS_ADMIN），以後要多開放
+// 別的主題，對照表加一行就好。
+//
+// ⚠️ 有一條線不管哪個帳號都一樣沒有開放：登入密碼/驗證碼、API金鑰這類「系統本身
+// 的祕密」。這個系統本來就特別設計成這些東西連admin自己瀏覽器的畫面都看不到（見
+// auth.js/auth-admin.js的註解——admin_pin、access_code、vapid_private這些欄位
+// 從資料庫查出來的時候就已經不包含在前端讀得到的資料裡了）。語音助理只讀取瀏覽器
+// 現有讀得到的資料（state.data）跟既有的查詢函式，天然不會碰到這些欄位，不是我
+// 另外加了什麼過濾規則——這個系統從一開始的設計就不允許前端程式碼拿到這些東西。
+const VOICE_FN_BROWSE_INFO_DRIVER = {
+  name: 'browse_info',
+  description: '查詢系統裡的其他資料（不是本人任務/報酬/請假，是路線、店點、通路、公告這類目錄資料）。topic固定用下面其中一個：announcements（公告）、my_leave_records（我登記過的請假）、route_info（查某條路線，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路，keyword填通路名稱）。',
+  parameters: { type: 'OBJECT', properties: {
+    topic: { type: 'STRING', description: 'announcements, my_leave_records, route_info, drop_point_info, 或 channel_info' },
+    keyword: { type: 'STRING', description: '查詢關鍵字（路線/店點/通路名稱），依topic決定要不要填' }
+  }, required: ['topic'] }
+};
+const VOICE_FN_BROWSE_INFO_ADMIN = {
+  name: 'browse_info',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）。',
+  parameters: { type: 'OBJECT', properties: {
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, drop_point_info, channel_info, channel_revenue, 或 announcements' },
+    keyword: { type: 'STRING', description: '查詢關鍵字，依topic決定要不要填' },
+    month: { type: 'STRING', description: 'YYYY-MM，只有channel_revenue需要，沒講就用這個月' }
+  }, required: ['topic'] }
+};
 
 function voiceIsAdminMode() { return state.role === 'admin' && !state.adminViewDriver; }
+
+function voiceFindRoute(keyword, admin) {
+  const routes = (state.data.routes || []).filter(r => r.status !== 'inactive');
+  if (!keyword) return `目前有${routes.length}條使用中的路線：` + routes.slice(0, 15).map(r => routeDisplayName(r.name)).join('、') + (routes.length > 15 ? '…等' : '') + '。';
+  const matches = routes.filter(r => routeDisplayName(r.name).includes(keyword) || (r.name || '').includes(keyword));
+  if (!matches.length) return `查不到名稱包含「${keyword}」的路線。`;
+  if (matches.length > 1) return `有${matches.length}條路線名稱包含「${keyword}」（${matches.slice(0, 8).map(r => routeDisplayName(r.name)).join('、')}），請講更完整的名稱。`;
+  const r = matches[0];
+  const v = (r.versions || [])[r.versions.length - 1]; // versions依start_date排序過，最後一筆是最新版本
+  const stopCount = v ? (v.dropPointIds || []).length : 0;
+  let text = `${routeDisplayName(r.name)}：出發點${r.originAddr || '—'}，${r.shift === 'AM' ? '早班' : r.shift === 'PM' ? '午班' : (r.shift || '')}，目前${stopCount}個店點`;
+  if (admin && v) {
+    if (v.driverFare != null) text += `，司機報酬${Math.round(v.driverFare)}元`;
+    if (v.billingTotal != null) text += `，請款總額${Math.round(v.billingTotal)}元`;
+  }
+  return text + '。';
+}
+function voiceFindDropPoint(keyword) {
+  const points = state.data.dropPoints || [];
+  if (!keyword) return `系統裡共有${points.filter(p => p.status !== 'inactive').length}個使用中的店點，請講店名或代號查詳細資料。`;
+  const matches = points.filter(p => (p.code || '').includes(keyword) || (p.address || '').includes(keyword));
+  if (!matches.length) return `查不到代號或地址包含「${keyword}」的店點。`;
+  if (matches.length > 1) return `有${matches.length}個店點符合「${keyword}」（${matches.slice(0, 8).map(p => dpLabel(p)).join('、')}），請講更完整的名稱。`;
+  const p = matches[0];
+  return `${dpLabel(p)}：地址${p.address}，通路${channelName(p.channelId)}，${p.status === 'inactive' ? '已停用' : '使用中'}。`;
+}
+function voiceFindChannel(keyword, admin) {
+  const channels = state.data.channels || [];
+  if (!keyword) return `系統裡共有${channels.filter(c => c.status !== 'inactive').length}個使用中的通路：` + channels.filter(c => c.status !== 'inactive').map(c => c.name).join('、') + '。';
+  const matches = channels.filter(c => (c.name || '').includes(keyword));
+  if (!matches.length) return `查不到名稱包含「${keyword}」的通路。`;
+  if (matches.length > 1) return `有${matches.length}個通路名稱包含「${keyword}」（${matches.map(c => c.name).join('、')}），請講更完整的名稱。`;
+  const c = matches[0];
+  let text = `${c.name}：${c.status === 'inactive' ? '已停用' : '使用中'}`;
+  if (admin) {
+    if (c.formulaType) text += `，計費方式${c.formulaType}`;
+    if (c.rateKm) text += `，每公里${c.rateKm}元`;
+    if (c.ratePoint) text += `，每店點${c.ratePoint}元`;
+    if (c.flatAmount) text += `，固定金額${c.flatAmount}元`;
+  }
+  return text + '。';
+}
+
+const VOICE_TOPICS_DRIVER = {
+  announcements: async () => {
+    const dId = state.activeDriverId;
+    const list = (state.data.announcements || []).filter(a => a.active && (a.audience !== 'selected' || a.driverIds.includes(dId)));
+    if (!list.length) return '目前沒有公告。';
+    return list.slice(0, 5).map(a => `「${a.title}」：${a.content}`).join('；');
+  },
+  my_leave_records: async () => {
+    const dId = state.activeDriverId;
+    const today = todayStr();
+    let list;
+    try { list = await fetchDriverUnavailabilities(today, ymd(addDays(today, 60))); } catch (e) { return '查詢請假紀錄時發生錯誤，請稍後再試。'; }
+    const mine = list.filter(x => x.driverId === dId).sort((a, b) => a.date.localeCompare(b.date));
+    if (!mine.length) return '目前沒有登記任何請假。';
+    return '已登記：' + mine.map(x => `${x.date}${x.note ? '（' + x.note + '）' : ''}`).join('、');
+  },
+  route_info: async args => voiceFindRoute((args && args.keyword) || '', false),
+  drop_point_info: async args => voiceFindDropPoint((args && args.keyword) || ''),
+  channel_info: async args => voiceFindChannel((args && args.keyword) || '', false)
+};
+const VOICE_TOPICS_ADMIN = {
+  company_overview: async () => {
+    const activeDrivers = (state.data.drivers || []).filter(d => d.status === 'active').length;
+    const activeRoutes = (state.data.routes || []).filter(r => r.status !== 'inactive').length;
+    const activePoints = (state.data.dropPoints || []).filter(p => p.status !== 'inactive').length;
+    const activeChannels = (state.data.channels || []).filter(c => c.status !== 'inactive').length;
+    return `目前在職夥伴${activeDrivers}位，使用中路線${activeRoutes}條，使用中店點${activePoints}個，使用中通路${activeChannels}個。`;
+  },
+  routes_list: async args => voiceFindRoute((args && args.keyword) || '', true),
+  route_info: async args => voiceFindRoute((args && args.keyword) || '', true),
+  drop_point_info: async args => voiceFindDropPoint((args && args.keyword) || ''),
+  channel_info: async args => voiceFindChannel((args && args.keyword) || '', true),
+  channel_revenue: async args => {
+    const keyword = (args && args.keyword) || '';
+    if (!keyword) return '請講要查哪個通路的營收。';
+    const matches = (state.data.channels || []).filter(c => (c.name || '').includes(keyword));
+    if (!matches.length) return `查不到名稱包含「${keyword}」的通路。`;
+    if (matches.length > 1) return `有${matches.length}個通路名稱包含「${keyword}」，請講更完整的名稱。`;
+    const c = matches[0];
+    const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : todayStr().slice(0, 7);
+    const start = month + '-01', end = monthEndStr(month);
+    let assignments;
+    try { assignments = await fetchAssignmentsInRange(start, end); } catch (e) { return '查詢營收時發生錯誤，請稍後再試。'; }
+    const r = channelBillingTotal(c.id, start, end, assignments);
+    return `${c.name} ${month}營收合計約${Math.round(r.total)}元（${r.contributing.length}趟已完成任務）。`;
+  },
+  announcements: async () => {
+    const list = (state.data.announcements || []).filter(a => a.active).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (!list.length) return '目前沒有上架中的公告。';
+    return list.slice(0, 5).map(a => `「${a.title}」：${a.content}`).join('；');
+  }
+};
+async function voiceToolBrowseInfo(args) {
+  const topic = (args && args.topic) || '';
+  const registry = voiceIsAdminMode() ? VOICE_TOPICS_ADMIN : VOICE_TOPICS_DRIVER;
+  const handler = registry[topic];
+  if (!handler) return `目前還沒有開放「${topic}」這個主題的查詢。`;
+  try { return await handler(args || {}); } catch (e) { return '查詢時發生錯誤，請稍後再試。'; }
+}
 
 function voiceSystemInstruction() {
   return voiceIsAdminMode() ? voiceSystemInstructionAdmin() : voiceSystemInstructionDriver();
@@ -94,9 +226,11 @@ function voiceSystemInstructionAdmin() {
 - get_driver_lookup：主控問某位夥伴的狀況（今天跑什麼、這個月跑幾趟/賺多少）
   就呼叫這個。
 - get_weather：主控問天氣就呼叫這個。
-這幾個工具以外，你看不到系統裡其他資料（例如詳細財務報表、客戶請款明細），被問
-到就老實說看不到、建議主控自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的
-時候，也照實說查詢失敗，不要自己編一個答案出來。
+- browse_info：問路線、店點、通路（含費率）、營收、公告這類目錄/營運資料就呼叫
+  這個，topic要用browse_info工具說明裡列出的其中一個，不要自己亂編topic名稱。
+這幾個工具以外（例如詳細勞報單/請款單明細、系統設定），你看不到，被問到就老實
+說看不到、建議主控自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的時候，也
+照實說查詢失敗，不要自己編一個答案出來。
 
 你平常也可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次都把話題拉回工作。
 
@@ -125,6 +259,9 @@ function voiceSystemInstructionDriver() {
 - get_my_earnings：使用者問「我這個月賺多少」「報酬多少」就呼叫這個。
 - get_weather：使用者問天氣就呼叫這個。
 - report_unavailable：使用者說要請假/不能排班就呼叫這個（詳見下方規則）。
+- browse_info：問公告、自己登記過哪些請假、或查路線/店點/通路資料（不含金額，
+  那些是主控才看得到的）就呼叫這個，topic要用browse_info工具說明裡列出的其中
+  一個，不要自己亂編topic名稱。
 這幾個工具以外，你看不到系統裡其他資料（例如別的夥伴的狀況、確切的公司財務數字），
 被問到就老實說看不到、不要瞎編；工具查詢失敗或查不到的時候，也照實跟使用者說查詢
 失敗，不要自己編一個答案出來。
@@ -576,8 +713,8 @@ async function voiceStart() {
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
-            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER]
-            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER] }]
+            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN]
+            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER] }]
         }
       }));
     };
@@ -602,6 +739,7 @@ async function voiceStart() {
             else if (fc.name === 'get_weather') resultText = await voiceToolGetWeather(fc.args || {});
             else if (fc.name === 'get_fleet_status') resultText = await voiceToolGetFleetStatus(fc.args || {});
             else if (fc.name === 'get_driver_lookup') resultText = await voiceToolGetDriverLookup(fc.args || {});
+            else if (fc.name === 'browse_info') resultText = await voiceToolBrowseInfo(fc.args || {});
           } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
           try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
           if (fc.name === 'report_unavailable') {
