@@ -470,6 +470,10 @@
   .voice-fab.active{ animation:voiceFabPulse 1s ease-in-out infinite; }
   @keyframes voiceFabBreathe{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.06); } }
   @keyframes voiceFabPulse{ 0%,100%{ box-shadow:0 0 0 4px rgba(224,89,79,.35), 0 6px 18px rgba(122,90,160,.45); } 50%{ box-shadow:0 0 0 10px rgba(224,89,79,.12), 0 6px 18px rgba(122,90,160,.45); } }
+  #voiceOverlay{ position:fixed; left:50%; transform:translateX(-50%); top:calc(10px + env(safe-area-inset-top)); z-index:95; pointer-events:none; display:flex; justify-content:center; width:100%; padding:0 16px; }
+  .voice-status-pill{ pointer-events:auto; background:rgba(27,33,41,.86); color:#fff; font-size:12.5px; padding:7px 8px 7px 12px; border-radius:999px; display:flex; align-items:center; gap:8px; box-shadow:0 4px 14px rgba(0,0,0,.25); max-width:100%; }
+  .voice-status-pill span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .voice-status-pill button{ flex:none; background:rgba(255,255,255,.2); border:none; color:#fff; font-size:11.5px; padding:4px 10px; border-radius:999px; cursor:pointer; }
   .modal-box .toolbar{ margin-bottom:10px; }
   /* 全部夥伴資料：視窗放寬到幾乎整個螢幕；姓名、狀態、帳號、戶名這些短欄位不換行（以前窄螢幕上會被擠成一字一行） */
   .modal-box.wide{ max-width:min(1700px, 97vw); width:97vw; padding:20px 24px; }
@@ -566,7 +570,7 @@
 <script defer src="js/data-layer.js?v=8"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
-<script defer src="js/voice.js?v=6"></script>
+<script defer src="js/voice.js?v=7"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -2506,7 +2510,7 @@ function leaveUrgencyWarning(dateVal, dId){
   if(daysUntil<=1) return '⚠️ 這個日期太近了（今天或明天）。公司規則是星期五、六、日回報下週狀況，太晚回報系統可能來不及調整，請務必同時直接聯絡主控確認。';
   return '';
 }
-// ---------- 夥伴請假/不可排班回報（2026-10-29，雙大腦架構賈維斯語音助理的第一塊
+// ---------- 夥伴請假/不可排班回報（2026-10-29，雙大腦架構小金語音助理的第一塊
 // 真正可用的功能：手動表單版。語音版以後會接同一個 createDriverUnavailability()，
 // 只是來源改成source:'voice'，且要先過PWA確認卡片——這裡先把「人手動填表單送出」
 // 當作確認這件事本身，不需要再疊一層確認，跟語音那種「AI自己猜」風險不一樣。）----------

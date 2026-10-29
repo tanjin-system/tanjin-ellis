@@ -1,4 +1,4 @@
-// ---------- 賈維斯語音助理（Gemini Live API，2026-10-29）----------
+// ---------- 小金語音助理（Gemini Live API，2026-10-29）----------
 // 流程：按🎙️ →要麥克風權限→跟後端換一個短效權杖（/api/gemini-token，GEMINI_API_KEY
 // 本身不會經過這支手機）→直接連線Gemini Live API（WebSocket）→即時把麥克風聲音串流
 // 過去→模型聽懂之後呼叫我們定義的「report_unavailable」工具（不是直接寫資料庫！）→
@@ -57,11 +57,11 @@ const VOICE_FN_GET_WEATHER = {
 
 function voiceSystemInstruction() {
   const wd = '日一二三四五六'[new Date().getDay()];
-  // 2026-10-29使用者要求：賈維斯要知道自己現在是在哪個帳號裡講話（例如在小沈的手機
+  // 2026-10-29使用者要求：小金要知道自己現在是在哪個帳號裡講話（例如在小沈的手機
   // 上就要知道在跟小沈說話、只能讀小沈自己的資料；換一支手機、換成漢祥登入，就只能讀
   // 漢祥的）。直接把目前登入這支手機的夥伴姓名寫進系統指示，而不是讓它自己瞎猜。
   const who = (typeof driverName === 'function' && driverName(state.activeDriverId)) || '這位夥伴';
-  return `你是物流車隊系統「賈維斯」語音助理，只講中文（台灣），語氣親切自然、像個熟悉的
+  return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切自然、像個熟悉的
 同事。今天是${todayStr()}（星期${wd}）。
 
 現在跟你說話的是夥伴本人「${who}」——這支手機就是${who}登入的帳號，下面提到的「使用者」
@@ -97,25 +97,39 @@ function voiceWeekRange(today) {
   const dow = d.getDay() === 0 ? 7 : d.getDay(); // 週一=1...週日=7
   return { start: ymd(addDays(today, 1 - dow)), end: ymd(addDays(today, 7 - dow)) };
 }
-function voiceToolGetMyTasks(args) {
+// 2026-10-29使用者回報：查10月報酬只讀到1750元/2趟，實際是8525元/10趟。原因是
+// state.data.assignments只保留近期窗口（ASSIGNMENTS_WINDOW_DAYS=14天，見
+// js/data-layer.js），查整個月（尤其是月初已經過去14天的部分）會漏資料。跟
+// renderMyEarnings同一套做法：不碰共用的state.data.assignments，直接用
+// fetchAssignmentsInRange()跟資料庫要選定區間的資料，兩個查詢工具都改成async。
+async function voiceToolGetMyTasks(args) {
   const dId = state.activeDriverId;
   const range = (args && args.range) || 'week';
   const today = todayStr();
   let start = today, end = today, label = '今天';
   if (range === 'week') { const w = voiceWeekRange(today); start = w.start; end = w.end; label = '這週'; }
   else if (range === 'month') { start = today.slice(0, 7) + '-01'; end = monthEndStr(today.slice(0, 7)); label = '這個月'; }
-  const list = (state.data.assignments || []).filter(a =>
-    a.driverId === dId && !a.isSupport && a.published !== false && a.status !== 'cancelled' && a.date >= start && a.date <= end
+  let assignments;
+  try { assignments = await fetchAssignmentsInRange(start, end); } catch (e) { return '查詢任務時發生錯誤，請稍後再試。'; }
+  const list = assignments.filter(a =>
+    a.driverId === dId && !a.isSupport && a.published !== false && a.status !== 'cancelled'
   ).sort((a, b) => a.date.localeCompare(b.date) || assignmentShiftKey(a) - assignmentShiftKey(b));
   if (!list.length) return `${label}（${start}到${end}）沒有排定的任務。`;
   const lines = list.map(a => `${a.date} ${a.shift === 'AM' ? '早班' : a.shift === 'PM' ? '午班' : (a.shift || '')} ${routeName(a.routeId)}${a.status === 'completed' ? '（已完成）' : ''}`);
   return `${label}（${start}到${end}）共有${list.length}趟任務：` + lines.join('；');
 }
-function voiceToolGetMyEarnings(args) {
+async function voiceToolGetMyEarnings(args) {
   const dId = state.activeDriverId;
   const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : todayStr().slice(0, 7);
-  const r = driverMonthly(dId, month);
-  return `${month}目前已完成${r.trips.length}趟任務，報酬合計約${Math.round(r.net)}元（還沒撥款的部分以月結單正式結算為準，可能會有些微差異）。`;
+  const start = month + '-01', end = monthEndStr(month);
+  let monthAssignments;
+  try {
+    monthAssignments = await fetchAssignmentsInRange(start, end);
+    await ensureAdjustmentsRange(start); // 調整項（加減項）也要補到這個月，不然net會漏算
+  } catch (e) { return '查詢報酬時發生錯誤，請稍後再試。'; }
+  const r = driverMonthly(dId, month, monthAssignments);
+  const netNow = r.net - (r.paid || 0);
+  return `${month}已完成${r.trips.length}趟任務，報酬合計${Math.round(r.tripTotal)}元，目前預估淨額約${Math.round(netNow)}元（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
 }
 async function voiceToolGetWeather(args) {
   try {
@@ -147,17 +161,24 @@ function voiceSupported() {
 
 let _voiceState = null; // { closed, stream, audioCtx, sourceNode, procNode, muteNode, ws, timeoutTimer }
 
+// 2026-10-29使用者要求：原本講話時是整個畫面的modal蓋住，不能邊講邊操作系統。
+// 改成一顆不擋畫面的小狀態條（CSS另外定義在index.html的#voiceOverlay/.voice-status-pill），
+// 底下的畫面照常點得到；另外在voiceStart()裡掛一個「點畫面空白處結束通話」的監聽器
+// （只認真的點在document.body本身的那種點擊，不會誤吃到任何按鈕/連結/面板上的點擊）。
 function voiceRenderOverlay(status, showStop) {
   let ov = document.getElementById('voiceOverlay');
   if (!ov) { ov = document.createElement('div'); ov.id = 'voiceOverlay'; document.body.appendChild(ov); }
-  ov.innerHTML = `<div class="modal-backdrop"><div class="modal-box" style="max-width:320px; text-align:center;">
-    <p style="font-size:30px; margin:4px 0;">🎙️</p>
-    <p style="font-size:14px;">${escapeHtml(status)}</p>
-    ${showStop ? '<button class="btn ghost" id="voiceStopBtn" style="width:100%; margin-top:10px;">結束</button>' : ''}
-  </div></div>`;
+  ov.innerHTML = `<div class="voice-status-pill">
+    <span>🎙️ ${escapeHtml(status)}</span>
+    ${showStop ? '<button type="button" id="voiceStopBtn">結束</button>' : ''}
+  </div>`;
   const btn = document.getElementById('voiceStopBtn');
   if (btn) btn.onclick = () => voiceStop();
 }
+function voiceBlankTapToEnd(e) {
+  if (_voiceState && !_voiceState.closed && e.target === document.body) voiceStop();
+}
+document.addEventListener('click', voiceBlankTapToEnd); // 註冊一次就好，沒有通話中時不會有作用
 
 function voiceDownsampleTo16k(float32Array, inputSampleRate) {
   if (inputSampleRate === 16000) return float32Array;
@@ -239,6 +260,7 @@ function voiceStop() {
   const ov = document.getElementById('voiceOverlay'); if (ov) ov.remove();
   voiceFabSetActive(false);
   _voiceState = null;
+  setTimeout(voiceWakeStart, 400); // 正式通話用的麥克風真的釋放後，才恢復喚醒詞監聽（兩邊不能同時佔用麥克風）
 }
 function voiceFail(message) {
   if (!_voiceState) return; // 已經收尾過了，不要重複跳錯誤訊息
@@ -302,29 +324,42 @@ function voiceFabClamp(x, y) {
 function voiceFabApplyPos(fab, x, y) {
   fab.style.left = x + 'px'; fab.style.top = y + 'px'; fab.style.right = 'auto'; fab.style.bottom = 'auto';
 }
+const VOICE_LONG_PRESS_MS = 600;
 function voiceFabWireDrag(fab) {
   // 2026-10-29：先後試過「監聽器綁在球自己身上＋setPointerCapture」、「拖曳中把
   // Pointer Events監聽器掛到window上」，實機都回報完全拖不動——Pointer
   // Events在手機瀏覽器這邊顯然有問題，不管用什麼方式都一樣。這版整個換掉，
   // 直接用最原始、相容性最好的touch事件（手機）＋mouse事件（電腦測試用），
   // 不再依賴Pointer Events/setPointerCapture這套。
-  let dragging = false, moved = false, startX = 0, startY = 0, origX = 0, origY = 0;
+  // 長按（不移動地壓著不放超過VOICE_LONG_PRESS_MS）用來切換喚醒詞模式，跟拖曳/
+  // 單純點一下共用同一套移動判斷，避免互相誤判。
+  let dragging = false, moved = false, startX = 0, startY = 0, origX = 0, origY = 0, longPressTimer = null;
   const begin = (x, y) => {
     dragging = true; moved = false;
     const r = fab.getBoundingClientRect();
     origX = r.left; origY = r.top; startX = x; startY = y;
     fab.style.animation = 'none'; // 拖曳中先停掉呼吸動畫，不然位置跟縮放動畫疊在一起會晃
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => {
+      if (!dragging || moved) return; // 已經放開、或已經判定成拖曳就不算長按
+      dragging = false;
+      fab.style.animation = '';
+      fab._justLongPressed = true; // 擋掉放開後補發的click，不要被當成單純點一下去開語音
+      setTimeout(() => { fab._justLongPressed = false; }, 300);
+      voiceWakeSetEnabled(!voiceWakeLoadPref());
+    }, VOICE_LONG_PRESS_MS);
   };
   const move = (x, y) => {
     if (!dragging) return false;
     const dx = x - startX, dy = y - startY;
-    if (!moved && Math.hypot(dx, dy) > 6) moved = true; // 移動夠多才算拖曳，不然手抖一下就誤判成拖曳、吃掉原本要點一下的操作
+    if (!moved && Math.hypot(dx, dy) > 6) { moved = true; clearTimeout(longPressTimer); } // 移動夠多才算拖曳，不然手抖一下就誤判成拖曳、吃掉原本要點一下的操作
     if (!moved) return false;
     const p = voiceFabClamp(origX + dx, origY + dy);
     voiceFabApplyPos(fab, p.x, p.y);
     return true;
   };
   const end = () => {
+    clearTimeout(longPressTimer);
     if (!dragging) return;
     dragging = false;
     fab.style.animation = '';
@@ -352,25 +387,65 @@ function voiceFabWireDrag(fab) {
     if (p.x !== r.left || p.y !== r.top) { voiceFabApplyPos(fab, p.x, p.y); voiceFabSavePos(p.x, p.y); }
   });
 }
+
+// ---------- 喚醒詞「小金」（2026-10-29，使用者要求）----------
+// ⚠️ 老實說清楚這塊的限制：用瀏覽器內建、免費的語音辨識（Web Speech API）在背景
+// 持續聽，偵測到「小金」這個詞就自動開始正式對話。這不是真正的「隨時待命」助理——
+// 只有在這個PWA分頁真的開著、螢幕亮著的時候才聽得到，手機鎖螢幕、切到別的App、
+// 或把這個分頁關掉，瀏覽器就不會再讓網頁聽麥克風了，這是手機作業系統本身的限制，
+// 不是這支程式碼能繞過去的。另外Web Speech API在iPhone Safari上的穩定度我沒有
+// 把握（這個功能本來就比較新、各家瀏覽器支援度落差大），需要實際測試才知道準不準、
+// 會不會中途自己斷掉。預設關閉，長按懸浮球0.6秒開啟/關閉（開啟時會跳一個提示）。
+const VOICE_WAKE_WORD = '小金';
+const VOICE_WAKE_KEY = 'fleet_voice_wake_enabled';
+let _wakeRecognizer = null;
+function voiceWakeSupported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+function voiceWakeLoadPref() { try { return localStorage.getItem(VOICE_WAKE_KEY) === '1'; } catch (e) { return false; } }
+function voiceWakeSavePref(on) { try { localStorage.setItem(VOICE_WAKE_KEY, on ? '1' : '0'); } catch (e) {} }
+function voiceWakeStart() {
+  if (_wakeRecognizer || _voiceState || !voiceWakeLoadPref() || !voiceWakeSupported()) return; // 已經在聽、或已經在正式通話中、或功能沒開/不支援，都不用啟動
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new SR();
+  rec.lang = 'zh-TW'; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const text = (e.results[i][0] && e.results[i][0].transcript) || '';
+      if (text.includes(VOICE_WAKE_WORD)) { voiceWakeStop(); voiceStart(); return; }
+    }
+  };
+  rec.onerror = () => {}; // 常見的no-speech/aborted不用特別處理，onend會自動重啟
+  rec.onend = () => { _wakeRecognizer = null; if (voiceWakeLoadPref() && !_voiceState) setTimeout(voiceWakeStart, 300); }; // 瀏覽器常常過一段時間自己結束連續辨識，重啟繼續聽
+  try { rec.start(); _wakeRecognizer = rec; } catch (e) { _wakeRecognizer = null; }
+}
+function voiceWakeStop() {
+  if (_wakeRecognizer) { try { _wakeRecognizer.onend = null; _wakeRecognizer.stop(); } catch (e) {} _wakeRecognizer = null; }
+}
+function voiceWakeSetEnabled(on) {
+  if (on && !voiceWakeSupported()) { if (typeof toast === 'function') toast('這支手機的瀏覽器不支援喚醒詞功能'); return; }
+  voiceWakeSavePref(on);
+  if (on) { voiceWakeStart(); if (typeof toast === 'function') toast(`👂 喚醒模式已開啟，說「${VOICE_WAKE_WORD}」就能開始對話（只有畫面開著、螢幕亮著才有效）`); }
+  else { voiceWakeStop(); if (typeof toast === 'function') toast('👂 喚醒模式已關閉'); }
+}
 // renderContent()每次切分頁都會呼叫；show=是否該顯示（夥伴畫面／主控檢視夥伴畫面才顯示，
 // 主控自己的畫面不顯示）。按鈕本身只建立一次、之後只切display，不會被各分頁的innerHTML洗掉。
 function voiceFabEnsure(show) {
   let fab = document.getElementById('voiceFab');
-  if (!show) { if (fab) fab.style.display = 'none'; return; }
+  if (!show) { if (fab) fab.style.display = 'none'; voiceWakeStop(); return; } // 離開夥伴畫面就不要繼續聽喚醒詞（隱私/省電），偏好設定本身不變，回來會自動恢復
   if (!fab) {
     fab = document.createElement('button');
     fab.id = 'voiceFab';
     fab.className = 'voice-fab';
     fab.type = 'button';
-    fab.title = '語音助理（賈維斯）・可以拖著移動';
+    fab.title = '語音助理（小金）・可以拖著移動・長按切換喚醒詞模式';
     fab.innerHTML = voiceFabAvatarSvg();
-    fab.onclick = () => { if (fab._justDragged) return; _voiceState ? voiceStop() : voiceStart(); };
+    fab.onclick = () => { if (fab._justDragged || fab._justLongPressed) return; _voiceState ? voiceStop() : voiceStart(); };
     document.body.appendChild(fab);
     const saved = voiceFabLoadPos();
     if (saved) { const p = voiceFabClamp(saved.x, saved.y); voiceFabApplyPos(fab, p.x, p.y); }
     voiceFabWireDrag(fab);
   }
   fab.style.display = 'flex';
+  voiceWakeStart(); // 偏好設定若已開啟，回到夥伴畫面就恢復聽喚醒詞；voiceWakeStart()內部本來就會檢查是否該啟動
 }
 function voiceFabSetActive(active) {
   const fab = document.getElementById('voiceFab');
@@ -381,6 +456,7 @@ async function voiceStart() {
   if (_voiceState) return; // 已經在進行中
   if (!voiceSupported()) { alert('這支手機／瀏覽器不支援語音功能（需要麥克風與WebSocket）。'); return; }
   if (!navigator.onLine) { alert('請先連上網路才能使用語音功能。'); return; }
+  voiceWakeStop(); // 正式對話跟喚醒詞監聽不能同時佔用麥克風，先讓出來
   _voiceState = { closed: false, aiSpeaking: false, nextPlayTime: 0 };
   voiceFabSetActive(true);
   voiceRenderOverlay('準備中…', false);
@@ -428,8 +504,8 @@ async function voiceStart() {
         for (const fc of msg.toolCall.functionCalls) {
           let resultText = 'ok';
           try {
-            if (fc.name === 'get_my_tasks') resultText = voiceToolGetMyTasks(fc.args || {});
-            else if (fc.name === 'get_my_earnings') resultText = voiceToolGetMyEarnings(fc.args || {});
+            if (fc.name === 'get_my_tasks') resultText = await voiceToolGetMyTasks(fc.args || {});
+            else if (fc.name === 'get_my_earnings') resultText = await voiceToolGetMyEarnings(fc.args || {});
             else if (fc.name === 'get_weather') resultText = await voiceToolGetWeather(fc.args || {});
           } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
           try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
@@ -443,7 +519,7 @@ async function voiceStart() {
       }
       if (msg.serverContent) {
         const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
-        parts.forEach(p => { if (p.inlineData && p.inlineData.data) { voicePlayAudioChunk(_voiceState, audioCtx, p.inlineData.data, p.inlineData.mimeType); voiceRenderOverlay('🤖 賈維斯說話中…', true); } });
+        parts.forEach(p => { if (p.inlineData && p.inlineData.data) { voicePlayAudioChunk(_voiceState, audioCtx, p.inlineData.data, p.inlineData.mimeType); voiceRenderOverlay('🤖 小金說話中…', true); } });
         if (msg.serverContent.turnComplete) {
           // 不是文字生成完就恢復麥克風——等排隊的音訊真的播完（還留多少時間就等多少），
           // 不然尾巴那幾百毫秒的喇叭聲還是會被錄進去，又重疊一次
