@@ -12,6 +12,10 @@
 //   GET  ?op=briefing → 每天一次的排程（vercel.json，台北時間約07:00）：小碳晨報，彙整未來14天排班
 //                    衝突＋財務異常數字，呼叫Claude寫成一小段口語摘要，存進carbon_briefings，由
 //                    小金在當天第一次語音對話時念給主控聽（見js/voice.js）。只在6~10點之間動作。
+// op=cron／op=briefing這兩個排程端點要求帶正確的CRON_SECRET（見isCronCall()），沒有
+// 設定這把密鑰或密鑰不對，一律回401——避免被外人直接呼叫網址觸發（op=briefing會真的
+// 花錢呼叫Claude）。這把密鑰要自己到Vercel環境變數設定CRON_SECRET，設定好之後Vercel
+// 自己的排程系統會自動在呼叫時帶上，不用額外改vercel.json。
 // 通知內容只放路線與日期，不放店名、金額、電話（會顯示在鎖定畫面上）。
 const webpush = require('web-push');
 const jwt = require('jsonwebtoken');
@@ -51,6 +55,15 @@ function authOf(req) {
   const tok = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (!tok) return null;
   try { return jwt.verify(tok, process.env.SUPABASE_JWT_SECRET); } catch { return null; }
+}
+// 2026-10-30：op=cron／op=briefing原本誰都能呼叫（只要知道網址），雖然claim()
+// 的每日去重擋掉了重複執行，但還是可能被外人在非預期時間觸發、或白白浪費一次
+// Claude呼叫。Vercel有專用機制：設定CRON_SECRET環境變數後，Vercel自己排程呼叫
+// 這個網址時會自動帶上Authorization: Bearer <CRON_SECRET>，外部呼叫不會知道這組
+// 密鑰，藉此分辨「真的是Vercel排程在呼叫」還是「別人亂呼叫」。
+function isCronCall(req) {
+  const h = String(req.headers.authorization || '');
+  return !!process.env.CRON_SECRET && h === 'Bearer ' + process.env.CRON_SECRET;
 }
 function inQuiet(prefs) {
   if (!prefs || !prefs.quiet) return false;
@@ -262,10 +275,12 @@ module.exports = async (req, res) => {
       return res.status(200).json({ publicKey: v.vapid_public });
     }
     if (op === 'cron' && req.method === 'GET') {
+      if (!isCronCall(req)) return res.status(401).json({ error: '需要排程密鑰' });
       await initPush();
       return res.status(200).json(await runCron());
     }
     if (op === 'briefing' && req.method === 'GET') {
+      if (!isCronCall(req)) return res.status(401).json({ error: '需要排程密鑰' });
       return res.status(200).json(await runBriefingCron());
     }
     if (op === 'send' && req.method === 'POST') {
