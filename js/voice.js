@@ -432,13 +432,20 @@ function voiceParseRate(mimeType, fallback) {
   const m = /rate=(\d+)/.exec(mimeType || '');
   return m ? Number(m[1]) : fallback;
 }
-// 2026-10-29實機測試回報「我的聲音+AI的聲音重疊」——兩個原因一起修：
-// 1) 每段AI回傳的語音都呼叫src.start()立刻播放，沒有照時間排隊，如果訊息到達
-//    速度比播放速度快，後一段會疊在前一段還沒播完的時候，自己跟自己重疊。
-//    改成用一個遊標（state.nextPlayTime）把每段接在前一段後面播，不重疊、不留空隙。
-// 2) AI講話的聲音會從喇叭跑出來，手機沒戴耳機的話麥克風會直接收到，變成系統
-//    又把AI自己講的話當成「使用者在講話」送回去——改成半雙工：AI在講話的這段
-//    時間暫停送出麥克風聲音，等AI講完（真的播完，不是文字生成完就算）才恢復。
+// 2026-10-29實機測試回報「我的聲音+AI的聲音重疊」，改成AI講話時暫停送出麥克風
+// （半雙工）。後來使用者又回報：這樣會變成「AI講話中使用者講話也沒用、AI會一直
+// 講完」，要求真正的「使用者一開口AI就要立刻停下來」（barge-in／搶話）。這兩個
+// 需求其實互相牽制：要能被打斷，麥克風就得在AI講話時持續送出去，讓Gemini自己的
+// 語音活動偵測聽得到使用者開口；但手機沒戴耳機時，喇叭放出的AI聲音又會被同一支
+// 麥克風錄到送回去。折衷做法：
+// 1) 不再暫停送出麥克風——持續串流，讓Gemini server端自己判斷「使用者開口了，
+//    我要停下來」（Live API協定裡的serverContent.interrupted旗標）。
+// 2) 收到interrupted旗標，立刻呼叫voiceStopPlayback()把所有已經排隊/正在播放
+//    的語音全部喊停，不要讓AI講到自然的段落才停。
+// 3) 麥克風的echoCancellation（getUserMedia已經有開）是瀏覽器自己消除「喇叭聲
+//    被自己麥克風錄到」的機制，這部分效果好不好要看手機硬體/瀏覽器，我沒辦法
+//    在這裡保證——如果實測還是常常自己講話打斷自己，最確實的解法是戴耳機（喇叭
+//    聲音不會跑出來，麥克風自然收不到），這點會老實跟使用者說。
 function voicePlayAudioChunk(state, audioCtx, base64, mimeType) {
   try {
     const bin = atob(base64);
@@ -457,8 +464,18 @@ function voicePlayAudioChunk(state, audioCtx, base64, mimeType) {
     const startAt = Math.max(audioCtx.currentTime, state.nextPlayTime || 0);
     src.start(startAt);
     state.nextPlayTime = startAt + buffer.duration;
-    state.aiSpeaking = true; // 麥克風那邊讀這個旗標決定要不要暫停送出
+    state.aiSpeaking = true; // 只用來給狀態條顯示文字，不再拿來決定麥克風要不要送出
+    if (!state.playingSources) state.playingSources = [];
+    state.playingSources.push(src);
+    src.onended = () => { const i = state.playingSources.indexOf(src); if (i >= 0) state.playingSources.splice(i, 1); };
   } catch (e) { console.error('播放語音回應失敗', e); }
+}
+// 使用者打斷AI時呼叫：把所有排隊中／正在播放的語音全部停掉，不要播完當下這句話
+function voiceStopPlayback(state) {
+  (state.playingSources || []).forEach(src => { try { src.onended = null; src.stop(); } catch (e) {} });
+  state.playingSources = [];
+  state.nextPlayTime = 0;
+  state.aiSpeaking = false;
 }
 
 function voiceStartStreamingMic(stream, audioCtx, ws, state) {
@@ -467,7 +484,7 @@ function voiceStartStreamingMic(stream, audioCtx, ws, state) {
   const mute = audioCtx.createGain(); mute.gain.value = 0; // 一定要接到destination才會持續觸發，但不能真的播出來（會變回音）
   state.sourceNode = source; state.procNode = proc; state.muteNode = mute;
   proc.onaudioprocess = e => {
-    if (!_voiceState || ws.readyState !== WebSocket.OPEN || state.aiSpeaking) return; // AI講話中暫停送出，避免喇叭聲被麥克風錄回去
+    if (!_voiceState || ws.readyState !== WebSocket.OPEN) return; // 不管AI講不講話都持續送出，讓server端自己判斷使用者有沒有開口打斷
     const input = e.inputBuffer.getChannelData(0);
     const down = voiceDownsampleTo16k(input, audioCtx.sampleRate);
     ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: voiceFloat32ToPCM16Base64(down) } } }));
@@ -751,11 +768,17 @@ async function voiceStart() {
         return;
       }
       if (msg.serverContent) {
+        if (msg.serverContent.interrupted) {
+          // 使用者開口打斷了AI——Gemini自己偵測到的，不是我們本地猜的。立刻把正在
+          // 播放/排隊中的語音全部停掉，不要播完當下這句才停。
+          voiceStopPlayback(_voiceState);
+          voiceRenderOverlay('請說話…', true);
+        }
         const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
-        parts.forEach(p => { if (p.inlineData && p.inlineData.data) { voicePlayAudioChunk(_voiceState, audioCtx, p.inlineData.data, p.inlineData.mimeType); voiceRenderOverlay('🤖 小金說話中…', true); } });
+        parts.forEach(p => { if (p.inlineData && p.inlineData.data) { voicePlayAudioChunk(_voiceState, audioCtx, p.inlineData.data, p.inlineData.mimeType); voiceRenderOverlay('🤖 小金說話中…（講話可以隨時打斷我）', true); } });
         if (msg.serverContent.turnComplete) {
-          // 不是文字生成完就恢復麥克風——等排隊的音訊真的播完（還留多少時間就等多少），
-          // 不然尾巴那幾百毫秒的喇叭聲還是會被錄進去，又重疊一次
+          // 不是文字生成完就改狀態條——等排隊的音訊真的播完（還留多少時間就等多少）
+          // 才顯示「請說話」，不然字跟聲音對不上
           const remainMs = Math.max(0, ((_voiceState.nextPlayTime || 0) - audioCtx.currentTime)) * 1000 + 150;
           setTimeout(() => {
             if (!_voiceState) return;
