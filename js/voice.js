@@ -194,25 +194,27 @@ function voiceFabApplyPos(fab, x, y) {
   fab.style.left = x + 'px'; fab.style.top = y + 'px'; fab.style.right = 'auto'; fab.style.bottom = 'auto';
 }
 function voiceFabWireDrag(fab) {
+  // 2026-10-29第一版把pointermove/pointerup的監聽器綁在fab自己身上，靠
+  // setPointerCapture撐著手指移出58px這顆球範圍後還能收到事件——實機測試完全拖不動，
+  // 推測是setPointerCapture在手機瀏覽器沒有確實生效（球一離開手指底下就收不到move了）。
+  // 改成拖曳開始後把move/up監聽器掛在window上，不管手指移到畫面哪裡都收得到，
+  // 這是比較保險、不依賴pointer capture是否完整支援的寫法。
   let dragging = false, moved = false, startX = 0, startY = 0, origX = 0, origY = 0, pid = null;
-  fab.addEventListener('pointerdown', e => {
-    dragging = true; moved = false; pid = e.pointerId;
-    try { fab.setPointerCapture(pid); } catch (err) {}
-    const r = fab.getBoundingClientRect();
-    origX = r.left; origY = r.top; startX = e.clientX; startY = e.clientY;
-    fab.style.animation = 'none'; // 拖曳中先停掉呼吸動畫，不然位置跟縮放動畫疊在一起會晃
-  });
-  fab.addEventListener('pointermove', e => {
+  const onMove = e => {
     if (!dragging || e.pointerId !== pid) return;
     const dx = e.clientX - startX, dy = e.clientY - startY;
     if (!moved && Math.hypot(dx, dy) > 6) moved = true; // 移動夠多才算拖曳，不然手抖一下就誤判成拖曳、吃掉原本要點一下的操作
     if (!moved) return;
+    e.preventDefault();
     const p = voiceFabClamp(origX + dx, origY + dy);
     voiceFabApplyPos(fab, p.x, p.y);
-  });
-  const end = e => {
+  };
+  const onEnd = e => {
     if (!dragging || e.pointerId !== pid) return;
     dragging = false;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onEnd);
+    window.removeEventListener('pointercancel', onEnd);
     try { fab.releasePointerCapture(pid); } catch (err) {}
     fab.style.animation = '';
     if (moved) {
@@ -222,8 +224,16 @@ function voiceFabWireDrag(fab) {
       setTimeout(() => { fab._justDragged = false; }, 50);
     }
   };
-  fab.addEventListener('pointerup', end);
-  fab.addEventListener('pointercancel', end);
+  fab.addEventListener('pointerdown', e => {
+    dragging = true; moved = false; pid = e.pointerId;
+    try { fab.setPointerCapture(pid); } catch (err) {}
+    const r = fab.getBoundingClientRect();
+    origX = r.left; origY = r.top; startX = e.clientX; startY = e.clientY;
+    fab.style.animation = 'none'; // 拖曳中先停掉呼吸動畫，不然位置跟縮放動畫疊在一起會晃
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+  });
   window.addEventListener('resize', () => {
     if (!document.body.contains(fab) || fab.style.left === '') return; // 還沒拖過（用CSS預設右下角）就不用管
     const r = fab.getBoundingClientRect();
