@@ -100,10 +100,10 @@ const VOICE_FN_BROWSE_INFO_DRIVER = {
 };
 const VOICE_FN_BROWSE_INFO_ADMIN = {
   name: 'browse_info',
-  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）。',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（有哪些加油/保養申報還沒審核）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, 或 undelivered_stops' },
-    keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info的夥伴姓名），依topic決定要不要填' },
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, 或 pending_fuel_claims' },
+    keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info/driver_profile的夥伴姓名），依topic決定要不要填' },
     month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings可以用，沒講就用這個月' },
     minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' },
     date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
@@ -359,6 +359,35 @@ const VOICE_TOPICS_ADMIN = {
     const shown = pending.slice(0, 10);
     const text = shown.map(p => `${p.label}（${p.route}・${p.driver}）${p.issue ? '，異常：' + p.issue : ''}`).join('、');
     return `${date}還有${pending.length}個店點沒送完：` + text + (pending.length > shown.length ? `，還有${pending.length - shown.length}個沒列出，可以到戰情室看完整清單` : '') + '。';
+  },
+  // 2026-10-29使用者要求「把主控系統全系統查詢權限放給小金」，再補三個主控
+  // 常問的題目。driver_profile只給電話/車輛/在職狀態，不含登入代碼——登入代碼
+  // 等同密碼，不管哪個帳號都不透過語音講出來，這是整個系統本來就有的設計
+  // （跟admin_pin/vapid_private那些欄位前端本來就拿不到是同一個道理），不是
+  // 這裡另外加的限制。
+  driver_profile: async args => {
+    const found = voiceFindDriverByName((args && args.keyword) || '');
+    if (found.error) return found.error;
+    const d = found.driver;
+    const parts = [`${d.name}目前${d.status === 'active' ? '在職' : '已停用'}`];
+    if (d.phone) parts.push(`電話${d.phone}`);
+    if (d.vehicle && (d.vehicle.plate || d.vehicle.type)) parts.push(`車輛${d.vehicle.plate || '未填車牌'}${d.vehicle.type ? '（' + d.vehicle.type + '）' : ''}`);
+    return parts.join('，') + '。';
+  },
+  unsigned_statements: async () => {
+    const list = (state.data.statements || []).filter(s => s.status === 'awaiting_signature')
+      .sort((a, b) => a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId)));
+    if (!list.length) return '目前沒有尚未簽名的勞報單。';
+    return `目前有${list.length}張勞報單還沒簽名：` + list.map(s => `${driverName(s.driverId)}（${s.month}）`).join('、') + '。';
+  },
+  pending_fuel_claims: async () => {
+    try { await refreshFuelClaims(); } catch (e) { return '查詢加油/保養申報時發生錯誤，請稍後再試。'; }
+    const list = (state.data.fuelClaims || []).filter(c => c.status === 'pending');
+    if (!list.length) return '目前沒有待審核的加油/保養申報。';
+    const total = list.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    const shown = list.slice(0, 10);
+    const text = shown.map(c => `${driverName(c.driverId)} ${CLAIM_CATEGORY_LABEL[c.category] || c.category} ${voiceMoney(c.amount)}（${c.date}）`).join('、');
+    return `目前有${list.length}筆待審核的加油/保養申報，合計${voiceMoney(total)}：` + text + (list.length > shown.length ? `，還有${list.length - shown.length}筆沒列出` : '') + '。';
   }
 };
 async function voiceToolBrowseInfo(args) {
