@@ -41,9 +41,16 @@ function voiceSystemInstruction() {
   return `你是物流車隊系統「賈維斯」語音助理，只講中文（台灣）。今天是${todayStr()}（星期${wd}）。
 你唯一能做的事：聽夥伴說要請假或某天不能排班，換算出確切日期後呼叫report_unavailable這個
 工具；不確定日期就把date留空，不要自己亂猜。除此之外不要做任何其他事、不要回答跟請假排班
-無關的問題、不要承諾或編造任何系統裡沒有的資訊。聽完後用一句簡短的話口頭回應你聽到的內容
-（例如「好，幫你記明天請假」），然後呼叫工具就結束，不用等待使用者口頭再確認一次——確認
-這件事系統會另外跳畫面給使用者看，不是你的責任。`;
+無關的問題、不要承諾或編造任何系統裡沒有的資訊。
+
+⚠️重要：公司現行規則是星期五、六、日要回報「下週」（下星期一到星期日）的狀況，沒回報
+就視為可以照公司安排排班——所以正常情況下夥伴講的請假日期應該是下週的某一天，不是今天
+或明天。這個登記本身只是「以後排班不要排我」的註記，絕對不會自動取消今天、明天這種已經
+排定、已經發給夥伴的任務，系統沒有能力臨時改派。如果夥伴講的日期是今天或明天，呼叫工具
+之前一定要先口頭提醒：「這個時間太緊急了，光跟我說沒有用，一定要直接打電話或傳LINE給
+主控確認」，講完提醒才呼叫工具；平常（下週的日期）就不用講這段提醒，直接簡短回應
+（例如「好，幫你記下週三請假」）然後呼叫工具即可，不用等待使用者口頭再確認一次——
+確認這件事系統會另外跳畫面給使用者看，不是你的責任。`;
 }
 
 function voiceSupported() {
@@ -168,6 +175,62 @@ function voiceFabAvatarSvg() {
     <circle cx="24" cy="51" r="4.2" fill="#3A3A3A"/>
   </svg>`;
 }
+// 懸浮球拖曳＋記住位置（2026-10-29，使用者要求：球可能擋到畫面內容，要能自己拖去別的地方）。
+// 固定寬高跟.voice-fab CSS的width/height一致（58px），位置存這支手機的localStorage，
+// 換手機、清過瀏覽器資料就會回到預設右下角，不影響任何人共用的資料。
+const VOICE_FAB_SIZE = 58;
+const VOICE_FAB_POS_KEY = 'fleet_voice_fab_pos';
+function voiceFabLoadPos() {
+  try { const p = JSON.parse(localStorage.getItem(VOICE_FAB_POS_KEY) || 'null'); if (p && typeof p.x === 'number' && typeof p.y === 'number') return p; } catch (e) {}
+  return null;
+}
+function voiceFabSavePos(x, y) { try { localStorage.setItem(VOICE_FAB_POS_KEY, JSON.stringify({ x, y })); } catch (e) {} }
+function voiceFabClamp(x, y) {
+  const maxX = Math.max(4, window.innerWidth - VOICE_FAB_SIZE - 4);
+  const maxY = Math.max(4, window.innerHeight - VOICE_FAB_SIZE - 4);
+  return { x: Math.min(Math.max(4, x), maxX), y: Math.min(Math.max(4, y), maxY) };
+}
+function voiceFabApplyPos(fab, x, y) {
+  fab.style.left = x + 'px'; fab.style.top = y + 'px'; fab.style.right = 'auto'; fab.style.bottom = 'auto';
+}
+function voiceFabWireDrag(fab) {
+  let dragging = false, moved = false, startX = 0, startY = 0, origX = 0, origY = 0, pid = null;
+  fab.addEventListener('pointerdown', e => {
+    dragging = true; moved = false; pid = e.pointerId;
+    try { fab.setPointerCapture(pid); } catch (err) {}
+    const r = fab.getBoundingClientRect();
+    origX = r.left; origY = r.top; startX = e.clientX; startY = e.clientY;
+    fab.style.animation = 'none'; // 拖曳中先停掉呼吸動畫，不然位置跟縮放動畫疊在一起會晃
+  });
+  fab.addEventListener('pointermove', e => {
+    if (!dragging || e.pointerId !== pid) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if (!moved && Math.hypot(dx, dy) > 6) moved = true; // 移動夠多才算拖曳，不然手抖一下就誤判成拖曳、吃掉原本要點一下的操作
+    if (!moved) return;
+    const p = voiceFabClamp(origX + dx, origY + dy);
+    voiceFabApplyPos(fab, p.x, p.y);
+  });
+  const end = e => {
+    if (!dragging || e.pointerId !== pid) return;
+    dragging = false;
+    try { fab.releasePointerCapture(pid); } catch (err) {}
+    fab.style.animation = '';
+    if (moved) {
+      const r = fab.getBoundingClientRect();
+      voiceFabSavePos(r.left, r.top);
+      fab._justDragged = true; // 擋掉拖完放開後瀏覽器自己補發的click，不要被誤判成「點一下」去開語音
+      setTimeout(() => { fab._justDragged = false; }, 50);
+    }
+  };
+  fab.addEventListener('pointerup', end);
+  fab.addEventListener('pointercancel', end);
+  window.addEventListener('resize', () => {
+    if (!document.body.contains(fab) || fab.style.left === '') return; // 還沒拖過（用CSS預設右下角）就不用管
+    const r = fab.getBoundingClientRect();
+    const p = voiceFabClamp(r.left, r.top);
+    if (p.x !== r.left || p.y !== r.top) { voiceFabApplyPos(fab, p.x, p.y); voiceFabSavePos(p.x, p.y); }
+  });
+}
 // renderContent()每次切分頁都會呼叫；show=是否該顯示（夥伴畫面／主控檢視夥伴畫面才顯示，
 // 主控自己的畫面不顯示）。按鈕本身只建立一次、之後只切display，不會被各分頁的innerHTML洗掉。
 function voiceFabEnsure(show) {
@@ -178,10 +241,13 @@ function voiceFabEnsure(show) {
     fab.id = 'voiceFab';
     fab.className = 'voice-fab';
     fab.type = 'button';
-    fab.title = '語音助理（賈維斯）';
+    fab.title = '語音助理（賈維斯）・可以拖著移動';
     fab.innerHTML = voiceFabAvatarSvg();
-    fab.onclick = () => { _voiceState ? voiceStop() : voiceStart(); };
+    fab.onclick = () => { if (fab._justDragged) return; _voiceState ? voiceStop() : voiceStart(); };
     document.body.appendChild(fab);
+    const saved = voiceFabLoadPos();
+    if (saved) { const p = voiceFabClamp(saved.x, saved.y); voiceFabApplyPos(fab, p.x, p.y); }
+    voiceFabWireDrag(fab);
   }
   fab.style.display = 'flex';
 }
@@ -232,7 +298,7 @@ async function voiceStart() {
       try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
 
       if (msg.setupComplete) {
-        voiceRenderOverlay('請說話…（例如「我明天請假」）', true);
+        voiceRenderOverlay('請說話…（例如「我下週三請假」）', true);
         voiceStartStreamingMic(stream, audioCtx, ws);
         return;
       }

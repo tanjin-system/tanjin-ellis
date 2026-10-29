@@ -465,7 +465,7 @@
   .tag-list span{ display:inline-block; background:var(--group); border-radius:2px; padding:2px 6px; margin:2px 3px 0 0; font-size:11.5px; }
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
-  .voice-fab{ position:fixed; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); width:58px; height:58px; border-radius:50%; border:3px solid #fff; box-shadow:0 6px 18px rgba(122,90,160,.45); padding:0; overflow:hidden; cursor:pointer; z-index:90; display:none; align-items:center; justify-content:center; background:transparent; animation:voiceFabBreathe 2.6s ease-in-out infinite; }
+  .voice-fab{ position:fixed; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); width:58px; height:58px; border-radius:50%; border:3px solid #fff; box-shadow:0 6px 18px rgba(122,90,160,.45); padding:0; overflow:hidden; cursor:pointer; z-index:90; display:none; align-items:center; justify-content:center; background:transparent; animation:voiceFabBreathe 2.6s ease-in-out infinite; touch-action:none; user-select:none; -webkit-user-select:none; }
   .voice-fab svg{ width:100%; height:100%; display:block; }
   .voice-fab.active{ animation:voiceFabPulse 1s ease-in-out infinite; }
   @keyframes voiceFabBreathe{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.06); } }
@@ -566,7 +566,7 @@
 <script defer src="js/data-layer.js?v=8"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
-<script defer src="js/voice.js?v=2"></script>
+<script defer src="js/voice.js?v=3"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -2490,6 +2490,22 @@ function renderHomeDriver(c){
     });
   }
 }
+// 請假日期太近的風險提示（2026-10-29，使用者指出：公司現行規則是星期五/六/日
+// 回報「下週」狀況，沒回報就視為可以照公司安排排班——所以正常請假日期應該是下週，
+// 不是今天/明天。這張表只是「以後排班不要排我」的註記，不會自動取消已經排定、
+// 已經發佈給夥伴的任務，系統沒有能力臨時改派。日期太近、或當天已經有排定任務時，
+// 要清楚提醒夥伴必須直接聯絡主控，不能只靠這筆登記。
+function leaveUrgencyWarning(dateVal, dId){
+  if(!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) return '';
+  const today = todayStr();
+  if(dateVal < today) return '';
+  const hasAssignment = (state.data.assignments||[]).some(a=>
+    a.driverId===dId && a.date===dateVal && a.status!=='cancelled' && a.published!==false && !a.isSupport);
+  if(hasAssignment) return `⚠️ ${dateVal} 你已經有排定的任務，這筆登記不會自動取消、也不會通知主控，請務必直接聯絡主控確認！`;
+  const daysUntil = Math.round((new Date(dateVal+'T00:00:00') - new Date(today+'T00:00:00')) / 86400000);
+  if(daysUntil<=1) return '⚠️ 這個日期太近了（今天或明天）。公司規則是星期五、六、日回報下週狀況，太晚回報系統可能來不及調整，請務必同時直接聯絡主控確認。';
+  return '';
+}
 // ---------- 夥伴請假/不可排班回報（2026-10-29，雙大腦架構賈維斯語音助理的第一塊
 // 真正可用的功能：手動表單版。語音版以後會接同一個 createDriverUnavailability()，
 // 只是來源改成source:'voice'，且要先過PWA確認卡片——這裡先把「人手動填表單送出」
@@ -2508,6 +2524,7 @@ async function renderLeavePanel(){
         <div class="field"><label>日期</label><input id="leaveDate" type="date" min="${today}"></div>
         <div class="field" style="grid-column: span 2;"><label>備註（選填）</label><input id="leaveNote" maxlength="100" placeholder="例如：家裡有事"></div>
       </div>
+      <div id="leaveWarnBox" style="display:none; font-size:12.5px; color:var(--danger); margin:-4px 0 8px;"></div>
       <button class="btn amber" id="leaveSubmitBtn">送出</button>
       <button class="btn ghost" id="leaveCancelBtn">取消</button>
     </div>
@@ -2521,10 +2538,18 @@ async function renderLeavePanel(){
     document.getElementById('leaveFormBox').style.display = 'none';
     document.getElementById('leaveAddBtn').style.display = '';
   };
+  document.getElementById('leaveDate').onchange = ()=>{
+    const warn = leaveUrgencyWarning(document.getElementById('leaveDate').value, dId);
+    const box = document.getElementById('leaveWarnBox');
+    box.style.display = warn ? 'block' : 'none';
+    box.textContent = warn;
+  };
   document.getElementById('leaveSubmitBtn').onclick = async ()=>{
     const date = document.getElementById('leaveDate').value;
     const note = document.getElementById('leaveNote').value;
     if(!date){ alert('請選擇日期'); return; }
+    const warn = leaveUrgencyWarning(date, dId);
+    if(warn && !confirm(warn + '\n\n仍要送出這筆登記嗎？')) return;
     try{
       await createDriverUnavailability(dId, date, note, 'manual');
       renderLeavePanel();
@@ -7562,6 +7587,7 @@ function showVoiceIntentConfirmCard(intent){
           <h3 style="margin-top:0;">🎙️ 語音辨識結果</h3>
           ${intent && intent.rawText ? `<p style="font-size:12.5px; color:var(--ink-soft);">剛剛聽到：「${escapeHtml(intent.rawText)}」</p>` : ''}
           <p style="font-size:15px; font-weight:600;">系統辨識：${dateVal} 請假，請問是否正確？</p>
+          ${leaveUrgencyWarning(dateVal, dId) ? `<p style="font-size:12.5px; color:var(--danger); font-weight:600;">${escapeHtml(leaveUrgencyWarning(dateVal, dId))}</p>` : ''}
           <div style="display:flex; gap:8px;">
             <button class="btn amber" id="voiceConfirmYes" style="flex:1;">👍 正確，送出</button>
             <button class="btn ghost" id="voiceConfirmNo" style="flex:1;">不對，手動選</button>
@@ -7574,6 +7600,8 @@ function showVoiceIntentConfirmCard(intent){
       document.getElementById('voiceFallbackSubmit').onclick = ()=>{
         const d = document.getElementById('voiceFallbackDate').value;
         if(!d){ alert('請選擇日期'); return; }
+        const warn = leaveUrgencyWarning(d, dId);
+        if(warn && !confirm(warn + '\n\n仍要送出這筆登記嗎？')) return;
         submit(d);
       };
       return;
