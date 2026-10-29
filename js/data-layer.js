@@ -1622,6 +1622,7 @@ async function rolloverNextWeekIfNeeded() {
 
   const created = [];
   let skipped = 0;
+  let skippedForLeave = 0;
   try {
   // 本週來源（精簡欄位，分頁避開1000筆上限）
   const src = [];
@@ -1632,6 +1633,15 @@ async function rolloverNextWeekIfNeeded() {
     src.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
+  // 2026-10-30使用者要求：夥伴跟小金說下週哪天要休息，自動延續排班時就該直接
+  // 把那天空出來，不要照抄照排——不然變成先排錯、再靠另一個面板提醒主控去
+  // 改，使用者體驗上是「系統明明知道卻還是排錯」。這裡在複製之前，先查一次
+  // 下週的請假紀錄，複製到那個人那一天時直接跳過不建立（格子維持「未排」，
+  // 不是自動找人補上——補誰是主控的主觀判斷，不是規則能決定的，交給人用
+  // 原本的格子點選處理，見renderScheduleConflicts()的說明，同一個原則）。
+  let nextWeekLeaves = [];
+  try { nextWeekLeaves = await fetchDriverUnavailabilities(nextStart, nextEnd); } catch (e) { /* 查不到就照舊複製，不讓這個保護機制本身變成延續失敗的原因 */ }
+  const leaveSet = new Set(nextWeekLeaves.map(u => u.driverId + '|' + u.date));
   const activeDrivers = new Set(state.data.drivers.filter(d => d.status === 'active').map(d => d.id));
   const rows = [];
   const seen = new Set();
@@ -1640,6 +1650,7 @@ async function rolloverNextWeekIfNeeded() {
     const date = ymd(addDays(x.trip_date, 7));
     const key = x.route_id + '|' + date;
     if (!route || route.status === 'inactive' || !activeDrivers.has(x.driver_id) || seen.has(key)) { skipped++; return; }
+    if (leaveSet.has(x.driver_id + '|' + date)) { skippedForLeave++; return; } // 這位這天已經回報請假，這格維持空白不複製
     seen.add(key);
     const version = route.versions.find(v => date >= v.start && (!v.end || date <= v.end));
     rows.push({
@@ -1687,7 +1698,7 @@ async function rolloverNextWeekIfNeeded() {
   const have = new Set(state.data.assignments.map(a => a.id));
   (full || []).map(mapAssignment).forEach(a => { if (!have.has(a.id)) state.data.assignments.push(a); });
   state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
-  return { created: created.length, skipped };
+  return { created: created.length, skipped, skippedForLeave };
 }
 
 // ---------------- 臨時支援：把幾個店點交給支援夥伴 ----------------

@@ -567,7 +567,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=8"></script>
+<script defer src="js/data-layer.js?v=9"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
 <script defer src="js/voice.js?v=23"></script>
@@ -4494,7 +4494,7 @@ async function renderScheduleAdmin(c){
   // 每週第一次打開：下週還是空的就自動延續本週（草稿，夥伴看不到，按「發佈」才開放）。背景進行，不擋畫面。
   rolloverNextWeekIfNeeded().then(r=>{
     if(!r) return;
-    state._rolloverMsg = r.created ? `已自動把本週期任務清單延續到下週（${r.created} 趟，目前是草稿，夥伴看不到；有異動請手動改，排好後按「發佈」）。` : '';
+    state._rolloverMsg = r.created ? `已自動把本週期任務清單延續到下週（${r.created} 趟，目前是草稿，夥伴看不到；有異動請手動改，排好後按「發佈」）。${r.skippedForLeave ? `有${r.skippedForLeave}格因為夥伴已回報下週請假，特意沒有複製、維持未排，請手動指派別的夥伴。` : ''}` : '';
     if(state.tab==='schedule') renderContent();
   }).catch(err=>{ state._rolloverChecked = null; console.error('自動延續下週期任務清單失敗', err); });
   // 往前翻週（state.weekOffset 可以一直往負的翻）翻超過近14天的預設窗口時，
