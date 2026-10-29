@@ -7520,6 +7520,75 @@ function showNhiReminderModal(){
   document.getElementById('nhiReminderOk').onclick = ()=>{ applyMuteIfChecked(); host.innerHTML=''; state._meSlipPreviewOpen = true; switchTab('my-earnings'); };
   document.getElementById('nhiReminderBackdrop').onclick = (e)=>{ if(e.target.id==='nhiReminderBackdrop'){ applyMuteIfChecked(); host.innerHTML=''; } };
 }
+// 語音辨識結果的二次確認卡片（2026-10-29，雙大腦架構的安全關卡——2026-10-28定案：
+// 語音助理聽到的內容絕對不能直接寫入資料庫，一定要先讓夥伴看過、自己點確認才算數）。
+// intent格式：{ type:'leave', date:'YYYY-MM-DD'（可能沒有/格式不對）, rawText:'聽到的原話' }。
+// 語音助理前端接上後，呼叫 showVoiceIntentConfirmCard(intent) 即可；目前沒有語音輸入
+// 來源，先靠 window.__testVoiceIntent() 手動模擬觸發測試這整套確認流程。
+// 10秒沒有互動、或一開始intent就沒有有效日期，自動（或直接）退回手動日期選擇器，
+// 不讓夥伴卡在一個聽不懂在問什麼的畫面。
+function showVoiceIntentConfirmCard(intent){
+  let host = document.getElementById('voiceConfirmHost');
+  if(!host){ host = document.createElement('div'); host.id = 'voiceConfirmHost'; document.body.appendChild(host); }
+  const dId = state.activeDriverId;
+  let timer = null;
+  const doneHtml = (dateVal)=>`<div class="modal-backdrop" id="voiceConfirmBackdrop"><div class="modal-box" style="max-width:380px; text-align:center;"><p>✅ 已登記 ${dateVal} 請假</p><button class="btn ghost" id="voiceConfirmClose" style="margin-top:8px;">關閉</button></div></div>`;
+  const wireClose = ()=>{ const b=document.getElementById('voiceConfirmClose'); if(b) b.onclick = ()=>{ host.innerHTML=''; if(state.tab==='home') renderLeavePanel(); }; };
+  const submit = async (dateVal)=>{
+    try{
+      await createDriverUnavailability(dId, dateVal, (intent && intent.rawText) || '', 'voice');
+      host.innerHTML = doneHtml(dateVal);
+      wireClose();
+    }catch(err){ alert(err.message); host.innerHTML=''; }
+  };
+  const render = (fallback)=>{
+    if(!document.body.contains(host)) return; // 夥伴可能已經登出或頁面已經卸載
+    const dateVal = (intent && intent.date) || '';
+    host.innerHTML = `<div class="modal-backdrop" id="voiceConfirmBackdrop">
+      <div class="modal-box" style="max-width:380px;">
+        ${fallback ? `
+          <h3 style="margin-top:0;">請選擇請假日期</h3>
+          <p style="font-size:13px; color:var(--ink-soft);">${intent && intent.rawText ? `剛剛聽到：「${escapeHtml(intent.rawText)}」，但系統沒辨識出明確日期，請手動選擇：` : '語音辨識逾時，請手動選擇：'}</p>
+          <input type="date" id="voiceFallbackDate" min="${todayStr()}" style="width:100%; margin-bottom:10px;">
+          <button class="btn amber" id="voiceFallbackSubmit" style="width:100%;">送出</button>
+        ` : `
+          <h3 style="margin-top:0;">🎙️ 語音辨識結果</h3>
+          ${intent && intent.rawText ? `<p style="font-size:12.5px; color:var(--ink-soft);">剛剛聽到：「${escapeHtml(intent.rawText)}」</p>` : ''}
+          <p style="font-size:15px; font-weight:600;">系統辨識：${dateVal} 請假，請問是否正確？</p>
+          <div style="display:flex; gap:8px;">
+            <button class="btn amber" id="voiceConfirmYes" style="flex:1;">👍 正確，送出</button>
+            <button class="btn ghost" id="voiceConfirmNo" style="flex:1;">不對，手動選</button>
+          </div>
+          <div id="voiceCountdown" style="font-size:11.5px; color:var(--ink-soft); margin-top:8px; text-align:center;"></div>
+        `}
+      </div>
+    </div>`;
+    if(fallback){
+      document.getElementById('voiceFallbackSubmit').onclick = ()=>{
+        const d = document.getElementById('voiceFallbackDate').value;
+        if(!d){ alert('請選擇日期'); return; }
+        submit(d);
+      };
+      return;
+    }
+    let secs = 10;
+    const tick = ()=>{
+      if(!document.body.contains(host)){ clearInterval(timer); timer=null; return; }
+      const cd = document.getElementById('voiceCountdown');
+      if(cd) cd.textContent = `${secs}秒後自動切換成手動選擇`;
+      secs--;
+      if(secs<0){ clearInterval(timer); timer=null; render(true); }
+    };
+    tick(); timer = setInterval(tick, 1000);
+    document.getElementById('voiceConfirmYes').onclick = ()=>{ clearInterval(timer); timer=null; submit(dateVal); };
+    document.getElementById('voiceConfirmNo').onclick = ()=>{ clearInterval(timer); timer=null; render(true); };
+  };
+  const hasDate = intent && intent.date && /^\d{4}-\d{2}-\d{2}$/.test(intent.date);
+  render(!hasDate); // 一開始就沒有有效日期的話，直接跳手動選擇，不用先演一次辨識畫面
+}
+// 測試用：模擬語音助理解析出的結果，手動觸發確認卡片（主控瀏覽器console呼叫），
+// 不用真的接上語音也能測整套二次確認流程。語音前端做好之後，這個保留當偵錯工具即可。
+window.__testVoiceIntent = (date, rawText)=> showVoiceIntentConfirmCard({ type:'leave', date: date||'', rawText: rawText||'下週二家裡有事請假' });
 // 今天全部完成的慶祝動畫：彩帶＋卡片彈出＋金額數字跳動，每位夥伴每天只播一次；之後同一天再進來就維持靜態完成畫面，隔天（午夜 12 點後）自動換新的一天。
 // 夥伴自己拍的照片縮圖：只存在這支手機的瀏覽器裡（約 4KB 的小圖，上傳當下就地縮出來），
 // 完全不用網路、不會向伺服器多要任何照片資料（不佔流量）。只暫存當天（過了午夜就清掉），每個店點最多 3 張；歷史任務不顯示縮圖、維持原本的樣子；換手機看不到縮圖，但「✓ 已上傳 N 張」仍在。
