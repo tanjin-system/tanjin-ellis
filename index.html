@@ -4457,6 +4457,38 @@ function routeSortCompare(a,b){
 function sortedRoutes(){
   return state.data.routes.slice().sort(routeSortCompare);
 }
+// 雙大腦計劃「後台」第二塊（2026-10-30）：週期任務清單本來就會自動把本週班表
+// 延續到下週（rolloverNextWeekIfNeeded()，見上面呼叫處的註解），但這個延續是
+// 「照抄上週」，完全不知道夥伴在Friday/Saturday/Sunday已經回報下週請假
+// （driver_unavailabilities，語音助理/請假面板建的那張表）——這支就是補這個
+// 落差：掃目前畫面顯示的這一週，找出「已經回報請假的那一天，班表上還是排了
+// 這個人」的衝突，列出來提醒主控去改，不自動改掉任何指派（AI只能提案、人要
+// 點頭才算數，跟財務稽核同一個原則）。故意不做「自動找人補位」——找誰補位
+// 牽涉到路線熟悉度、這幾個月的狀態等主控的主觀判斷，不是規則能決定的，交給
+// 人用下面原本就有的格子點選功能處理即可。
+async function renderScheduleConflicts(startDate, endDate){
+  const box = document.getElementById('schedConflictBox');
+  if(!box) return;
+  let list;
+  try{ list = await fetchDriverUnavailabilities(startDate, endDate); }
+  catch(e){ return; } // 這面板只是提醒用，悄悄失敗不影響主要排班功能
+  if(state.tab!=='schedule' || !document.getElementById('schedConflictBox')) return; // 使用者可能已經切走這一頁或翻了別週
+  const conflicts = [];
+  list.forEach(u=>{
+    state.data.assignments.forEach(a=>{
+      if(a.driverId===u.driverId && a.date===u.date && a.status!=='cancelled' && !a.isSupport){
+        conflicts.push({ date:u.date, note:u.note, driverId:u.driverId, routeId:a.routeId, published:a.published });
+      }
+    });
+  });
+  if(!conflicts.length){ box.innerHTML = ''; return; } // 沒有衝突就不顯示面板，不佔畫面空間（保險起見明確清空，不假設box本來就是空的）
+  conflicts.sort((x,y)=> x.date.localeCompare(y.date));
+  box.innerHTML = `<div class="panel" style="border-color:var(--danger); border-width:2px; margin-bottom:8px;">
+    <h3 style="margin-top:0;">⚠️ ${conflicts.length}筆排班衝突：夥伴已回報請假，但這天還是排了班</h3>
+    ${conflicts.map(x=>`<div style="padding:5px 0; border-top:1px solid var(--border); font-size:13px;">${x.date} ${escapeHtml(routeName(x.routeId))}・${escapeHtml(driverName(x.driverId))}${x.note?`（請假備註：${escapeHtml(x.note)}）`:''}${x.published===false?' <span class="badge pending" style="font-size:10.5px;">草稿</span>':''}</div>`).join('')}
+    <p class="section-sub" style="margin:8px 0 0 0;">通常是系統「延續上週班表」時沒注意到這筆請假——請在下面的表格點格子改派給別的夥伴。</p>
+  </div>`;
+}
 async function renderScheduleAdmin(c){
   const week1 = getWeekDates(state.weekOffset);
   // 每週第一次打開：下週還是空的就自動延續本週（草稿，夥伴看不到，按「發佈」才開放）。背景進行，不擋畫面。
@@ -4504,6 +4536,7 @@ async function renderScheduleAdmin(c){
       <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:2px 0 10px; color:var(--ink);"><input type="checkbox" id="sOverwrite" style="width:auto;"> 覆蓋已排的：這段期間如果那個車次已經排了別人，直接換成這位夥伴（只換還沒出發的；已出發、已完成的不動）</label>
       <button class="btn amber" id="addAssign">批次建立指派</button>
     </div>
+    <div id="schedConflictBox" class="no-print"></div>
     <div class="sched-top">
     <div class="toolbar no-print">
       <div class="week-nav">
@@ -4553,6 +4586,7 @@ async function renderScheduleAdmin(c){
     <div id="assignDetail"></div>
     ${bulkOn()?'<div style="height:150px;"></div><div id="bulkBar" class="bulk-bar no-print"></div>':''}
   `;
+  renderScheduleConflicts(week1[0], week1[6]); // 背景抓請假紀錄比對排班衝突，不擋畫面（見函式定義）
   document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
   document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
   document.getElementById('bulkToggle').onclick = ()=>{ state._bulk = bulkOn() ? null : { on:true, sel:new Set() }; renderContent(); };
