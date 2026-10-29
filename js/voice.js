@@ -811,6 +811,21 @@ function voiceSupported() {
 
 let _voiceState = null; // { closed, stream, audioCtx, sourceNode, procNode, muteNode, ws, timeoutTimer }
 
+// 2026-10-30使用者回報：手機上常常「點了小金頭像也沒反應」，常常要點好幾次才會動。
+// 查出來的原因：手機瀏覽器把分頁切到背景（切App、鎖螢幕）時，作業系統常常會直接把
+// WebSocket斷線，但事件不會馬上觸發（甚至回到前景才觸發，或根本不觸發）——這段
+// 期間_voiceState還留著「看起來在通話中」的殘影，點頭像的按鈕邏輯會把這次點擊當成
+// 「結束通話」處理（因為_voiceState還在），而不是「開始新的通話」，所以使用者感覺
+// 像完全沒反應，要点兩次才會真的打開。這裡在分頁重新回到前景時主動檢查一次：如果
+// WebSocket其實已經斷了（readyState是CLOSING/CLOSED）就直接收尾，下次點頭像才會
+// 正常當成「開始」處理，不用使用者自己多點一次。
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _voiceState && _voiceState.ws &&
+      (_voiceState.ws.readyState === WebSocket.CLOSING || _voiceState.ws.readyState === WebSocket.CLOSED)) {
+    voiceStop();
+  }
+});
+
 // 2026-10-29使用者要求：原本講話時是整個畫面的modal蓋住，不能邊講邊操作系統。
 // 改成一顆不擋畫面的小狀態條（CSS另外定義在index.html的#voiceOverlay/.voice-status-pill），
 // 底下的畫面照常點得到；另外在voiceStart()裡掛一個「點畫面空白處結束通話」的監聽器
@@ -930,7 +945,7 @@ function voiceStop() {
   try { _voiceState.sourceNode && _voiceState.sourceNode.disconnect(); } catch (e) {}
   try { _voiceState.muteNode && _voiceState.muteNode.disconnect(); } catch (e) {}
   try { _voiceState.stream && _voiceState.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
-  try { _voiceState.ws && _voiceState.ws.readyState === WebSocket.OPEN && _voiceState.ws.close(); } catch (e) {}
+  try { _voiceState.ws && (_voiceState.ws.readyState === WebSocket.OPEN || _voiceState.ws.readyState === WebSocket.CONNECTING) && _voiceState.ws.close(); } catch (e) {} // CONNECTING時也要能close()取消，不然只斷OPEN漏掉「連線到一半就被結束」這種狀況
   try { _voiceState.audioCtx && _voiceState.audioCtx.close(); } catch (e) {}
   const ov = document.getElementById('voiceOverlay'); if (ov) ov.remove();
   voiceFabSetActive(false);
@@ -1134,7 +1149,18 @@ function voiceFabEnsure(show) {
     fab.type = 'button';
     fab.title = '語音助理（小金）・可以拖著移動・長按切換喚醒詞模式';
     fab.innerHTML = voiceFabAvatarSvg();
-    fab.onclick = () => { if (fab._justDragged || fab._justLongPressed) return; _voiceState ? voiceStop() : voiceStart(); };
+    fab.onclick = () => {
+      if (fab._justDragged || fab._justLongPressed) return;
+      // 保險：visibilitychange的清理理論上該在這之前就先跑過，但以防萬一沒接到
+      // （例如沒有真的離開前景過、瀏覽器行為差異），點擊當下再確認一次連線是不是
+      // 其實已經斷了——斷了就當作「開始新的」，不要又把這次點擊吃成一次沒反應的「結束」。
+      if (_voiceState && _voiceState.ws && (_voiceState.ws.readyState === WebSocket.CLOSING || _voiceState.ws.readyState === WebSocket.CLOSED)) {
+        _voiceState = null;
+        voiceStart();
+        return;
+      }
+      _voiceState ? voiceStop() : voiceStart();
+    };
     document.body.appendChild(fab);
     const saved = voiceFabLoadPos();
     if (saved) { const p = voiceFabClamp(saved.x, saved.y); voiceFabApplyPos(fab, p.x, p.y); }
