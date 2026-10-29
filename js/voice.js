@@ -39,10 +39,19 @@ const VOICE_FN_REPORT_UNAVAILABLE = {
 // 其實前端本來就有這些資料（state.data），只是一開始系統指示寫死「不能查」。加三個
 // 唯讀查詢工具，執行完直接回傳文字結果讓Gemini唸出來。這些都只讀資料、不寫資料庫，
 // 跟report_unavailable那種會改資料的工具不一樣，不需要額外的人工確認關卡。
+// 2026-10-29使用者反應：問「明天行程」只答得出是哪台車，答不出下貨點有哪些、
+// 費用多少——因為原本的回答只列了路線名稱。assignment本身的資料其實就有完整的
+// 下貨點清單（assignment_drop_points，見fetchAssignmentsInRange的select），
+// 只是沒有組進回答文字裡。加一個date參數：問特定一天（明天、下週三...）就填
+// 換算好的日期，回傳那天的完整明細（每個下貨點、費用）；問一整週/一整月才用
+// range，給簡要列表（每趟幾個店點、費用，但不逐一唸出店名，不然太長）。
 const VOICE_FN_GET_MY_TASKS = {
   name: 'get_my_tasks',
-  description: '查詢使用者自己本人（目前登入這支手機的夥伴）的任務安排，不是查別人的。range是today（今天）、week（這週，週一到週日）或month（這個月），聽不出來就用week。',
-  parameters: { type: 'OBJECT', properties: { range: { type: 'STRING', description: 'today, week, 或 month' } }, required: ['range'] }
+  description: '查詢使用者自己本人（目前登入這支手機的夥伴）的任務安排，不是查別人的。問特定一天（例如「今天」「明天」「下週三」）要先把日期換算成YYYY-MM-DD填到date——填了date會回傳那一天的完整明細（每個下貨點、費用）。問一整週/一整月才用range：week（這週，週一到週日）或month（這個月），不要同時填date和range。',
+  parameters: { type: 'OBJECT', properties: {
+    date: { type: 'STRING', description: 'YYYY-MM-DD，問特定一天時填這個，會回傳完整明細' },
+    range: { type: 'STRING', description: 'week 或 month，問一整週/一整月時填這個，給簡要列表' }
+  } }
 };
 const VOICE_FN_GET_MY_EARNINGS = {
   name: 'get_my_earnings',
@@ -54,8 +63,47 @@ const VOICE_FN_GET_WEATHER = {
   description: '查詢天氣。沒有指定地點就查公司所在地的天氣。',
   parameters: { type: 'OBJECT', properties: { location: { type: 'STRING', description: '地點名稱，選填，例如「台北」「高雄」' } } }
 };
+// 2026-10-29新增：主控（admin）端也要有語音助理，查全車隊/特定夥伴的狀況（主控本來
+// 就看得到所有夥伴的資料，跟夥伴自己只能看自己的不一樣，範圍刻意分開）。只讀查詢，
+// 一樣不能寫資料庫——主控這邊本來就有完整的操作介面可以真的改東西，語音只負責回答
+// 問題，不負責動手做事，跟夥伴端「AI只能提案、人點頭才算數」是同一個原則。
+const VOICE_FN_GET_FLEET_STATUS = {
+  name: 'get_fleet_status',
+  description: '查詢某一天全車隊的任務狀況（排了幾趟、完成幾趟、有沒有異常回報）。問特定一天要把日期換算成YYYY-MM-DD，沒講就查今天。',
+  parameters: { type: 'OBJECT', properties: { date: { type: 'STRING', description: 'YYYY-MM-DD，選填，沒填查今天' } } }
+};
+const VOICE_FN_GET_DRIVER_LOOKUP = {
+  name: 'get_driver_lookup',
+  description: '查詢某一位夥伴的狀況：今天跑哪些任務、這個月跑幾趟、報酬大約多少。driverName填聽到的姓名，可以只有部分（例如「小沈」）。',
+  parameters: { type: 'OBJECT', properties: { driverName: { type: 'STRING', description: '夥伴姓名或部分姓名' } }, required: ['driverName'] }
+};
+
+function voiceIsAdminMode() { return state.role === 'admin' && !state.adminViewDriver; }
 
 function voiceSystemInstruction() {
+  return voiceIsAdminMode() ? voiceSystemInstructionAdmin() : voiceSystemInstructionDriver();
+}
+function voiceSystemInstructionAdmin() {
+  const wd = '日一二三四五六'[new Date().getDay()];
+  return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切專業、像個得力
+助理。今天是${todayStr()}（星期${wd}）。
+
+現在跟你說話的是主控（公司管理者）本人，不是夥伴（司機）。你有以下工具可以用，
+該用就直接呼叫，不要說自己做不到：
+- get_fleet_status：主控問「今天/某一天車隊狀況怎樣」「有沒有異常」就呼叫這個。
+- get_driver_lookup：主控問某位夥伴的狀況（今天跑什麼、這個月跑幾趟/賺多少）
+  就呼叫這個。
+- get_weather：主控問天氣就呼叫這個。
+這幾個工具以外，你看不到系統裡其他資料（例如詳細財務報表、客戶請款明細），被問
+到就老實說看不到、建議主控自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的
+時候，也照實說查詢失敗，不要自己編一個答案出來。
+
+你平常也可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次都把話題拉回工作。
+
+⚠️重要：你只能查資料、回答問題，不能真的去改派任務、調整排班、修改金額或登入
+帳號——這些操作一律請主控自己到系統畫面上操作，你沒有、也不應該有這些權限。`;
+}
+function voiceSystemInstructionDriver() {
   const wd = '日一二三四五六'[new Date().getDay()];
   // 2026-10-29使用者要求：小金要知道自己現在是在哪個帳號裡講話（例如在小沈的手機
   // 上就要知道在跟小沈說話、只能讀小沈自己的資料；換一支手機、換成漢祥登入，就只能讀
@@ -71,7 +119,9 @@ function voiceSystemInstruction() {
 
 你是個全方位的語音小幫手：平常可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次
 都把話題拉回工作。你有以下幾個工具可以用，該用就直接呼叫，不要說自己做不到：
-- get_my_tasks：使用者問「我這週/這個月/今天要跑什麼」就呼叫這個。
+- get_my_tasks：使用者問「我今天/明天/下週三要跑什麼」「有哪些店點」就呼叫這個
+  （問特定一天會回傳完整明細：每個下貨點、費用）；問「這週/這個月」要跑什麼就用
+  range參數，給簡要列表。
 - get_my_earnings：使用者問「我這個月賺多少」「報酬多少」就呼叫這個。
 - get_weather：使用者問天氣就呼叫這個。
 - report_unavailable：使用者說要請假/不能排班就呼叫這個（詳見下方規則）。
@@ -102,20 +152,28 @@ function voiceWeekRange(today) {
 // js/data-layer.js），查整個月（尤其是月初已經過去14天的部分）會漏資料。跟
 // renderMyEarnings同一套做法：不碰共用的state.data.assignments，直接用
 // fetchAssignmentsInRange()跟資料庫要選定區間的資料，兩個查詢工具都改成async。
+function voiceShiftLabel(shift) { return shift === 'AM' ? '早班' : shift === 'PM' ? '午班' : (shift || ''); }
 async function voiceToolGetMyTasks(args) {
   const dId = state.activeDriverId;
-  const range = (args && args.range) || 'week';
   const today = todayStr();
-  let start = today, end = today, label = '今天';
-  if (range === 'week') { const w = voiceWeekRange(today); start = w.start; end = w.end; label = '這週'; }
-  else if (range === 'month') { start = today.slice(0, 7) + '-01'; end = monthEndStr(today.slice(0, 7)); label = '這個月'; }
+  const specificDate = (args && args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) ? args.date : '';
+  let start, end, label, detailed;
+  if (specificDate) { start = specificDate; end = specificDate; label = specificDate; detailed = true; }
+  else if ((args && args.range) === 'month') { start = today.slice(0, 7) + '-01'; end = monthEndStr(today.slice(0, 7)); label = '這個月'; detailed = false; }
+  else { const w = voiceWeekRange(today); start = w.start; end = w.end; label = '這週'; detailed = false; }
   let assignments;
   try { assignments = await fetchAssignmentsInRange(start, end); } catch (e) { return '查詢任務時發生錯誤，請稍後再試。'; }
   const list = assignments.filter(a =>
     a.driverId === dId && !a.isSupport && a.published !== false && a.status !== 'cancelled'
   ).sort((a, b) => a.date.localeCompare(b.date) || assignmentShiftKey(a) - assignmentShiftKey(b));
   if (!list.length) return `${label}（${start}到${end}）沒有排定的任務。`;
-  const lines = list.map(a => `${a.date} ${a.shift === 'AM' ? '早班' : a.shift === 'PM' ? '午班' : (a.shift || '')} ${routeName(a.routeId)}${a.status === 'completed' ? '（已完成）' : ''}`);
+  if (detailed) {
+    return list.map(a => {
+      const stops = (a.dropPoints || []).map((dp, i) => `${i + 1}.${dpLabel(dp)}`).join('、');
+      return `${a.date} ${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}，費用約${Math.round(tripPay(a))}元，共${(a.dropPoints || []).length}個下貨點：${stops || '（店點明細尚未排定）'}`;
+    }).join('；');
+  }
+  const lines = list.map(a => `${a.date} ${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}，${(a.dropPoints || []).length}個店點，費用約${Math.round(tripPay(a))}元${a.status === 'completed' ? '（已完成）' : ''}`);
   return `${label}（${start}到${end}）共有${list.length}趟任務：` + lines.join('；');
 }
 async function voiceToolGetMyEarnings(args) {
@@ -152,6 +210,39 @@ async function voiceToolGetWeather(args) {
     if (!cur) return '查詢天氣失敗，請稍後再試。';
     return `${label}目前氣溫約${Math.round(cur.temperature_2m)}度，${cur.precipitation > 0 ? '目前正在下雨' : '目前沒有下雨'}，風速約每小時${Math.round(cur.wind_speed_10m)}公里。`;
   } catch (e) { return '查詢天氣時發生錯誤，請稍後再試。'; }
+}
+async function voiceToolGetFleetStatus(args) {
+  const date = (args && args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) ? args.date : todayStr();
+  let assignments;
+  try { assignments = await fetchAssignmentsInRange(date, date); } catch (e) { return '查詢車隊狀況時發生錯誤，請稍後再試。'; }
+  const active = assignments.filter(a => !a.isSupport && a.published !== false && a.status !== 'cancelled');
+  if (!active.length) return `${date}目前沒有排定任何任務。`;
+  const completed = active.filter(a => a.status === 'completed').length;
+  const inProgress = active.filter(a => a.status === 'in_progress').length;
+  const issues = active.filter(a => a.hasIssue);
+  let text = `${date}共排定${active.length}趟任務，已完成${completed}趟`;
+  if (inProgress) text += `，${inProgress}趟進行中`;
+  text += issues.length ? `，${issues.length}趟有異常回報：` + issues.map(a => `${routeName(a.routeId)}（${driverName(a.driverId)}）`).join('、') : '，沒有異常回報';
+  return text + '。';
+}
+async function voiceToolGetDriverLookup(args) {
+  const q = ((args && args.driverName) || '').trim();
+  if (!q) return '沒有聽清楚要查哪位夥伴，請再說一次姓名。';
+  const matches = (state.data.drivers || []).filter(d => (d.name || '').includes(q));
+  if (!matches.length) return `查不到叫「${q}」的夥伴，請確認姓名。`;
+  if (matches.length > 1) return `有${matches.length}位夥伴的名字都包含「${q}」（${matches.map(d => d.name).join('、')}），請講更完整的姓名。`;
+  const d = matches[0];
+  const today = todayStr(), month = today.slice(0, 7);
+  let todays, monthAssignments;
+  try {
+    todays = await fetchAssignmentsInRange(today, today);
+    monthAssignments = await fetchAssignmentsInRange(month + '-01', monthEndStr(month));
+    await ensureAdjustmentsRange(month + '-01');
+  } catch (e) { return '查詢夥伴資料時發生錯誤，請稍後再試。'; }
+  const myToday = todays.filter(a => a.driverId === d.id && !a.isSupport && a.published !== false && a.status !== 'cancelled');
+  const r = driverMonthly(d.id, month, monthAssignments);
+  const todayText = myToday.length ? myToday.map(a => `${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}`).join('、') : '沒有排定任務';
+  return `${d.name}今天：${todayText}。${month}已完成${r.trips.length}趟，報酬合計約${Math.round(r.tripTotal)}元。`;
 }
 
 function voiceSupported() {
@@ -484,7 +575,9 @@ async function voiceStart() {
           model: VOICE_MODEL,
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
-          tools: [{ functionDeclarations: [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER] }]
+          tools: [{ functionDeclarations: voiceIsAdminMode()
+            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER]
+            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER] }]
         }
       }));
     };
@@ -496,7 +589,7 @@ async function voiceStart() {
       try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
 
       if (msg.setupComplete) {
-        voiceRenderOverlay('請說話…（可以聊天、問問題，或說「我下週三請假」）', true);
+        voiceRenderOverlay(voiceIsAdminMode() ? '請說話…（可以問車隊狀況、問夥伴狀況，或聊天）' : '請說話…（可以聊天、問問題，或說「我下週三請假」）', true);
         voiceStartStreamingMic(stream, audioCtx, ws, _voiceState);
         return;
       }
@@ -507,6 +600,8 @@ async function voiceStart() {
             if (fc.name === 'get_my_tasks') resultText = await voiceToolGetMyTasks(fc.args || {});
             else if (fc.name === 'get_my_earnings') resultText = await voiceToolGetMyEarnings(fc.args || {});
             else if (fc.name === 'get_weather') resultText = await voiceToolGetWeather(fc.args || {});
+            else if (fc.name === 'get_fleet_status') resultText = await voiceToolGetFleetStatus(fc.args || {});
+            else if (fc.name === 'get_driver_lookup') resultText = await voiceToolGetDriverLookup(fc.args || {});
           } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
           try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
           if (fc.name === 'report_unavailable') {

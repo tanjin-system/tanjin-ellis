@@ -570,7 +570,7 @@
 <script defer src="js/data-layer.js?v=8"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
-<script defer src="js/voice.js?v=7"></script>
+<script defer src="js/voice.js?v=8"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -1702,7 +1702,10 @@ function renderContent(){
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
     maybeGreetDriver();
   }
-  if(typeof voiceFabEnsure==='function') voiceFabEnsure(inDriverView);
+  // 2026-10-29：主控自己的畫面（不是「檢視夥伴畫面」）現在也有語音助理了，只是問
+  // 得到的資料範圍不一樣（voice.js裡的voiceIsAdminMode()判斷），所以只要是登入狀態
+  // （夥伴或主控）就顯示，不再只限夥伴畫面。
+  if(typeof voiceFabEnsure==='function') voiceFabEnsure(state.role==='admin' || state.role==='driver');
 }
 // ---------- 戰情室（主控電腦版／大螢幕） ----------
 // 只讀「今天」的任務（state.data.assignments，由 Realtime 即時更新），每 15 秒依現在時間重算一次，
