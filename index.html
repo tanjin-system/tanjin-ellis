@@ -567,10 +567,10 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=13"></script>
+<script defer src="js/data-layer.js?v=14"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
-<script defer src="js/voice.js?v=30"></script>
+<script defer src="js/voice.js?v=31"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -7323,14 +7323,28 @@ async function renderCarbonInbox(c){
   c.innerHTML = `
     <h2 class="section-title">小碳任務</h2>
     <p class="section-sub">小碳的例行查驗工作，跟你透過小金交辦給他的所有任務，都在這個畫面。</p>
+    <div id="cbxBriefing"></div>
     <div id="cbxRecon"></div>
     <h3 style="margin-top:18px;">📋 交辦任務紀錄</h3>
     <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆（或準備好的草稿）會先進這裡。</p>
     <div class="panel"><button class="btn ghost" id="cbxRefresh">🔄 重新整理</button></div>
     <div id="cbxList"><div class="empty">載入中…</div></div>`;
   renderReconciliation(document.getElementById('cbxRecon'));
+  renderBriefingPanel();
   document.getElementById('cbxRefresh').onclick = refresh;
   await refresh();
+  async function renderBriefingPanel(){
+    const box = document.getElementById('cbxBriefing');
+    if(!box) return;
+    let briefing;
+    try{ briefing = await fetchTodayBriefing(); }catch(e){ return; } // 晨報只是錦上添花，查詢失敗悄悄跳過，不擋整個畫面
+    if(state.tab!=='carbon_inbox' || !document.getElementById('cbxBriefing')) return;
+    if(!briefing) return; // 還沒排程產生（伺服器還沒跑到、金鑰沒設定），不顯示任何東西
+    box.innerHTML = `<div class="panel" style="border-color:var(--accent); border-width:2px; margin-bottom:12px;">
+      <h3 style="margin-top:0;">🌅 今日晨報</h3>
+      <p style="white-space:pre-wrap; font-size:13.5px; margin:0;">${escapeHtml(briefing.text)}</p>
+    </div>`;
+  }
   async function refresh(){
     const list = document.getElementById('cbxList');
     if(!list) return;

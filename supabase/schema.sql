@@ -1762,3 +1762,20 @@ alter table carbon_tasks add column action_type text;
 alter table carbon_tasks add column action_payload jsonb;
 alter table carbon_tasks add column executed_at timestamptz;
 comment on column carbon_tasks.action_type is 'null＝單純文字回覆；有值（例如announcement）代表小碳草擬了一個可以直接執行的動作，payload放在action_payload，executed_at記錄老闆按確認、系統真的執行那一刻。';
+
+-- PART 48：小碳晨報（2026-10-30）
+-- 每天早上（台北時間07:00左右，見vercel.json的cron）由api/push.js的runBriefingCron()
+-- 自動產生一份給老闆的簡短口語晨報，存在這張表。跟carbon_tasks分開放，是因為晨報
+-- 沒有「審核/確認/駁回」這種動作語意，純粹是小碳主動準備的一段資訊，前端（小碳任務
+-- 畫面、小金語音開場）直接讀出來就好，不需要carbon_tasks那套審核流程。只有cron
+-- （service role）會寫入，前端只讀。
+create table carbon_briefings (
+  id uuid primary key default gen_random_uuid(),
+  briefing_date date not null unique,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+comment on table carbon_briefings is '小碳每天早上自動產生的簡短口語晨報，一天一筆（briefing_date唯一）。只有伺服器排程會寫入，前端唯讀。';
+alter table carbon_briefings enable row level security;
+grant select on carbon_briefings to app_admin;
+create policy admin_select on carbon_briefings for select to app_admin using (true);

@@ -3049,6 +3049,15 @@ async function fetchCarbonTasks(limit) {
   if (error) throw new Error('查詢小碳任務失敗：' + error.message);
   return (data || []).map(mapCarbonTask);
 }
+// 小碳晨報（schema.sql PART 48）：伺服器排程（api/push.js runBriefingCron()）每天早上
+// 自動產生一筆，這裡只讀、不寫。查不到當天的就回傳null（伺服器還沒跑、金鑰沒設定、
+// 或今天沒有排程成功都算在內，呼叫端要自己處理「沒有晨報」這個情況，不當作錯誤）。
+async function fetchTodayBriefing() {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('carbon_briefings').select('*').eq('briefing_date', todayStr()).maybeSingle();
+  if (error) throw new Error('查詢小碳晨報失敗：' + error.message);
+  return data ? { date: data.briefing_date, text: data.text, createdAt: data.created_at } : null;
+}
 
 // 「尚未月結確認」名單用：只抓指定月份已完成任務的精簡欄位（沒有店點），一樣分頁避開1000筆上限。
 // 同一個月份在這個 session 只查一次（state._settleCache），首頁提醒與勞報單頁共用。

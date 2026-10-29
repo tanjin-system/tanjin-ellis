@@ -9,10 +9,14 @@
 //   GET  ?op=cron  → 每天一次的排程（vercel.json）：前一天提醒隔天有任務的夥伴；月底最後一天提醒對帳；超過 7 天沒備份提醒主控；
 //                    小碳的財務異常提醒主控（已完成卻沒報酬的趟次、勞報單即將/已經逾期未簽名）。
 //                    用 push_log 去重（同一天只會發一次），且 16 點以前不動作，所以就算網址被別人呼叫也不會重複打擾。
+//   GET  ?op=briefing → 每天一次的排程（vercel.json，台北時間約07:00）：小碳晨報，彙整未來14天排班
+//                    衝突＋財務異常數字，呼叫Claude寫成一小段口語摘要，存進carbon_briefings，由
+//                    小金在當天第一次語音對話時念給主控聽（見js/voice.js）。只在6~10點之間動作。
 // 通知內容只放路線與日期，不放店名、金額、電話（會顯示在鎖定畫面上）。
 const webpush = require('web-push');
 const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
+const Anthropic = require('@anthropic-ai/sdk');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
@@ -97,6 +101,98 @@ async function claim(key) {
   return !error; // 已經有同一個 key（唯一鍵衝突）就代表今天發過了
 }
 
+// 財務異常數字，下午的異常推播（runCron）跟早上的晨報（runBriefingCron）共用同一套算法，
+// 避免兩個地方各寫一份、以後改規則漏改。範圍、取捨原因見runCron()裡的註解。
+async function computeAuditCounts(today) {
+  const monthStart = today.slice(0, 7) + '-01';
+  const { data: tripRows, error: tripErr } = await supabase.from('assignments')
+    .select('published, fare, payroll_fare_snapshot, extra_pay')
+    .eq('status', 'completed').gte('trip_date', monthStart).lte('trip_date', today);
+  if (tripErr) throw new Error(tripErr.message);
+  const noPay = (tripRows || []).filter(a => a.published !== false &&
+    ((Number(a.payroll_fare_snapshot ?? a.fare) || 0) + (Number(a.extra_pay) || 0)) <= 0).length;
+
+  const { data: stRows, error: stErr } = await supabase.from('statements')
+    .select('period_end').eq('status', 'awaiting_signature').not('period_end', 'is', null);
+  if (stErr) throw new Error(stErr.message);
+  const todayD = new Date(today + 'T00:00:00');
+  let dueSoon = 0, overdue = 0;
+  (stRows || []).forEach(s => {
+    const days = Math.floor((todayD - new Date(s.period_end + 'T00:00:00')) / 86400000);
+    if (days >= 14) overdue++; else if (days >= 10) dueSoon++;
+  });
+  return { noPay, overdue, dueSoon };
+}
+
+// 未來14天：夥伴已回報請假、但班表還是排了這天的衝突數——跟前端computeScheduleConflicts()
+// 同一套邏輯，只是這裡沒有state.data可以用，直接查資料庫。只回傳數字＋受影響的夥伴姓名
+// （晨報要講「誰」比較有用），不回傳完整明細。
+async function computeScheduleConflictInfo(today, endDate) {
+  const { data: unavail, error: uErr } = await supabase.from('driver_unavailabilities')
+    .select('driver_id, date').gte('date', today).lte('date', endDate);
+  if (uErr) throw new Error(uErr.message);
+  if (!unavail || !unavail.length) return { count: 0, names: [] };
+  const { data: asg, error: aErr } = await supabase.from('assignments')
+    .select('driver_id, trip_date').neq('status', 'cancelled').eq('published', true)
+    .gte('trip_date', today).lte('trip_date', endDate);
+  if (aErr) throw new Error(aErr.message);
+  const asgSet = new Set((asg || []).map(a => a.driver_id + '|' + a.trip_date));
+  const hitDriverIds = new Set();
+  unavail.forEach(u => { if (asgSet.has(u.driver_id + '|' + u.date)) hitDriverIds.add(u.driver_id); });
+  if (!hitDriverIds.size) return { count: 0, names: [] };
+  const { data: drivers, error: dErr } = await supabase.from('drivers').select('id, name').in('id', [...hitDriverIds]);
+  if (dErr) throw new Error(dErr.message);
+  return { count: hitDriverIds.size, names: (drivers || []).map(d => d.name).filter(Boolean) };
+}
+
+async function generateBriefingText(facts) {
+  if (!process.env.ANTHROPIC_API_KEY) return null; // 金鑰還沒設定就不產生，等設定好下次排程自然會補上
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const msg = await anthropic.beta.messages.create({
+    model: 'claude-opus-5-5',
+    max_tokens: 512,
+    output_config: { effort: 'low' }, // 晨報只是把算好的數字講成一段話，不需要深度推理，effort低一點省成本
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    system: `你是物流車隊系統的AI特助「小碳」。根據下面今天系統算好的事實，用繁體中文（台灣）寫一段150字以內、口語、適合語音助理小金早上開場念給老闆聽的晨報。
+規則：
+- 只能根據下面提供的事實，不能編造裡面沒有的人名、數字、日期。
+- 語氣簡短親切，像細心的特助跟老闆簡單報告今天該注意什麼，不要用條列符號，寫成一小段好讀的話。
+- 如果事實裡顯示一切正常、沒有異常，就直接說一切正常、沒有需要特別注意的，不要硬湊內容。
+- 不要提到「Claude」或任何底層模型名稱，你就是「小碳」。`,
+    messages: [{ role: 'user', content: facts }]
+  });
+  if (msg.stop_reason === 'refusal') return null;
+  const text = (msg.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  return text || null;
+}
+
+async function runBriefingCron() {
+  const now = taipeiNow(), hour = now.getUTCHours();
+  if (hour < 6 || hour >= 10) return { skipped: 'out of window' };
+  const today = ymdOf(now);
+  if (!(await claim('briefing:' + today))) return { skipped: 'already done' };
+
+  const endDate = ymdOf(addDaysTpe(now, 13));
+  const [audit, conflict] = await Promise.all([computeAuditCounts(today), computeScheduleConflictInfo(today, endDate)]);
+
+  const factLines = [`今天日期：${today}`];
+  factLines.push(conflict.count ? `未來14天有${conflict.count}位夥伴請假跟班表對不上（${conflict.names.join('、')}）` : '未來14天沒有請假跟班表對不上的衝突');
+  factLines.push(audit.noPay ? `本月有${audit.noPay}趟已完成卻沒有報酬` : '本月已完成的任務都有正常報酬');
+  factLines.push(audit.overdue ? `有${audit.overdue}份勞報單已經超過2週未簽名` : null);
+  factLines.push(audit.dueSoon ? `有${audit.dueSoon}份勞報單即將在4天內到期` : null);
+  if (!audit.overdue && !audit.dueSoon) factLines.push('沒有勞報單簽名逾期或即將到期的問題');
+
+  const facts = factLines.filter(Boolean).join('\n');
+  let text;
+  try { text = await generateBriefingText(facts); } catch (e) { console.error('晨報生成失敗:', e.message); text = null; }
+  if (!text) return { skipped: 'generate failed or no api key' };
+
+  const { error } = await supabase.from('carbon_briefings').upsert({ briefing_date: today, text }, { onConflict: 'briefing_date' });
+  if (error) throw new Error(error.message);
+  return { ok: true, facts };
+}
+
 async function runCron() {
   const now = taipeiNow(), hour = now.getUTCHours();
   if (hour < 16) return { skipped: 'too early' };
@@ -144,24 +240,7 @@ async function runCron() {
   //    tripBilling()試算的複雜串接邏輯，在這支獨立的伺服器端函式裡重寫一份風險太高，
   //    容易跟前端算法兜不起來、吃力不討好；真正要查完整異常還是要去「小碳任務」看）。
   if (await claim('audit:' + today)) {
-    const monthStart = today.slice(0, 7) + '-01';
-    const { data: tripRows, error: tripErr } = await supabase.from('assignments')
-      .select('published, fare, payroll_fare_snapshot, extra_pay')
-      .eq('status', 'completed').gte('trip_date', monthStart).lte('trip_date', today);
-    if (tripErr) throw new Error(tripErr.message);
-    const noPay = (tripRows || []).filter(a => a.published !== false &&
-      ((Number(a.payroll_fare_snapshot ?? a.fare) || 0) + (Number(a.extra_pay) || 0)) <= 0).length;
-
-    const { data: stRows, error: stErr } = await supabase.from('statements')
-      .select('period_end').eq('status', 'awaiting_signature').not('period_end', 'is', null);
-    if (stErr) throw new Error(stErr.message);
-    const todayD = new Date(today + 'T00:00:00');
-    let dueSoon = 0, overdue = 0;
-    (stRows || []).forEach(s => {
-      const days = Math.floor((todayD - new Date(s.period_end + 'T00:00:00')) / 86400000);
-      if (days >= 14) overdue++; else if (days >= 10) dueSoon++;
-    });
-
+    const { noPay, overdue, dueSoon } = await computeAuditCounts(today);
     const parts = [];
     if (noPay) parts.push(noPay + '趟已完成卻沒有報酬');
     if (overdue) parts.push(overdue + '份勞報單已超過2週未簽名');
@@ -185,6 +264,9 @@ module.exports = async (req, res) => {
     if (op === 'cron' && req.method === 'GET') {
       await initPush();
       return res.status(200).json(await runCron());
+    }
+    if (op === 'briefing' && req.method === 'GET') {
+      return res.status(200).json(await runBriefingCron());
     }
     if (op === 'send' && req.method === 'POST') {
       const claims = authOf(req);

@@ -489,10 +489,13 @@ async function voiceToolBrowseInfo(args) {
   try { return await handler(args || {}); } catch (e) { return '查詢時發生錯誤，請稍後再試。'; }
 }
 
-function voiceSystemInstruction() {
-  return voiceIsAdminMode() ? voiceSystemInstructionAdmin() : voiceSystemInstructionDriver();
+function voiceSystemInstruction(briefingText) {
+  return voiceIsAdminMode() ? voiceSystemInstructionAdmin(briefingText) : voiceSystemInstructionDriver();
 }
-function voiceSystemInstructionAdmin() {
+// briefingText：今天的小碳晨報（voiceStart()抓到的話才會有值，一天只在第一次對話時
+// 傳進來一次，見localStorage的fleet_briefing_greeted_日期這個去重機制），有值的話
+// 要求小金開場先念晨報，沒有就跟平常一樣直接進入待命狀態。
+function voiceSystemInstructionAdmin(briefingText) {
   const wd = '日一二三四五六'[new Date().getDay()];
   // 2026-10-29使用者回報：很多中文姓名還是查不到。之前的修法都是在「JS字串比對」
   // 這一層補強（雙向比對、找共用字的候選名單），但JS字串比對本來就不懂同音字——
@@ -510,11 +513,15 @@ function voiceSystemInstructionAdmin() {
   // 主題也能聊到——真的要看最新/完整內容，還是可以呼叫那個工具重新查一次。
   const activeAnnouncements = (state.data.announcements || []).filter(a => a.active);
   const announcementsText = activeAnnouncements.length ? `\n\n目前上架中的公告（算是你上班前該知道的公司資訊，Ellis聊到相關話題時可以主動提起，不用等Ellis特別問）：${activeAnnouncements.map(a => `「${a.title}」：${a.content}`).join('；')}。` : '';
+  // 2026-10-30：小碳晨報（voiceStart()傳進來的briefingText，一天只會有值一次，
+  // 見js/voice.js的localStorage去重機制）——這不是「背景知識」，是真的要你開場主動
+  // 講出來的內容，所以特別獨立成一段強制指示，不是放進可聊可不聊的announcementsText。
+  const briefingInstruction = briefingText ? `\n\n⚠️今天的小碳晨報（你們今天還沒對話過，這通電話一開始、使用者第一次開口之前，你要主動先把下面這段完整念給Ellis聽，念完再自然地問有什麼可以幫忙的，不用等Ellis先開口）：「${briefingText}」` : '';
   return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切專業、像個得力
 助理。今天是${todayStr()}（星期${wd}）。
 
 跟你對話的主控（公司管理者）本人名字是Ellis，稱呼他、或跟他提到他本人的時候
-一律講「Ellis」，不要講「主控」這種稱呼。
+一律講「Ellis」，不要講「主控」這種稱呼。${briefingInstruction}
 
 你有一位後台同事叫「小碳」，是Ellis的AI特助，平常自己會做財務稽核（掃過所有
 通路跟所有夥伴，找出請款／報酬可能有問題的地方）、排班檢查（自動延續下週
@@ -1195,6 +1202,20 @@ async function voiceStart() {
   _voiceState = { closed: false, aiSpeaking: false, nextPlayTime: 0 };
   voiceFabSetActive(true);
   voiceRenderOverlay('準備中…', false);
+  // 小碳晨報：一天只在「今天第一次開始語音對話」時抓一次、讓小金主動念出來（見
+  // voiceSystemInstructionAdmin()的briefingInstruction），用localStorage記錄今天
+  // 念過了沒，避免同一天開好幾次語音對話、每次都重複念同一段。抓不到（伺服器還沒
+  // 排程、金鑰沒設定、今天沒生成）就當作沒有，不擋正常語音功能啟動。
+  let briefingText = null, briefingGreetKey = null;
+  if (voiceIsAdminMode()) {
+    try {
+      briefingGreetKey = 'fleet_briefing_greeted_' + todayStr();
+      if (!localStorage.getItem(briefingGreetKey)) {
+        const briefing = await fetchTodayBriefing();
+        if (briefing && briefing.text) briefingText = briefing.text;
+      }
+    } catch (e) {}
+  }
   try {
     const auth = getStoredAuth();
     if (!auth) throw new Error('請先登入');
@@ -1214,11 +1235,12 @@ async function voiceStart() {
     _voiceState.ws = ws;
 
     ws.onopen = () => {
+      if (briefingText && briefingGreetKey) { try { localStorage.setItem(briefingGreetKey, '1'); } catch (e) {} }
       ws.send(JSON.stringify({
         setup: {
           model: VOICE_MODEL,
           generationConfig: { responseModalities: ['AUDIO'] },
-          systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
+          systemInstruction: { parts: [{ text: voiceSystemInstruction(briefingText) }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
             ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN, VOICE_FN_ASK_CARBON]
             : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER] }]
