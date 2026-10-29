@@ -100,13 +100,13 @@ const VOICE_FN_BROWSE_INFO_DRIVER = {
 };
 const VOICE_FN_BROWSE_INFO_ADMIN = {
   name: 'browse_info',
-  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）。',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, 或 undelivered_stops' },
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, 或 undelivered_stops' },
     keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info的夥伴姓名），依topic決定要不要填' },
     month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings可以用，沒講就用這個月' },
     minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' },
-    date: { type: 'STRING', description: 'YYYY-MM-DD，只有undelivered_stops會用，沒講就查今天' }
+    date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
   }, required: ['topic'] }
 };
 
@@ -276,6 +276,24 @@ const VOICE_TOPICS_ADMIN = {
   },
   routes_list: async args => voiceFindRoute((args && args.keyword) || '', true),
   route_info: async args => voiceFindRoute((args && args.keyword) || '', true),
+  // 2026-10-29使用者回報：問「明天陳泰成R5早上是誰在跑」小金說不知道——之前的
+  // route_info只回傳路線本身的靜態資料（出發點/班次/店點數/金額），沒有「哪一天
+  // 由誰負責跑」這件事，因為那是assignments表的資料（路線+日期才決定是誰），
+  // 不是路線本身的屬性。新增這個主題直接查。用voiceFindSingleRoute()（跟
+  // goto_screen共用同一套「完全相符才直接查、模糊相符要先確認」邏輯）鎖定路線，
+  // 再用日期去assignments裡找當天負責的夥伴。
+  route_driver: async args => {
+    const found = voiceFindSingleRoute((args && args.keyword) || '');
+    if (found.error) return found.error;
+    const date = (args && args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) ? args.date : todayStr();
+    let assignments;
+    try { assignments = await fetchAssignmentsInRange(date, date); } catch (e) { return '查詢時發生錯誤，請稍後再試。'; }
+    const a = assignments.find(x => x.routeId === found.entity.id && !x.isSupport && x.published !== false && x.status !== 'cancelled');
+    const label = routeDisplayName(found.entity.name);
+    if (!a) return `${date} ${label}目前沒有排定夥伴。`;
+    const statusText = a.status === 'completed' ? '（已完成）' : a.status === 'in_progress' ? '（進行中）' : '';
+    return `${date} ${label}是${driverName(a.driverId)}在跑${statusText}。`;
+  },
   drop_point_info: async args => voiceFindDropPoint((args && args.keyword) || ''),
   channel_info: async args => voiceFindChannel((args && args.keyword) || '', true),
   channel_revenue: async args => {
@@ -378,9 +396,10 @@ function voiceSystemInstructionAdmin() {
   不會真的改動任何資料。
 - browse_info：問路線、店點、通路（含費率）、營收、公告這類目錄/營運資料，問
   「有哪些夥伴報酬超過OO元」這種條件篩選，問某位夥伴的匯款銀行資訊（要匯款時
-  用），或問「還有哪些店沒送完」，就呼叫這個，topic要用browse_info工具說明裡
-  列出的其中一個，不要自己亂編topic名稱。查到銀行帳號的時候，數字要一個一個
-  唸清楚（例如「0、2、1、0、1、8」），不要唸成一長串數字含糊帶過。
+  用），問「某條路線某一天是誰在跑」，或問「還有哪些店沒送完」，就呼叫這個，
+  topic要用browse_info工具說明裡列出的其中一個，不要自己亂編topic名稱。查到
+  銀行帳號的時候，數字要一個一個唸清楚（例如「0、2、1、0、1、8」），不要唸成
+  一長串數字含糊帶過。
 這幾個工具以外（例如詳細勞報單/請款單明細、系統設定），你看不到，被問到就老實
 說看不到、建議主控自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的時候，也
 照實說查詢失敗，不要自己編一個答案出來。
