@@ -35,17 +35,49 @@ const VOICE_FN_REPORT_UNAVAILABLE = {
     required: ['rawText']
   }
 };
+// 2026-10-29新增：使用者反應問「這週要跑什麼任務」「這個月賺多少」都被打槍說看不到——
+// 其實前端本來就有這些資料（state.data），只是一開始系統指示寫死「不能查」。加三個
+// 唯讀查詢工具，執行完直接回傳文字結果讓Gemini唸出來。這些都只讀資料、不寫資料庫，
+// 跟report_unavailable那種會改資料的工具不一樣，不需要額外的人工確認關卡。
+const VOICE_FN_GET_MY_TASKS = {
+  name: 'get_my_tasks',
+  description: '查詢使用者自己本人（目前登入這支手機的夥伴）的任務安排，不是查別人的。range是today（今天）、week（這週，週一到週日）或month（這個月），聽不出來就用week。',
+  parameters: { type: 'OBJECT', properties: { range: { type: 'STRING', description: 'today, week, 或 month' } }, required: ['range'] }
+};
+const VOICE_FN_GET_MY_EARNINGS = {
+  name: 'get_my_earnings',
+  description: '查詢使用者自己本人（目前登入這支手機的夥伴）的報酬/薪資，不是查別人的。month格式YYYY-MM，沒講就不用填，預設查這個月。',
+  parameters: { type: 'OBJECT', properties: { month: { type: 'STRING', description: 'YYYY-MM格式，選填' } } }
+};
+const VOICE_FN_GET_WEATHER = {
+  name: 'get_weather',
+  description: '查詢天氣。沒有指定地點就查公司所在地的天氣。',
+  parameters: { type: 'OBJECT', properties: { location: { type: 'STRING', description: '地點名稱，選填，例如「台北」「高雄」' } } }
+};
 
 function voiceSystemInstruction() {
   const wd = '日一二三四五六'[new Date().getDay()];
+  // 2026-10-29使用者要求：賈維斯要知道自己現在是在哪個帳號裡講話（例如在小沈的手機
+  // 上就要知道在跟小沈說話、只能讀小沈自己的資料；換一支手機、換成漢祥登入，就只能讀
+  // 漢祥的）。直接把目前登入這支手機的夥伴姓名寫進系統指示，而不是讓它自己瞎猜。
+  const who = (typeof driverName === 'function' && driverName(state.activeDriverId)) || '這位夥伴';
   return `你是物流車隊系統「賈維斯」語音助理，只講中文（台灣），語氣親切自然、像個熟悉的
 同事。今天是${todayStr()}（星期${wd}）。
 
+現在跟你說話的是夥伴本人「${who}」——這支手機就是${who}登入的帳號，下面提到的「使用者」
+都是指${who}這一個人，不是別人。查任務、查報酬、請假登記，一律只針對${who}自己，絕對
+不要查到或講到其他夥伴的資料（你本來也看不到別人的，不用假裝看得到）。如果使用者問
+「你知道我是誰嗎」之類的，可以直接說出「${who}」這個名字，不用裝作不知道。
+
 你是個全方位的語音小幫手：平常可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次
-都把話題拉回工作。但你沒有即時上網查資料、也看不到這個系統裡的任何排班/薪資/其他夥伴
-資料的能力——被問到即時天氣、新聞這類需要即時資訊的問題，要老實說自己看不到即時資料、
-沒辦法回答，不要瞎編答案；也不要承諾或編造任何系統裡沒有的具體資訊（例如確切的排班
-結果、金額、別人的狀況）。
+都把話題拉回工作。你有以下幾個工具可以用，該用就直接呼叫，不要說自己做不到：
+- get_my_tasks：使用者問「我這週/這個月/今天要跑什麼」就呼叫這個。
+- get_my_earnings：使用者問「我這個月賺多少」「報酬多少」就呼叫這個。
+- get_weather：使用者問天氣就呼叫這個。
+- report_unavailable：使用者說要請假/不能排班就呼叫這個（詳見下方規則）。
+這幾個工具以外，你看不到系統裡其他資料（例如別的夥伴的狀況、確切的公司財務數字），
+被問到就老實說看不到、不要瞎編；工具查詢失敗或查不到的時候，也照實跟使用者說查詢
+失敗，不要自己編一個答案出來。
 
 除了聊天之外，你還有一個正式功能：聽到夥伴說要請假或某天不能排班時，換算出確切日期後
 呼叫report_unavailable這個工具；不確定日期就把date留空，不要自己亂猜。
@@ -58,6 +90,54 @@ function voiceSystemInstruction() {
 電話或傳LINE給主控確認」，講完提醒才呼叫工具；平常（下週的日期）就不用講這段提醒，
 直接簡短回應（例如「好，幫你記下週三請假」）然後呼叫工具即可，不用等待使用者口頭再
 確認一次——確認這件事系統會另外跳畫面給使用者看，不是你的責任。`;
+}
+
+function voiceWeekRange(today) {
+  const d = new Date(today + 'T00:00:00');
+  const dow = d.getDay() === 0 ? 7 : d.getDay(); // 週一=1...週日=7
+  return { start: ymd(addDays(today, 1 - dow)), end: ymd(addDays(today, 7 - dow)) };
+}
+function voiceToolGetMyTasks(args) {
+  const dId = state.activeDriverId;
+  const range = (args && args.range) || 'week';
+  const today = todayStr();
+  let start = today, end = today, label = '今天';
+  if (range === 'week') { const w = voiceWeekRange(today); start = w.start; end = w.end; label = '這週'; }
+  else if (range === 'month') { start = today.slice(0, 7) + '-01'; end = monthEndStr(today.slice(0, 7)); label = '這個月'; }
+  const list = (state.data.assignments || []).filter(a =>
+    a.driverId === dId && !a.isSupport && a.published !== false && a.status !== 'cancelled' && a.date >= start && a.date <= end
+  ).sort((a, b) => a.date.localeCompare(b.date) || assignmentShiftKey(a) - assignmentShiftKey(b));
+  if (!list.length) return `${label}（${start}到${end}）沒有排定的任務。`;
+  const lines = list.map(a => `${a.date} ${a.shift === 'AM' ? '早班' : a.shift === 'PM' ? '午班' : (a.shift || '')} ${routeName(a.routeId)}${a.status === 'completed' ? '（已完成）' : ''}`);
+  return `${label}（${start}到${end}）共有${list.length}趟任務：` + lines.join('；');
+}
+function voiceToolGetMyEarnings(args) {
+  const dId = state.activeDriverId;
+  const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : todayStr().slice(0, 7);
+  const r = driverMonthly(dId, month);
+  return `${month}目前已完成${r.trips.length}趟任務，報酬合計約${Math.round(r.net)}元（還沒撥款的部分以月結單正式結算為準，可能會有些微差異）。`;
+}
+async function voiceToolGetWeather(args) {
+  try {
+    const loc = (args && args.location) || '';
+    let lat, lon, label;
+    if (loc) {
+      const gr = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&name=' + encodeURIComponent(loc));
+      const gj = await gr.json();
+      const hit = gj.results && gj.results[0];
+      if (!hit) return `查不到「${loc}」這個地點的天氣資料。`;
+      lat = hit.latitude; lon = hit.longitude; label = hit.name;
+    } else {
+      const o = (state.data.origins || []).find(x => x.lat != null && x.lng != null);
+      if (o) { lat = o.lat; lon = o.lng; label = o.label || o.address || '公司所在地'; }
+      else { lat = 25.0330; lon = 121.5654; label = '台北'; } // 系統裡沒有座標資料時的保底預設值
+    }
+    const wr = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,precipitation,weather_code,wind_speed_10m`);
+    const wj = await wr.json();
+    const cur = wj.current;
+    if (!cur) return '查詢天氣失敗，請稍後再試。';
+    return `${label}目前氣溫約${Math.round(cur.temperature_2m)}度，${cur.precipitation > 0 ? '目前正在下雨' : '目前沒有下雨'}，風速約每小時${Math.round(cur.wind_speed_10m)}公里。`;
+  } catch (e) { return '查詢天氣時發生錯誤，請稍後再試。'; }
 }
 
 function voiceSupported() {
@@ -164,6 +244,18 @@ function voiceFail(message) {
   if (!_voiceState) return; // 已經收尾過了，不要重複跳錯誤訊息
   voiceStop();
   alert(message);
+}
+
+// 2026-10-29使用者回報：連續對話中大約15秒就會被強制結束。查了才發現這個計時器
+// 第一版是「設定一次、連線後30秒不管有沒有在講話都砍掉」，不是真正的「太久沒反應
+// 才算逾時」——完全不適合現在這種可以一直聊下去的全方位助理。改成每次有訊息往來
+// 就重新計時，真的是整整60秒完全沒有任何互動（使用者沒講話、AI也沒回應）才會自動
+// 結束，避免忘記關掉、白白耗用額度，同時也不會打斷正在進行中的對話。
+const VOICE_INACTIVITY_MS = 60000;
+function resetInactivityTimer() {
+  if (!_voiceState) return;
+  clearTimeout(_voiceState.timeoutTimer);
+  _voiceState.timeoutTimer = setTimeout(() => voiceFail('太久沒有互動，語音助理自動結束了。'), VOICE_INACTIVITY_MS);
 }
 
 // ---------- 懸浮小助手（2026-10-29，使用者要求：不要把語音功能藏在面板裡，
@@ -316,13 +408,14 @@ async function voiceStart() {
           model: VOICE_MODEL,
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
-          tools: [{ functionDeclarations: [VOICE_FN_REPORT_UNAVAILABLE] }]
+          tools: [{ functionDeclarations: [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER] }]
         }
       }));
     };
     ws.onerror = () => { console.error('語音WebSocket錯誤', ws.url); voiceFail('語音連線發生錯誤，請稍後再試。如果一直這樣，請把瀏覽器主控台的錯誤訊息告訴工程師。'); };
     ws.onclose = ev => { console.error('語音WebSocket關閉', ev.code, ev.reason); if (_voiceState && !_voiceState.closed) voiceFail(`語音連線中斷（code ${ev.code}${ev.reason ? '：' + ev.reason : ''}）。`); };
     ws.onmessage = async ev => {
+      resetInactivityTimer(); // 任何一則訊息都代表連線還活著、有在互動，重新計時（見下方timeoutTimer的說明）
       let msg;
       try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
 
@@ -332,14 +425,20 @@ async function voiceStart() {
         return;
       }
       if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls)) {
-        msg.toolCall.functionCalls.forEach(fc => {
-          try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: 'ok' } }] } })); } catch (e) {}
+        for (const fc of msg.toolCall.functionCalls) {
+          let resultText = 'ok';
+          try {
+            if (fc.name === 'get_my_tasks') resultText = voiceToolGetMyTasks(fc.args || {});
+            else if (fc.name === 'get_my_earnings') resultText = voiceToolGetMyEarnings(fc.args || {});
+            else if (fc.name === 'get_weather') resultText = await voiceToolGetWeather(fc.args || {});
+          } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
+          try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
           if (fc.name === 'report_unavailable') {
             const args = fc.args || {};
             voiceStop();
             showVoiceIntentConfirmCard({ type: 'leave', date: args.date || '', rawText: args.rawText || '' });
           }
-        });
+        }
         return;
       }
       if (msg.serverContent) {
@@ -358,8 +457,7 @@ async function voiceStart() {
       }
     };
 
-    // 30秒內沒有結果就自動結束，避免忘記關掉、白白耗用額度
-    _voiceState.timeoutTimer = setTimeout(() => voiceFail('語音辨識逾時，請重新再試一次。'), 30000);
+    resetInactivityTimer(); // 從連線那一刻開始計時，setupComplete/每則訊息都會重新計時（見函式定義）
   } catch (e) {
     voiceFail(e.name === 'NotAllowedError' ? '沒有麥克風權限，請到手機設定開啟這個App的麥克風權限後再試一次。' : (e.message || '語音功能啟動失敗'));
   }
