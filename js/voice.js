@@ -100,13 +100,13 @@ const VOICE_FN_BROWSE_INFO_DRIVER = {
 };
 const VOICE_FN_BROWSE_INFO_ADMIN = {
   name: 'browse_info',
-  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（有哪些加油/保養申報還沒審核）。',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、store_driver（查某間店某一天是哪位夥伴配送的，例如「萬家福南港店今天下午是誰送的」，keyword填店名或代號，date選填）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（有哪些加油/保養申報還沒審核）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, 或 pending_fuel_claims' },
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, store_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, 或 pending_fuel_claims' },
     keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info/driver_profile的夥伴姓名），依topic決定要不要填' },
     month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings可以用，沒講就用這個月' },
     minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' },
-    date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
+    date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/store_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
   }, required: ['topic'] }
 };
 
@@ -294,6 +294,32 @@ const VOICE_TOPICS_ADMIN = {
     const statusText = a.status === 'completed' ? '（已完成）' : a.status === 'in_progress' ? '（進行中）' : '';
     return `${date} ${label}是${driverName(a.driverId)}在跑${statusText}。`;
   },
+  // 2026-10-30使用者回報：問「萬家福南港店今天下午是哪位夥伴配送的」小金答不出來——
+  // route_driver只能回答「這條路線是誰在跑」，沒有「這間店是哪條路線/哪位夥伴在送」
+  // 這個反過來查的功能。用voiceFindSingleDropPoint()鎖定店點，再用assignment的
+  // dropPoints[].sourceDpId（指回drop_points表的那個店點id）找出當天包含這個店
+  // 的任務是哪一趟。同一間店理論上可能同一天被早班跟午班兩條路線各送一次，所以
+  // 把符合的都列出來，不是只回傳第一筆。
+  store_driver: async args => {
+    const found = voiceFindSingleDropPoint((args && args.keyword) || '');
+    if (found.error) return found.error;
+    const date = (args && args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) ? args.date : todayStr();
+    let assignments;
+    try { assignments = await fetchAssignmentsInRange(date, date); } catch (e) { return '查詢時發生錯誤，請稍後再試。'; }
+    const label = dpLabel(found.entity);
+    const matches = [];
+    assignments.forEach(a => {
+      if (a.isSupport || a.published === false || a.status === 'cancelled') return;
+      const dp = (a.dropPoints || []).find(d => d.sourceDpId === found.entity.id);
+      if (dp) matches.push({ a, dp });
+    });
+    if (!matches.length) return `${date} ${label}目前沒有排定配送任務。`;
+    const lines = matches.map(({ a, dp }) => {
+      const statusText = dp.status === 'completed' ? '（已送達）' : dp.issueReason ? `（異常：${dp.issueReason}）` : '（尚未送達）';
+      return `${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}・${driverName(a.driverId)}${statusText}`;
+    });
+    return `${date} ${label}：` + lines.join('；') + '。';
+  },
   drop_point_info: async args => voiceFindDropPoint((args && args.keyword) || ''),
   channel_info: async args => voiceFindChannel((args && args.keyword) || '', true),
   channel_revenue: async args => {
@@ -441,8 +467,9 @@ function voiceSystemInstructionAdmin() {
   不會真的改動任何資料。
 - browse_info：問路線、店點、通路（含費率）、營收、公告這類目錄/營運資料，問
   「有哪些夥伴報酬超過OO元」這種條件篩選，問某位夥伴的匯款銀行資訊（要匯款時
-  用），問「某條路線某一天是誰在跑」，或問「還有哪些店沒送完」，就呼叫這個，
-  topic要用browse_info工具說明裡列出的其中一個，不要自己亂編topic名稱。查到
+  用），問「某條路線某一天是誰在跑」「某間店某一天是誰送的」，或問「還有哪些
+  店沒送完」，就呼叫這個，topic要用browse_info工具說明裡列出的其中一個，不要
+  自己亂編topic名稱。查到
   銀行帳號的時候，數字要一個一個唸清楚（例如「0、2、1、0、1、8」），不要唸成
   一長串數字含糊帶過。
 這幾個工具以外（例如詳細勞報單/請款單明細、系統設定），你看不到，被問到就老實
