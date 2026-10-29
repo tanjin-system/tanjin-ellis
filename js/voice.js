@@ -38,19 +38,26 @@ const VOICE_FN_REPORT_UNAVAILABLE = {
 
 function voiceSystemInstruction() {
   const wd = '日一二三四五六'[new Date().getDay()];
-  return `你是物流車隊系統「賈維斯」語音助理，只講中文（台灣）。今天是${todayStr()}（星期${wd}）。
-你唯一能做的事：聽夥伴說要請假或某天不能排班，換算出確切日期後呼叫report_unavailable這個
-工具；不確定日期就把date留空，不要自己亂猜。除此之外不要做任何其他事、不要回答跟請假排班
-無關的問題、不要承諾或編造任何系統裡沒有的資訊。
+  return `你是物流車隊系統「賈維斯」語音助理，只講中文（台灣），語氣親切自然、像個熟悉的
+同事。今天是${todayStr()}（星期${wd}）。
 
-⚠️重要：公司現行規則是星期五、六、日要回報「下週」（下星期一到星期日）的狀況，沒回報
-就視為可以照公司安排排班——所以正常情況下夥伴講的請假日期應該是下週的某一天，不是今天
-或明天。這個登記本身只是「以後排班不要排我」的註記，絕對不會自動取消今天、明天這種已經
-排定、已經發給夥伴的任務，系統沒有能力臨時改派。如果夥伴講的日期是今天或明天，呼叫工具
-之前一定要先口頭提醒：「這個時間太緊急了，光跟我說沒有用，一定要直接打電話或傳LINE給
-主控確認」，講完提醒才呼叫工具；平常（下週的日期）就不用講這段提醒，直接簡短回應
-（例如「好，幫你記下週三請假」）然後呼叫工具即可，不用等待使用者口頭再確認一次——
-確認這件事系統會另外跳畫面給使用者看，不是你的責任。`;
+你是個全方位的語音小幫手：平常可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次
+都把話題拉回工作。但你沒有即時上網查資料、也看不到這個系統裡的任何排班/薪資/其他夥伴
+資料的能力——被問到即時天氣、新聞這類需要即時資訊的問題，要老實說自己看不到即時資料、
+沒辦法回答，不要瞎編答案；也不要承諾或編造任何系統裡沒有的具體資訊（例如確切的排班
+結果、金額、別人的狀況）。
+
+除了聊天之外，你還有一個正式功能：聽到夥伴說要請假或某天不能排班時，換算出確切日期後
+呼叫report_unavailable這個工具；不確定日期就把date留空，不要自己亂猜。
+
+⚠️重要（請假相關）：公司現行規則是星期五、六、日要回報「下週」（下星期一到星期日）的
+狀況，沒回報就視為可以照公司安排排班——所以正常情況下夥伴講的請假日期應該是下週的某一
+天，不是今天或明天。這個登記本身只是「以後排班不要排我」的註記，絕對不會自動取消今天、
+明天這種已經排定、已經發給夥伴的任務，系統沒有能力臨時改派。如果夥伴講的日期是今天或
+明天，呼叫工具之前一定要先口頭提醒：「這個時間太緊急了，光跟我說沒有用，一定要直接打
+電話或傳LINE給主控確認」，講完提醒才呼叫工具；平常（下週的日期）就不用講這段提醒，
+直接簡短回應（例如「好，幫你記下週三請假」）然後呼叫工具即可，不用等待使用者口頭再
+確認一次——確認這件事系統會另外跳畫面給使用者看，不是你的責任。`;
 }
 
 function voiceSupported() {
@@ -96,7 +103,14 @@ function voiceParseRate(mimeType, fallback) {
   const m = /rate=(\d+)/.exec(mimeType || '');
   return m ? Number(m[1]) : fallback;
 }
-function voicePlayAudioChunk(audioCtx, base64, mimeType) {
+// 2026-10-29實機測試回報「我的聲音+AI的聲音重疊」——兩個原因一起修：
+// 1) 每段AI回傳的語音都呼叫src.start()立刻播放，沒有照時間排隊，如果訊息到達
+//    速度比播放速度快，後一段會疊在前一段還沒播完的時候，自己跟自己重疊。
+//    改成用一個遊標（state.nextPlayTime）把每段接在前一段後面播，不重疊、不留空隙。
+// 2) AI講話的聲音會從喇叭跑出來，手機沒戴耳機的話麥克風會直接收到，變成系統
+//    又把AI自己講的話當成「使用者在講話」送回去——改成半雙工：AI在講話的這段
+//    時間暫停送出麥克風聲音，等AI講完（真的播完，不是文字生成完就算）才恢復。
+function voicePlayAudioChunk(state, audioCtx, base64, mimeType) {
   try {
     const bin = atob(base64);
     const bytes = new Uint8Array(bin.length);
@@ -111,17 +125,20 @@ function voicePlayAudioChunk(audioCtx, base64, mimeType) {
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
     src.connect(audioCtx.destination);
-    src.start();
+    const startAt = Math.max(audioCtx.currentTime, state.nextPlayTime || 0);
+    src.start(startAt);
+    state.nextPlayTime = startAt + buffer.duration;
+    state.aiSpeaking = true; // 麥克風那邊讀這個旗標決定要不要暫停送出
   } catch (e) { console.error('播放語音回應失敗', e); }
 }
 
-function voiceStartStreamingMic(stream, audioCtx, ws) {
+function voiceStartStreamingMic(stream, audioCtx, ws, state) {
   const source = audioCtx.createMediaStreamSource(stream);
   const proc = audioCtx.createScriptProcessor(4096, 1, 1); // 用舊版API換取簡單直接可用（不用額外寄生worklet檔案）
   const mute = audioCtx.createGain(); mute.gain.value = 0; // 一定要接到destination才會持續觸發，但不能真的播出來（會變回音）
-  _voiceState.sourceNode = source; _voiceState.procNode = proc; _voiceState.muteNode = mute;
+  state.sourceNode = source; state.procNode = proc; state.muteNode = mute;
   proc.onaudioprocess = e => {
-    if (!_voiceState || ws.readyState !== WebSocket.OPEN) return;
+    if (!_voiceState || ws.readyState !== WebSocket.OPEN || state.aiSpeaking) return; // AI講話中暫停送出，避免喇叭聲被麥克風錄回去
     const input = e.inputBuffer.getChannelData(0);
     const down = voiceDownsampleTo16k(input, audioCtx.sampleRate);
     ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: voiceFloat32ToPCM16Base64(down) } } }));
@@ -194,28 +211,30 @@ function voiceFabApplyPos(fab, x, y) {
   fab.style.left = x + 'px'; fab.style.top = y + 'px'; fab.style.right = 'auto'; fab.style.bottom = 'auto';
 }
 function voiceFabWireDrag(fab) {
-  // 2026-10-29第一版把pointermove/pointerup的監聽器綁在fab自己身上，靠
-  // setPointerCapture撐著手指移出58px這顆球範圍後還能收到事件——實機測試完全拖不動，
-  // 推測是setPointerCapture在手機瀏覽器沒有確實生效（球一離開手指底下就收不到move了）。
-  // 改成拖曳開始後把move/up監聽器掛在window上，不管手指移到畫面哪裡都收得到，
-  // 這是比較保險、不依賴pointer capture是否完整支援的寫法。
-  let dragging = false, moved = false, startX = 0, startY = 0, origX = 0, origY = 0, pid = null;
-  const onMove = e => {
-    if (!dragging || e.pointerId !== pid) return;
-    const dx = e.clientX - startX, dy = e.clientY - startY;
+  // 2026-10-29：先後試過「監聽器綁在球自己身上＋setPointerCapture」、「拖曳中把
+  // Pointer Events監聽器掛到window上」，實機都回報完全拖不動——Pointer
+  // Events在手機瀏覽器這邊顯然有問題，不管用什麼方式都一樣。這版整個換掉，
+  // 直接用最原始、相容性最好的touch事件（手機）＋mouse事件（電腦測試用），
+  // 不再依賴Pointer Events/setPointerCapture這套。
+  let dragging = false, moved = false, startX = 0, startY = 0, origX = 0, origY = 0;
+  const begin = (x, y) => {
+    dragging = true; moved = false;
+    const r = fab.getBoundingClientRect();
+    origX = r.left; origY = r.top; startX = x; startY = y;
+    fab.style.animation = 'none'; // 拖曳中先停掉呼吸動畫，不然位置跟縮放動畫疊在一起會晃
+  };
+  const move = (x, y) => {
+    if (!dragging) return false;
+    const dx = x - startX, dy = y - startY;
     if (!moved && Math.hypot(dx, dy) > 6) moved = true; // 移動夠多才算拖曳，不然手抖一下就誤判成拖曳、吃掉原本要點一下的操作
-    if (!moved) return;
-    e.preventDefault();
+    if (!moved) return false;
     const p = voiceFabClamp(origX + dx, origY + dy);
     voiceFabApplyPos(fab, p.x, p.y);
+    return true;
   };
-  const onEnd = e => {
-    if (!dragging || e.pointerId !== pid) return;
+  const end = () => {
+    if (!dragging) return;
     dragging = false;
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onEnd);
-    window.removeEventListener('pointercancel', onEnd);
-    try { fab.releasePointerCapture(pid); } catch (err) {}
     fab.style.animation = '';
     if (moved) {
       const r = fab.getBoundingClientRect();
@@ -224,16 +243,16 @@ function voiceFabWireDrag(fab) {
       setTimeout(() => { fab._justDragged = false; }, 50);
     }
   };
-  fab.addEventListener('pointerdown', e => {
-    dragging = true; moved = false; pid = e.pointerId;
-    try { fab.setPointerCapture(pid); } catch (err) {}
-    const r = fab.getBoundingClientRect();
-    origX = r.left; origY = r.top; startX = e.clientX; startY = e.clientY;
-    fab.style.animation = 'none'; // 拖曳中先停掉呼吸動畫，不然位置跟縮放動畫疊在一起會晃
-    window.addEventListener('pointermove', onMove, { passive: false });
-    window.addEventListener('pointerup', onEnd);
-    window.addEventListener('pointercancel', onEnd);
-  });
+  // 觸控（手機）：touchstart不擋預設行為（維持單純點一下能正常觸發click），
+  // 真的判定成拖曳（moved=true）之後才在touchmove擋掉，避免被瀏覽器當成捲動手勢取消掉。
+  fab.addEventListener('touchstart', e => { const t = e.touches[0]; if (t) begin(t.clientX, t.clientY); }, { passive: true });
+  window.addEventListener('touchmove', e => { const t = e.touches[0]; if (t && move(t.clientX, t.clientY)) e.preventDefault(); }, { passive: false });
+  window.addEventListener('touchend', end);
+  window.addEventListener('touchcancel', end);
+  // 滑鼠（電腦瀏覽器測試用）
+  fab.addEventListener('mousedown', e => begin(e.clientX, e.clientY));
+  window.addEventListener('mousemove', e => move(e.clientX, e.clientY));
+  window.addEventListener('mouseup', end);
   window.addEventListener('resize', () => {
     if (!document.body.contains(fab) || fab.style.left === '') return; // 還沒拖過（用CSS預設右下角）就不用管
     const r = fab.getBoundingClientRect();
@@ -270,7 +289,7 @@ async function voiceStart() {
   if (_voiceState) return; // 已經在進行中
   if (!voiceSupported()) { alert('這支手機／瀏覽器不支援語音功能（需要麥克風與WebSocket）。'); return; }
   if (!navigator.onLine) { alert('請先連上網路才能使用語音功能。'); return; }
-  _voiceState = { closed: false };
+  _voiceState = { closed: false, aiSpeaking: false, nextPlayTime: 0 };
   voiceFabSetActive(true);
   voiceRenderOverlay('準備中…', false);
   try {
@@ -308,8 +327,8 @@ async function voiceStart() {
       try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
 
       if (msg.setupComplete) {
-        voiceRenderOverlay('請說話…（例如「我下週三請假」）', true);
-        voiceStartStreamingMic(stream, audioCtx, ws);
+        voiceRenderOverlay('請說話…（可以聊天、問問題，或說「我下週三請假」）', true);
+        voiceStartStreamingMic(stream, audioCtx, ws, _voiceState);
         return;
       }
       if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls)) {
@@ -325,8 +344,17 @@ async function voiceStart() {
       }
       if (msg.serverContent) {
         const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
-        parts.forEach(p => { if (p.inlineData && p.inlineData.data) voicePlayAudioChunk(audioCtx, p.inlineData.data, p.inlineData.mimeType); });
-        if (msg.serverContent.turnComplete) voiceRenderOverlay('請說話…', true);
+        parts.forEach(p => { if (p.inlineData && p.inlineData.data) { voicePlayAudioChunk(_voiceState, audioCtx, p.inlineData.data, p.inlineData.mimeType); voiceRenderOverlay('🤖 賈維斯說話中…', true); } });
+        if (msg.serverContent.turnComplete) {
+          // 不是文字生成完就恢復麥克風——等排隊的音訊真的播完（還留多少時間就等多少），
+          // 不然尾巴那幾百毫秒的喇叭聲還是會被錄進去，又重疊一次
+          const remainMs = Math.max(0, ((_voiceState.nextPlayTime || 0) - audioCtx.currentTime)) * 1000 + 150;
+          setTimeout(() => {
+            if (!_voiceState) return;
+            _voiceState.aiSpeaking = false;
+            voiceRenderOverlay('請說話…', true);
+          }, remainMs);
+        }
       }
     };
 
