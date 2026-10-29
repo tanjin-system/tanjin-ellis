@@ -282,6 +282,16 @@ function voiceSystemInstructionAdmin() {
 說看不到、建議主控自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的時候，也
 照實說查詢失敗，不要自己編一個答案出來。
 
+⚠️極重要（真實發生過的事故）：get_driver_lookup、browse_info的
+driver_bank_info這兩個工具，如果聽到的姓名在系統裡沒有完全一樣的，工具會
+回傳「最接近的是『OOO』，要查這位嗎」這種確認用的句子，不是正式查詢結果。
+遇到這種回覆，你一定要把這句確認問題完整照唸給主控聽、等主控明確回答（例如
+「對」或講出完整正確的姓名）之後，才能再呼叫一次工具去真的查數字——絕對
+不能自己猜主控說的就是工具建議的那個人，直接把數字報出來。之前發生過真實
+事故：主控問「喬治這個月薪水多少」，小金自己猜了一個接近的姓名就把（別人的）
+趟數和金額報成喬治的，主控完全看不出來查錯人，造成財務資訊誤報。姓名查詢
+寧可多問一句確認，也不要自信地報錯人、報錯錢。
+
 你平常也可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次都把話題拉回工作。
 
 ⚠️重要：你只能查資料、回答問題，不能真的去改派任務、調整排班、修改金額或登入
@@ -412,31 +422,39 @@ async function voiceToolGetFleetStatus(args) {
   text += issues.length ? `，${issues.length}趟有異常回報：` + issues.map(a => `${routeName(a.routeId)}（${driverName(a.driverId)}）`).join('、') : '，沒有異常回報';
   return text + '。';
 }
-// 2026-10-29使用者回報：查中文姓名「找不到」，查英文姓名可以——原本只有
-// 「driverName字串是夥伴姓名的子字串」這一種比對方向，如果語音辨識把中文姓名
-// 多聽/少聽了一個字（中文很多同音字，比英文容易辨識不準），比對就會直接失敗。
-// 改成雙向比對（driverName包含姓名，或姓名包含driverName都算），完全比對不到
-// 的時候再退一步找「至少共用2個字」的候選名單讓使用者確認，不要直接判死刑。
-// 語音辨識本身聽錯字沒辦法靠這裡的邏輯完全修正，這點要老實跟使用者說。
-// 抽成共用函式，get_driver_lookup跟browse_info的driver_bank_info都要用同一套
-// 比對邏輯，不要各寫一次、品質不一致。
+// 2026-10-29第一版：查中文姓名「找不到」（查英文可以）——原本只有「driverName
+// 字串是夥伴姓名的子字串」這一種比對方向，中文同音字多，語音辨識常常多聽/少聽
+// 一個字就直接比對失敗。改成雙向模糊比對，比對到唯一一個就直接當作答案採用。
+//
+// 結果出了真的事故：使用者問「喬治這個月薪水多少」，小金用模糊比對到了另一位
+// 夥伴的資料，卻照樣用「喬治」的名義把（別人的）趟數跟金額報出來，使用者完全
+// 看不出來查錯人——這是比「查不到」嚴重得多的錯誤：財務數字講錯，使用者還真的
+// 會相信。問題不是比對邏輯不夠聰明，是「模糊比對到了就直接當答案用」這個設計
+// 本身不安全。改成：
+// - 完全一模一樣的姓名才會直接採用（高信心，不用再確認）。
+// - 模糊比對到的只能當「候選」，一律要使用者口頭確認是不是這位、小金再用
+//   確認過的完整姓名重新查一次（會變成完全比對），才能真的把數字報出來——
+//   跟report_unavailable「AI只能提案、人點頭才算數」是同一個原則，只是這裡
+//   套用在「查到的是不是這個人」這一步，不是套用在「要不要寫入資料庫」。
 function voiceFindDriverByName(rawQuery) {
   const raw = (rawQuery || '').trim();
   const q = raw.replace(/[的嗎呢吧啊喔]+$/g, '') || raw; // 去掉語音常見的結尾贅字，去完變空字串就還用原字
   if (!q) return { error: '沒有聽清楚要查哪位夥伴，請再說一次姓名。' };
-  const matches = (state.data.drivers || []).filter(d => { const name = d.name || ''; return name.includes(q) || q.includes(name); });
-  if (!matches.length) {
-    const candidates = (state.data.drivers || []).filter(d => {
-      const name = d.name || '';
-      let shared = 0;
-      for (const ch of q) if (name.includes(ch)) shared++;
-      return shared >= 2;
-    });
-    if (candidates.length) return { error: `查不到「${q}」，你是不是要找：${candidates.slice(0, 5).map(d => d.name).join('、')}？` };
-    return { error: `查不到叫「${q}」的夥伴，請確認姓名（語音辨識中文姓名有時候會聽錯字，可以試著講更完整或換個講法）。` };
-  }
-  if (matches.length > 1) return { error: `有${matches.length}位夥伴的名字都包含「${q}」（${matches.map(d => d.name).join('、')}），請講更完整的姓名。` };
-  return { driver: matches[0] };
+  const drivers = state.data.drivers || [];
+  const exact = drivers.filter(d => (d.name || '') === q);
+  if (exact.length === 1) return { driver: exact[0] };
+  if (exact.length > 1) return { error: `系統裡有${exact.length}位夥伴都叫「${q}」，請提供其他資訊（例如電話末三碼）才能確認是哪一位。` };
+  const fuzzy = drivers.filter(d => { const name = d.name || ''; return name.includes(q) || q.includes(name); });
+  if (fuzzy.length === 1) return { error: `沒有完全符合「${q}」的夥伴，最接近的是「${fuzzy[0].name}」，要查這位的話，請講「對，查${fuzzy[0].name}」確認一次，講完整正確的姓名我才會真的查。` };
+  if (fuzzy.length > 1) return { error: `有${fuzzy.length}位夥伴的名字接近「${q}」（${fuzzy.map(d => d.name).join('、')}），請講出完整正確的姓名。` };
+  const candidates = drivers.filter(d => {
+    const name = d.name || '';
+    let shared = 0;
+    for (const ch of q) if (name.includes(ch)) shared++;
+    return shared >= 2;
+  });
+  if (candidates.length) return { error: `查不到「${q}」，你是不是要找：${candidates.slice(0, 5).map(d => d.name).join('、')}？請講出完整正確的姓名。` };
+  return { error: `查不到叫「${q}」的夥伴，請確認姓名（語音辨識中文姓名有時候會聽錯字，可以試著講更完整或換個講法）。` };
 }
 async function voiceToolGetDriverLookup(args) {
   const found = voiceFindDriverByName((args && args.driverName) || '');
