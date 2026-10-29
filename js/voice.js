@@ -1073,7 +1073,17 @@ async function voiceStart() {
       ws.send(JSON.stringify({
         setup: {
           model: VOICE_MODEL,
-          generationConfig: { responseModalities: ['TEXT'] },
+          // 2026-10-30實機測試：responseModalities:['TEXT']被Google直接拒絕，錯誤訊息
+          // 「The requested combination of response modalities (TEXT) is not supported by
+          // the model」——這顆Live語音模型只能輸出語音，不能只輸出文字。改成outputAudio
+          // Transcription（Live API官方文件裡「順便要一份語音輸出的文字逐字稿」的機制，
+          // setup的頂層欄位，不是放在generationConfig裡）：responseModalities維持
+          // ['AUDIO']滿足模型的要求，但下面收到訊息時完全不理會inlineData那段原生語音
+          // （不播放），改用逐字稿（serverContent.outputTranscription.text）餵給手機
+          // 內建的文字轉語音——這樣模型要求的audio輸出有滿足、但使用者真正聽到的聲音
+          // 還是手機自己的TTS引擎，不是Gemini生成的，發音準確度才有改善。
+          generationConfig: { responseModalities: ['AUDIO'] },
+          outputAudioTranscription: {},
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
             ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN]
@@ -1121,11 +1131,12 @@ async function voiceStart() {
           voiceStopSpeaking(_voiceState);
           voiceRenderOverlay('請說話…', true);
         }
-        const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
-        // TEXT模式下Gemini回傳的是文字片段（p.text），交給瀏覽器內建的文字轉語音
-        // 唸出來（voiceSpeak內部會自己排隊播放、更新狀態條），不是原生語音的PCM
-        // 音訊了（那個已經改用responseModalities:['TEXT']關掉）。
-        parts.forEach(p => { if (p.text) voiceSpeak(_voiceState, p.text); });
+        // 這裡故意完全不理會serverContent.modelTurn.parts裡的inlineData（Gemini生成的
+        // 原生語音PCM音訊）——收到了但不播放，流量會花但聲音不會真的被使用者聽到。
+        // 真正會被唸出來的是outputAudioTranscription給的逐字稿，交給手機內建的文字轉
+        // 語音（voiceSpeak內部會自己排隊播放、更新狀態條）。
+        const transcript = msg.serverContent.outputTranscription && msg.serverContent.outputTranscription.text;
+        if (transcript) voiceSpeak(_voiceState, transcript);
         if (msg.serverContent.turnComplete && voiceSynthSupported() && !window.speechSynthesis.speaking) {
           // 這個回合完全沒有講任何話（例如只呼叫了工具、沒有任何narration文字）時的保底，
           // 正常情況下voiceSpeak()排的utterance講完會自己把狀態條切回「請說話」
