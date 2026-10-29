@@ -194,7 +194,7 @@ async function voiceToolGotoScreenAdmin(args) {
 // 已經算好的事實該怎麼解讀、怎麼排優先順序」，不負責重新判斷資料對不對。
 const VOICE_FN_ASK_CARBON = {
   name: 'ask_carbon',
-  description: '把主控交辦的任務或問題轉達給後台的「小碳」（AI特助，負責財務稽核、排班這類比對判斷，跟小金是不同的助理）。主控說「叫小碳...」「請小碳...」「跟小碳說...」的時候用這個，request要填主控完整講的那句話（交辦內容本身，不要只填關鍵字或你自己的理解）。小碳想完的完整回覆會同時存進後台「小碳的建議」畫面給主控之後複查確認。',
+  description: '把主控交辦的任務或問題轉達給後台的「小碳」（AI特助，負責財務稽核、排班這類比對判斷，跟小金是不同的助理）。主控說「叫小碳...」「請小碳...」「跟小碳說...」的時候用這個，request要填主控完整講的那句話（交辦內容本身，不要只填關鍵字或你自己的理解）。小碳想完的完整回覆會同時存進後台「小碳任務」畫面給主控之後複查確認。',
   parameters: { type: 'OBJECT', properties: {
     request: { type: 'STRING', description: '主控交辦給小碳的完整內容，照原話轉述' }
   }, required: ['request'] }
@@ -233,7 +233,7 @@ async function voiceToolAskCarbon(args) {
       return '小碳處理時發生錯誤：' + (j.error || '請稍後再試') + '，不過我已經把這件事記錄下來了。';
     }
     try { await completeCarbonTask(task.id, j.summary, j.actionType, j.actionPayload); } catch (e2) {}
-    return j.summary + '（完整內容我也存到後台「小碳的建議」了）';
+    return j.summary + '（完整內容我也存到後台「小碳任務」了）';
   } catch (e) {
     try { await failCarbonTask(task.id, e.message); } catch (e2) {}
     return '轉交給小碳時連線失敗，請稍後再試。';
@@ -512,7 +512,7 @@ function voiceSystemInstructionAdmin() {
 request填主控完整講的那句話，不要自己先猜小碳會怎麼回答——小碳想完之後你
 要把回覆內容念給主控聽。小碳跟你一樣只負責想、列出來或提案，不會自己決定
 要不要發布班表、不會自動改任何金額或資料——真正拍板都是主控的事，小碳的
-完整回覆也會存進後台「小碳的建議」畫面給主控之後複查、按確認或駁回。小碳
+完整回覆也會存進後台「小碳任務」畫面給主控之後複查、按確認或駁回。小碳
 沒有自己的語音功能、不會主動開口，一定是透過你轉達；如果主控只是單純問起
 「後台」「另一個AI」「小碳」是誰，大方介紹就好，不用裝作不知道。
 

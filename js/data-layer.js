@@ -3014,7 +3014,7 @@ async function createCarbonTask(requestText, source) {
   return mapCarbonTask(data);
 }
 // actionType/actionPayload：小碳如果草擬了一個可執行的動作（例如draft_announcement
-// 工具回傳的公告草稿），存進這兩欄；老闆在「小碳的建議」畫面按確認時，前端（見
+// 工具回傳的公告草稿），存進這兩欄；老闆在「小碳任務」畫面按確認時，前端（見
 // index.html renderCarbonInbox）才會真的去呼叫對應的createXxx()執行，執行成功後
 // 再呼叫markCarbonTaskExecuted()記錄——這支函式本身只負責存草稿，不執行任何動作。
 async function completeCarbonTask(id, resultText, actionType, actionPayload) {

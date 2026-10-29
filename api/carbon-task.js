@@ -122,7 +122,7 @@ module.exports = async (req, res) => {
 
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({
-      summary: text || `我幫你草擬了一份公告「${actionPayload.title}」，完整內容在後台「小碳的建議」等你確認。`,
+      summary: text || `我幫你草擬了一份公告「${actionPayload.title}」，完整內容在後台「小碳任務」等你確認。`,
       actionType, actionPayload
     });
   } catch (e) {
