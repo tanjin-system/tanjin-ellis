@@ -2460,7 +2460,9 @@ function renderHomeDriver(c){
       </div>
       <div id="depotOverviewBox"><div class="empty">載入中…</div></div>
     </div>` : ''}
+    <div id="leaveHost"></div>
   `;
+  renderLeavePanel();
   const manualRefreshBtn = document.getElementById('manualRefreshBtn');
   if(manualRefreshBtn) manualRefreshBtn.onclick = async ()=>{
     manualRefreshBtn.disabled = true; manualRefreshBtn.textContent = '更新中…';
@@ -2479,6 +2481,69 @@ function renderHomeDriver(c){
           ${g.status==='in_progress' ? ' <span class="badge progress">已出發</span>' : ' <span class="badge pending">尚未出發</span>'}
         </div>`).join('') : '<div class="empty">同任務起點的任務今天都已完成 🎉</div>';
     });
+  }
+}
+// ---------- 夥伴請假/不可排班回報（2026-10-29，雙大腦架構賈維斯語音助理的第一塊
+// 真正可用的功能：手動表單版。語音版以後會接同一個 createDriverUnavailability()，
+// 只是來源改成source:'voice'，且要先過PWA確認卡片——這裡先把「人手動填表單送出」
+// 當作確認這件事本身，不需要再疊一層確認，跟語音那種「AI自己猜」風險不一樣。）----------
+async function renderLeavePanel(){
+  const host = document.getElementById('leaveHost');
+  if(!host) return;
+  const dId = state.activeDriverId;
+  const today = todayStr();
+  host.innerHTML = `<div class="panel">
+    <div class="toolbar"><h3 style="margin:0;">📝 請假／回報不可排班</h3>
+      <button class="btn ghost" id="leaveAddBtn" style="padding:4px 12px; font-size:12.5px;">新增</button>
+    </div>
+    <div id="leaveFormBox" style="display:none; margin-top:8px;">
+      <div class="grid3">
+        <div class="field"><label>日期</label><input id="leaveDate" type="date" min="${today}"></div>
+        <div class="field" style="grid-column: span 2;"><label>備註（選填）</label><input id="leaveNote" maxlength="100" placeholder="例如：家裡有事"></div>
+      </div>
+      <button class="btn amber" id="leaveSubmitBtn">送出</button>
+      <button class="btn ghost" id="leaveCancelBtn">取消</button>
+    </div>
+    <div id="leaveListBox" style="margin-top:10px;"><div class="empty">載入中…</div></div>
+  </div>`;
+  document.getElementById('leaveAddBtn').onclick = ()=>{
+    document.getElementById('leaveFormBox').style.display = 'block';
+    document.getElementById('leaveAddBtn').style.display = 'none';
+  };
+  document.getElementById('leaveCancelBtn').onclick = ()=>{
+    document.getElementById('leaveFormBox').style.display = 'none';
+    document.getElementById('leaveAddBtn').style.display = '';
+  };
+  document.getElementById('leaveSubmitBtn').onclick = async ()=>{
+    const date = document.getElementById('leaveDate').value;
+    const note = document.getElementById('leaveNote').value;
+    if(!date){ alert('請選擇日期'); return; }
+    try{
+      await createDriverUnavailability(dId, date, note, 'manual');
+      renderLeavePanel();
+    }catch(err){ alert(err.message); }
+  };
+  const end = new Date(Date.now() + 60*24*3600*1000).toISOString().slice(0,10);
+  try{
+    const list = await fetchDriverUnavailabilities(today, end);
+    if(state.tab!=='home' || !document.getElementById('leaveListBox')) return; // 使用者可能已經切走這一頁
+    const mine = list.filter(x=>x.driverId===dId).sort((a,b)=>a.date.localeCompare(b.date));
+    document.getElementById('leaveListBox').innerHTML = mine.length
+      ? mine.map(x=>`<div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:4px 0; border-top:1px solid var(--border);">
+          <span>${x.date}${x.note?'　'+escapeHtml(x.note):''}${x.source==='voice'?'　<span class="badge pending" style="font-size:10.5px;">語音回報</span>':''}</span>
+          <button class="btn ghost" data-leavedel="${x.id}" style="padding:2px 8px; font-size:11.5px;">刪除</button>
+        </div>`).join('')
+      : '<div class="empty">目前沒有登記請假</div>';
+    document.querySelectorAll('[data-leavedel]').forEach(b=>{
+      b.onclick = async ()=>{
+        if(!confirm('確定要取消這筆請假登記嗎？')) return;
+        try{ await deleteDriverUnavailability(b.dataset.leavedel); renderLeavePanel(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+  }catch(err){
+    const box = document.getElementById('leaveListBox');
+    if(box) box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
   }
 }
 
