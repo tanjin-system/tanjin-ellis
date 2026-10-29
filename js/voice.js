@@ -123,8 +123,8 @@ function voiceFindRoute(keyword, admin) {
   const stopCount = v ? (v.dropPointIds || []).length : 0;
   let text = `${routeDisplayName(r.name)}：出發點${r.originAddr || '—'}，${r.shift === 'AM' ? '早班' : r.shift === 'PM' ? '午班' : (r.shift || '')}，目前${stopCount}個店點`;
   if (admin && v) {
-    if (v.driverFare != null) text += `，司機報酬${Math.round(v.driverFare)}元`;
-    if (v.billingTotal != null) text += `，請款總額${Math.round(v.billingTotal)}元`;
+    if (v.driverFare != null) text += `，司機報酬${voiceMoney(v.driverFare)}`;
+    if (v.billingTotal != null) text += `，請款總額${voiceMoney(v.billingTotal)}`;
   }
   return text + '。';
 }
@@ -198,7 +198,7 @@ const VOICE_TOPICS_ADMIN = {
     let assignments;
     try { assignments = await fetchAssignmentsInRange(start, end); } catch (e) { return '查詢營收時發生錯誤，請稍後再試。'; }
     const r = channelBillingTotal(c.id, start, end, assignments);
-    return `${c.name} ${month}營收合計約${Math.round(r.total)}元（${r.contributing.length}趟已完成任務）。`;
+    return `${c.name} ${month}營收合計約${voiceMoney(r.total)}（${r.contributing.length}趟已完成任務）。`;
   },
   announcements: async () => {
     const list = (state.data.announcements || []).filter(a => a.active).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -220,7 +220,7 @@ const VOICE_TOPICS_ADMIN = {
       return { name: d.name, tripTotal: r.tripTotal, trips: r.trips.length };
     }).filter(x => x.tripTotal >= minAmount).sort((a, b) => b.tripTotal - a.tripTotal);
     if (!results.length) return `${month}沒有任何在職夥伴的報酬合計達到${minAmount}元以上。`;
-    return `${month}報酬合計達到${minAmount}元以上的夥伴共${results.length}位：` + results.map(x => `${x.name}（約${Math.round(x.tripTotal)}元，${x.trips}趟）`).join('、') + '。';
+    return `${month}報酬合計達到${minAmount}元以上的夥伴共${results.length}位：` + results.map(x => `${x.name}（約${voiceMoney(x.tripTotal)}，${x.trips}趟）`).join('、') + '。';
   },
   // 2026-10-29使用者要求：要匯款給夥伴時直接問語音助理要銀行資訊。這份資料
   // 主控本來就能在「夥伴」管理畫面看到（匯款本來就要用），跟登入密碼/驗證碼
@@ -295,7 +295,14 @@ driver_bank_info這兩個工具，如果聽到的姓名在系統裡沒有完全�
 你平常也可以自由聊天、講笑話、閒聊、回答一般常識問題，不用每次都把話題拉回工作。
 
 ⚠️重要：你只能查資料、回答問題，不能真的去改派任務、調整排班、修改金額或登入
-帳號——這些操作一律請主控自己到系統畫面上操作，你沒有、也不應該有這些權限。`;
+帳號——這些操作一律請主控自己到系統畫面上操作，你沒有、也不應該有這些權限。
+
+⚠️極重要（真實發生過的事故）：工具回傳的金額文字會長得像「25530元（兩萬五千
+五百三十元）」這樣，括號裡已經是正確的中文唸法，你口頭回答的時候直接照括號
+裡的中文唸出來就好（例如唸成「兩萬五千五百三十元」），不要自己把前面那個
+阿拉伯數字重新換算成中文——之前發生過真實事故：工具回傳的金額是對的，但
+你自己把「25530」轉換成中文口語時轉錯，多唸成「25萬5300」，講給主控聽的
+數字整整大了10倍，造成財務資訊誤報。`;
 }
 function voiceSystemInstructionDriver() {
   const wd = '日一二三四五六'[new Date().getDay()];
@@ -336,7 +343,12 @@ function voiceSystemInstructionDriver() {
 明天，呼叫工具之前一定要先口頭提醒：「這個時間太緊急了，光跟我說沒有用，一定要直接打
 電話或傳LINE給主控確認」，講完提醒才呼叫工具；平常（下週的日期）就不用講這段提醒，
 直接簡短回應（例如「好，幫你記下週三請假」）然後呼叫工具即可，不用等待使用者口頭再
-確認一次——確認這件事系統會另外跳畫面給使用者看，不是你的責任。`;
+確認一次——確認這件事系統會另外跳畫面給使用者看，不是你的責任。
+
+⚠️極重要：工具回傳的金額文字會長得像「25530元（兩萬五千五百三十元）」這樣，
+括號裡已經是正確的中文唸法，直接照括號裡的中文唸出來就好，不要自己把前面的
+阿拉伯數字重新換算成中文——之前發生過真實事故：主控端查報酬時，AI自己換算
+中文口語轉錯，把數字講大了10倍，造成財務資訊誤報。`;
 }
 
 function voiceWeekRange(today) {
@@ -350,6 +362,50 @@ function voiceWeekRange(today) {
 // renderMyEarnings同一套做法：不碰共用的state.data.assignments，直接用
 // fetchAssignmentsInRange()跟資料庫要選定區間的資料，兩個查詢工具都改成async。
 function voiceShiftLabel(shift) { return shift === 'AM' ? '早班' : shift === 'PM' ? '午班' : (shift || ''); }
+// 2026-10-29使用者回報真實事故：問「喬治這個月薪水多少」，語音助理報了255,300元，
+// 實際對照「我的報酬」「報酬結算」兩個正式畫面都是25,530元——剛好是10倍。追查過
+// 我這邊送出去的文字本身是正確的（${Math.round(r.tripTotal)}元，沒有任何乘法），
+// 33趟/完成數也對得上，所以問題應該不是出在資料查詢或算法，是Gemini把阿拉伯數字
+// 轉成中文口語唸出來的這一步算錯了——中文數字是以「萬」（1萬=10000）分級，英文/
+// 阿拉伯數字是以千分位（1,000）分級，兩種分級方式不一樣，大型語言模型把多位數
+// 轉換成中文口語時，偶爾會在「萬」這個位階算錯、多唸或少唸一位，這是中文語音AI
+// 常見的已知問題類型。既然沒辦法從我這邊修正Gemini內部怎麼做數字轉換，就不要讓它
+// 做這個轉換——所有金額的回傳文字都直接附上我自己算好的中文讀法（例如「25530元
+// （兩萬五千五百三十元）」），讓它照著唸就好，不用自己再轉換一次，大幅降低唸錯的
+// 機會。
+function voiceChineseNumber(n) {
+  n = Math.round(Number(n) || 0);
+  if (n === 0) return '零';
+  const negative = n < 0; n = Math.abs(n);
+  const digits = '零一二三四五六七八九';
+  const units = ['', '十', '百', '千'];
+  function fourDigit(num) {
+    if (num === 0) return '';
+    const str = String(num).padStart(4, '0');
+    let s = '', zeroFlag = false, started = false; // started=false時的0是補位用的前導0，不該唸出「零」，只有數字中間真的跳過的0才要唸
+    for (let i = 0; i < 4; i++) {
+      const d = Number(str[i]);
+      if (d === 0) { if (started) zeroFlag = true; continue; }
+      if (zeroFlag) { s += '零'; zeroFlag = false; }
+      s += digits[d] + units[3 - i];
+      started = true;
+    }
+    return s;
+  }
+  const yi = Math.floor(n / 100000000);
+  const wan = Math.floor((n % 100000000) / 10000);
+  const rest = n % 10000;
+  const parts = [];
+  if (yi) parts.push(fourDigit(yi) + '億');
+  if (wan) parts.push(fourDigit(wan) + '萬');
+  if (rest) { if (parts.length && rest < 1000) parts.push('零'); parts.push(fourDigit(rest)); }
+  let result = (parts.join('') || '零').replace(/^一十/, '十'); // 口語習慣唸「十五」不唸「一十五」
+  return (negative ? '負' : '') + result;
+}
+function voiceMoney(n) {
+  const r = Math.round(Number(n) || 0);
+  return `${r}元（${voiceChineseNumber(r)}元）`;
+}
 async function voiceToolGetMyTasks(args) {
   const dId = state.activeDriverId;
   const today = todayStr();
@@ -367,10 +423,10 @@ async function voiceToolGetMyTasks(args) {
   if (detailed) {
     return list.map(a => {
       const stops = (a.dropPoints || []).map((dp, i) => `${i + 1}.${dpLabel(dp)}`).join('、');
-      return `${a.date} ${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}，費用約${Math.round(tripPay(a))}元，共${(a.dropPoints || []).length}個下貨點：${stops || '（店點明細尚未排定）'}`;
+      return `${a.date} ${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}，費用約${voiceMoney(tripPay(a))}，共${(a.dropPoints || []).length}個下貨點：${stops || '（店點明細尚未排定）'}`;
     }).join('；');
   }
-  const lines = list.map(a => `${a.date} ${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}，${(a.dropPoints || []).length}個店點，費用約${Math.round(tripPay(a))}元${a.status === 'completed' ? '（已完成）' : ''}`);
+  const lines = list.map(a => `${a.date} ${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}，${(a.dropPoints || []).length}個店點，費用約${voiceMoney(tripPay(a))}${a.status === 'completed' ? '（已完成）' : ''}`);
   return `${label}（${start}到${end}）共有${list.length}趟任務：` + lines.join('；');
 }
 async function voiceToolGetMyEarnings(args) {
@@ -384,7 +440,7 @@ async function voiceToolGetMyEarnings(args) {
   } catch (e) { return '查詢報酬時發生錯誤，請稍後再試。'; }
   const r = driverMonthly(dId, month, monthAssignments);
   const netNow = r.net - (r.paid || 0);
-  return `${month}已完成${r.trips.length}趟任務，報酬合計${Math.round(r.tripTotal)}元，目前預估淨額約${Math.round(netNow)}元（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
+  return `${month}已完成${r.trips.length}趟任務，報酬合計${voiceMoney(r.tripTotal)}，目前預估淨額約${voiceMoney(netNow)}（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
 }
 async function voiceToolGetWeather(args) {
   try {
@@ -470,7 +526,7 @@ async function voiceToolGetDriverLookup(args) {
   const myToday = todays.filter(a => a.driverId === d.id && !a.isSupport && a.published !== false && a.status !== 'cancelled');
   const r = driverMonthly(d.id, month, monthAssignments);
   const todayText = myToday.length ? myToday.map(a => `${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}`).join('、') : '沒有排定任務';
-  return `${d.name}今天：${todayText}。${month}已完成${r.trips.length}趟，報酬合計約${Math.round(r.tripTotal)}元。`;
+  return `${d.name}今天：${todayText}。${month}已完成${r.trips.length}趟，報酬合計約${voiceMoney(r.tripTotal)}。`;
 }
 
 function voiceSupported() {
