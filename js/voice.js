@@ -413,6 +413,12 @@ function voiceSystemInstructionAdmin() {
   // 「猜名字」這一步從我的程式碼手上交給小金自己的判斷力，不是放寬確認的要求。
   const rosterNames = (state.data.drivers || []).filter(d => d.status === 'active').map(d => d.name).filter(Boolean);
   const rosterText = rosterNames.length ? `\n\n目前在職夥伴名單（共${rosterNames.length}位）：${rosterNames.join('、')}。使用者講的姓名如果在這份名單裡找不到完全一樣的，不要就直接放棄說查不到——你自己判斷聽到的發音最接近名單裡哪一位（中文同音字很多，語音辨識常常把字聽錯但發音通常還是接近的，這是你比死板的文字比對更擅長的地方），然後先跟主控確認「你是說OOO嗎」，等主控明確回答之後，再用名單裡那個完整正確的姓名去呼叫工具——不要自己猜完就直接把數字報出來，一定要先確認過這一步。` : '';
+  // 2026-10-30使用者要求：小金既然是前台，應該要像新進員工上班前先讀過公司資訊
+  // 一樣，主動知道現在有哪些公告，不是每次都要被動等主控特別問才查。直接把目前
+  // 上架中的公告放進系統指示當背景知識，不用呼叫browse_info的announcements
+  // 主題也能聊到——真的要看最新/完整內容，還是可以呼叫那個工具重新查一次。
+  const activeAnnouncements = (state.data.announcements || []).filter(a => a.active);
+  const announcementsText = activeAnnouncements.length ? `\n\n目前上架中的公告（算是你上班前該知道的公司資訊，主控聊到相關話題時可以主動提起，不用等主控特別問）：${activeAnnouncements.map(a => `「${a.title}」：${a.content}`).join('；')}。` : '';
   return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切專業、像個得力
 助理。今天是${todayStr()}（星期${wd}）。
 
@@ -421,7 +427,7 @@ function voiceSystemInstructionAdmin() {
 查錯人、講錯數字造成的麻煩，遠比「多問一句、慢一點」嚴重得多——工具如果回傳
 的是確認用的問句（例如「最接近的是OOO，要查這位嗎」），那就是在問你，不是
 在給你答案，你要把問句完整唸給主控聽、等明確回答之後才能再查一次拿到真正的
-答案。${rosterText}
+答案。${rosterText}${announcementsText}
 
 現在跟你說話的是主控（公司管理者）本人，不是夥伴（司機）。你有以下工具可以用，
 該用就直接呼叫，不要說自己做不到：
@@ -459,11 +465,13 @@ driver_bank_info這兩個工具，如果聽到的姓名在系統裡沒有完全�
 帳號——這些操作一律請主控自己到系統畫面上操作，你沒有、也不應該有這些權限。
 
 ⚠️極重要（真實發生過的事故）：工具回傳的金額文字會長得像「25530元（兩萬五千
-五百三十元）」這樣，括號裡已經是正確的中文唸法，你口頭回答的時候直接照括號
-裡的中文唸出來就好（例如唸成「兩萬五千五百三十元」），不要自己把前面那個
-阿拉伯數字重新換算成中文——之前發生過真實事故：工具回傳的金額是對的，但
-你自己把「25530」轉換成中文口語時轉錯，多唸成「25萬5300」，講給主控聽的
-數字整整大了10倍，造成財務資訊誤報。`;
+五百三十元）」這樣，括號裡已經是正確的中文寫法。你現在是用文字回答（系統會
+用手機內建的文字轉語音唸出來，不是你自己生成聲音），回答裡金額只能寫括號裡
+那個中文寫法（例如「兩萬五千五百三十元」），不要把前面那串阿拉伯數字也寫進
+你的回答文字裡——兩種寫法都寫出來的話，唸的時候會把同一個數字唸兩次，而且
+之前發生過真實事故：AI自己把阿拉伯數字「25530」轉換成中文口語時轉錯，多唸成
+「25萬5300」，講給主控聽的數字整整大了10倍，造成財務資訊誤報，所以阿拉伯
+數字那段完全不要寫出來，只寫中文寫法最安全。`;
 }
 function voiceSystemInstructionDriver() {
   const wd = '日一二三四五六'[new Date().getDay()];
@@ -471,11 +479,15 @@ function voiceSystemInstructionDriver() {
   // 上就要知道在跟小沈說話、只能讀小沈自己的資料；換一支手機、換成漢祥登入，就只能讀
   // 漢祥的）。直接把目前登入這支手機的夥伴姓名寫進系統指示，而不是讓它自己瞎猜。
   const who = (typeof driverName === 'function' && driverName(state.activeDriverId)) || '這位夥伴';
+  // 2026-10-30使用者要求：小金既然是前台，應該要像新進員工上班前先讀過公司資訊
+  // 一樣，主動知道現在有哪些公告，不是每次都要被動等使用者特別問才查。
+  const myAnnouncements = (state.data.announcements || []).filter(a => a.active && (a.audience !== 'selected' || a.driverIds.includes(state.activeDriverId)));
+  const announcementsText = myAnnouncements.length ? `\n\n目前公司公告（算是你上班前該知道的公司資訊，聊到相關話題時可以主動提起，不用等使用者特別問）：${myAnnouncements.map(a => `「${a.title}」：${a.content}`).join('；')}。` : '';
   return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切自然、像個熟悉的
 同事。今天是${todayStr()}（星期${wd}）。
 
 ⚠️最高原則（比任何其他規則都優先）：對任何查到的資料、數字，只要不是100%
-確定，一定要老實跟使用者確認，絕對不能把猜測的結果當成肯定的答案講出去。
+確定，一定要老實跟使用者確認，絕對不能把猜測的結果當成肯定的答案講出去。${announcementsText}
 
 現在跟你說話的是夥伴本人「${who}」——這支手機就是${who}登入的帳號，下面提到的「使用者」
 都是指${who}這一個人，不是別人。查任務、查報酬、請假登記，一律只針對${who}自己，絕對
@@ -512,9 +524,12 @@ function voiceSystemInstructionDriver() {
 確認一次——確認這件事系統會另外跳畫面給使用者看，不是你的責任。
 
 ⚠️極重要：工具回傳的金額文字會長得像「25530元（兩萬五千五百三十元）」這樣，
-括號裡已經是正確的中文唸法，直接照括號裡的中文唸出來就好，不要自己把前面的
-阿拉伯數字重新換算成中文——之前發生過真實事故：主控端查報酬時，AI自己換算
-中文口語轉錯，把數字講大了10倍，造成財務資訊誤報。`;
+括號裡已經是正確的中文寫法。你現在是用文字回答（系統會用手機內建的文字轉
+語音唸出來，不是你自己生成聲音），回答裡金額只能寫括號裡那個中文寫法（例如
+「兩萬五千五百三十元」），不要把前面那串阿拉伯數字也寫進你的回答文字裡——
+兩種寫法都寫出來的話，唸的時候會把同一個數字唸兩次，而且之前發生過真實
+事故：AI自己把阿拉伯數字轉成中文口語時轉錯，把數字講大了10倍，造成財務
+資訊誤報，所以阿拉伯數字那段完全不要寫出來，只寫中文寫法最安全。`;
 }
 
 function voiceWeekRange(today) {
@@ -741,54 +756,48 @@ function voiceFloat32ToPCM16Base64(float32Array) {
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
-function voiceParseRate(mimeType, fallback) {
-  const m = /rate=(\d+)/.exec(mimeType || '');
-  return m ? Number(m[1]) : fallback;
+// 2026-10-30使用者回報：Gemini原生語音生成（native audio）唸中文姓名常常不準
+// （「喬治」唸成「求治」），使用者的判斷是對的——發音這件事不應該交給語言模型
+// 自己即時生成語音，應該交給專門做這件事、已經被蘋果/Google養了很多年、專門
+// 優化過中文發音的文字轉語音引擎。改成cascaded架構：Gemini只負責「聽懂、想清楚
+// 要講什麼」，輸出文字（responseModalities:['TEXT']），真正「講出來」這件事交給
+// 手機瀏覽器內建的Web Speech Synthesis API（跟喚醒詞用的語音辨識是同一套API家族，
+// 一個負責聽、一個負責說）。代價是會少一點原生語音那種自然的語氣起伏，換取發音
+// 正確性——對一個要唸清楚姓名、金額的商用助理來說，這個取捨是對的。
+function voiceSynthSupported() { return !!(window.speechSynthesis && window.SpeechSynthesisUtterance); }
+let _voiceZhVoice = null;
+function voicePickZhVoice() {
+  if (!voiceSynthSupported()) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  return voices.find(v => v.lang === 'zh-TW') || voices.find(v => /^zh-(TW|HK)/i.test(v.lang || '')) || voices.find(v => (v.lang || '').toLowerCase().startsWith('zh')) || null;
 }
-// 2026-10-29實機測試回報「我的聲音+AI的聲音重疊」，改成AI講話時暫停送出麥克風
-// （半雙工）。後來使用者又回報：這樣會變成「AI講話中使用者講話也沒用、AI會一直
-// 講完」，要求真正的「使用者一開口AI就要立刻停下來」（barge-in／搶話）。這兩個
-// 需求其實互相牽制：要能被打斷，麥克風就得在AI講話時持續送出去，讓Gemini自己的
-// 語音活動偵測聽得到使用者開口；但手機沒戴耳機時，喇叭放出的AI聲音又會被同一支
-// 麥克風錄到送回去。折衷做法：
-// 1) 不再暫停送出麥克風——持續串流，讓Gemini server端自己判斷「使用者開口了，
-//    我要停下來」（Live API協定裡的serverContent.interrupted旗標）。
-// 2) 收到interrupted旗標，立刻呼叫voiceStopPlayback()把所有已經排隊/正在播放
-//    的語音全部喊停，不要讓AI講到自然的段落才停。
-// 3) 麥克風的echoCancellation（getUserMedia已經有開）是瀏覽器自己消除「喇叭聲
-//    被自己麥克風錄到」的機制，這部分效果好不好要看手機硬體/瀏覽器，我沒辦法
-//    在這裡保證——如果實測還是常常自己講話打斷自己，最確實的解法是戴耳機（喇叭
-//    聲音不會跑出來，麥克風自然收不到），這點會老實跟使用者說。
-function voicePlayAudioChunk(state, audioCtx, base64, mimeType) {
+// iOS Safari對「播放聲音」這件事卡得很緊，一定要在使用者手勢的當下觸發才會放行；
+// 如果等到WebSocket連線、Gemini真的回覆文字才第一次呼叫speak()，中間已經經過
+// 好幾次await、脫離了使用者點擊懸浮球那個手勢的時機，很可能被瀏覽器悄悄擋掉、
+// 完全沒有聲音卻不會報錯，看起來像「小金在裝啞巴」。保險做法：在voiceStart()
+// 最開頭、還沒有任何await之前，先講一個幾乎聽不到的極短音「解鎖」這個分頁的
+// 語音播放權限，之後Gemini真正的回覆才能順利播出來。
+function voiceUnlockSynth() {
+  if (!voiceSynthSupported()) return;
+  try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; u.rate = 10; window.speechSynthesis.speak(u); } catch (e) {}
+}
+function voiceSpeak(state, text) {
+  if (!text || !voiceSynthSupported()) return;
   try {
-    const bin = atob(base64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const view = new DataView(bytes.buffer);
-    const n = bytes.length >> 1;
-    const f32 = new Float32Array(n);
-    for (let i = 0; i < n; i++) f32[i] = view.getInt16(i * 2, true) / 0x8000;
-    const rate = voiceParseRate(mimeType, 24000); // 文件沒寫死輸出取樣率，優先用訊息自己附的mimeType，沒有才退回24kHz猜測值
-    const buffer = audioCtx.createBuffer(1, n, rate);
-    buffer.copyToChannel(f32, 0);
-    const src = audioCtx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(audioCtx.destination);
-    const startAt = Math.max(audioCtx.currentTime, state.nextPlayTime || 0);
-    src.start(startAt);
-    state.nextPlayTime = startAt + buffer.duration;
-    state.aiSpeaking = true; // 只用來給狀態條顯示文字，不再拿來決定麥克風要不要送出
-    if (!state.playingSources) state.playingSources = [];
-    state.playingSources.push(src);
-    src.onended = () => { const i = state.playingSources.indexOf(src); if (i >= 0) state.playingSources.splice(i, 1); };
-  } catch (e) { console.error('播放語音回應失敗', e); }
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'zh-TW';
+    if (!_voiceZhVoice) _voiceZhVoice = voicePickZhVoice();
+    if (_voiceZhVoice) u.voice = _voiceZhVoice;
+    u.onstart = () => { state.aiSpeaking = true; voiceRenderOverlay('🤖 小金說話中…（講話可以隨時打斷我）', true); };
+    u.onend = () => { if (!window.speechSynthesis.speaking) { state.aiSpeaking = false; voiceRenderOverlay('請說話…', true); } };
+    window.speechSynthesis.speak(u);
+  } catch (e) { console.error('語音合成失敗', e); }
 }
-// 使用者打斷AI時呼叫：把所有排隊中／正在播放的語音全部停掉，不要播完當下這句話
-function voiceStopPlayback(state) {
-  (state.playingSources || []).forEach(src => { try { src.onended = null; src.stop(); } catch (e) {} });
-  state.playingSources = [];
-  state.nextPlayTime = 0;
-  state.aiSpeaking = false;
+// 使用者打斷AI時呼叫：speechSynthesis.cancel()會把佇列裡還沒播的、正在播的全部
+// 清掉，不用像以前手動管理PCM音訊佇列那樣自己追蹤每一段。
+function voiceStopSpeaking(state) {
+  if (voiceSynthSupported()) { try { window.speechSynthesis.cancel(); } catch (e) {} }
+  if (state) state.aiSpeaking = false;
 }
 
 function voiceStartStreamingMic(stream, audioCtx, ws, state) {
@@ -809,6 +818,7 @@ function voiceStop() {
   if (!_voiceState) return;
   _voiceState.closed = true;
   clearTimeout(_voiceState.timeoutTimer);
+  voiceStopSpeaking(_voiceState);
   try { _voiceState.procNode && _voiceState.procNode.disconnect(); } catch (e) {}
   try { _voiceState.sourceNode && _voiceState.sourceNode.disconnect(); } catch (e) {}
   try { _voiceState.muteNode && _voiceState.muteNode.disconnect(); } catch (e) {}
@@ -1034,9 +1044,11 @@ function voiceFabSetActive(active) {
 async function voiceStart() {
   if (_voiceState) return; // 已經在進行中
   if (!voiceSupported()) { alert('這支手機／瀏覽器不支援語音功能（需要麥克風與WebSocket）。'); return; }
+  if (!voiceSynthSupported()) { alert('這支手機／瀏覽器不支援文字轉語音功能，小金沒辦法開口說話，請換一個瀏覽器再試。'); return; }
   if (!navigator.onLine) { alert('請先連上網路才能使用語音功能。'); return; }
+  voiceUnlockSynth(); // 一定要在這裡（還沒有任何await之前）呼叫，才算在使用者點擊的手勢範圍內，見函式定義的說明
   voiceWakeStop(); // 正式對話跟喚醒詞監聽不能同時佔用麥克風，先讓出來
-  _voiceState = { closed: false, aiSpeaking: false, nextPlayTime: 0 };
+  _voiceState = { closed: false, aiSpeaking: false };
   voiceFabSetActive(true);
   voiceRenderOverlay('準備中…', false);
   try {
@@ -1061,7 +1073,7 @@ async function voiceStart() {
       ws.send(JSON.stringify({
         setup: {
           model: VOICE_MODEL,
-          generationConfig: { responseModalities: ['AUDIO'] },
+          generationConfig: { responseModalities: ['TEXT'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
             ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN]
@@ -1106,20 +1118,18 @@ async function voiceStart() {
         if (msg.serverContent.interrupted) {
           // 使用者開口打斷了AI——Gemini自己偵測到的，不是我們本地猜的。立刻把正在
           // 播放/排隊中的語音全部停掉，不要播完當下這句才停。
-          voiceStopPlayback(_voiceState);
+          voiceStopSpeaking(_voiceState);
           voiceRenderOverlay('請說話…', true);
         }
         const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
-        parts.forEach(p => { if (p.inlineData && p.inlineData.data) { voicePlayAudioChunk(_voiceState, audioCtx, p.inlineData.data, p.inlineData.mimeType); voiceRenderOverlay('🤖 小金說話中…（講話可以隨時打斷我）', true); } });
-        if (msg.serverContent.turnComplete) {
-          // 不是文字生成完就改狀態條——等排隊的音訊真的播完（還留多少時間就等多少）
-          // 才顯示「請說話」，不然字跟聲音對不上
-          const remainMs = Math.max(0, ((_voiceState.nextPlayTime || 0) - audioCtx.currentTime)) * 1000 + 150;
-          setTimeout(() => {
-            if (!_voiceState) return;
-            _voiceState.aiSpeaking = false;
-            voiceRenderOverlay('請說話…', true);
-          }, remainMs);
+        // TEXT模式下Gemini回傳的是文字片段（p.text），交給瀏覽器內建的文字轉語音
+        // 唸出來（voiceSpeak內部會自己排隊播放、更新狀態條），不是原生語音的PCM
+        // 音訊了（那個已經改用responseModalities:['TEXT']關掉）。
+        parts.forEach(p => { if (p.text) voiceSpeak(_voiceState, p.text); });
+        if (msg.serverContent.turnComplete && voiceSynthSupported() && !window.speechSynthesis.speaking) {
+          // 這個回合完全沒有講任何話（例如只呼叫了工具、沒有任何narration文字）時的保底，
+          // 正常情況下voiceSpeak()排的utterance講完會自己把狀態條切回「請說話」
+          voiceRenderOverlay('請說話…', true);
         }
       }
     };
