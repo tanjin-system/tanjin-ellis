@@ -21,11 +21,11 @@
         },
         {
           "key": "Content-Security-Policy-Report-Only",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; media-src 'self' blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.io https://nominatim.openstreetmap.org https://router.project-osrm.org https://cdn.jsdelivr.net; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; report-uri /api/csp-report"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.supabase.co https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; media-src 'self' blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.io https://nominatim.openstreetmap.org https://router.project-osrm.org https://cdn.jsdelivr.net https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; report-uri /api/csp-report"
         },
         {
           "key": "Permissions-Policy",
-          "value": "camera=(self), geolocation=(self), microphone=(), payment=(), usb=(), serial=(), bluetooth=(), magnetometer=(), gyroscope=()"
+          "value": "camera=(self), geolocation=(self), microphone=(self), payment=(), usb=(), serial=(), bluetooth=(), magnetometer=(), gyroscope=()"
         }
       ]
     },
