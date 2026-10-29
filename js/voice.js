@@ -232,7 +232,7 @@ async function voiceToolAskCarbon(args) {
       try { await failCarbonTask(task.id, j.error || '未知錯誤'); } catch (e2) {}
       return '小碳處理時發生錯誤：' + (j.error || '請稍後再試') + '，不過我已經把這件事記錄下來了。';
     }
-    try { await completeCarbonTask(task.id, j.summary); } catch (e2) {}
+    try { await completeCarbonTask(task.id, j.summary, j.actionType, j.actionPayload); } catch (e2) {}
     return j.summary + '（完整內容我也存到後台「小碳的建議」了）';
   } catch (e) {
     try { await failCarbonTask(task.id, e.message); } catch (e2) {}

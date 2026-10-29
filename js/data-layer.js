@@ -3001,6 +3001,7 @@ function mapCarbonTask(row) {
   return {
     id: row.id, requestText: row.request_text, source: row.source, status: row.status,
     resultText: row.result_text || '', errorText: row.error_text || '',
+    actionType: row.action_type || null, actionPayload: row.action_payload || null, executedAt: row.executed_at,
     adminStatus: row.admin_status, reviewedAt: row.reviewed_at, createdAt: row.created_at
   };
 }
@@ -3012,9 +3013,16 @@ async function createCarbonTask(requestText, source) {
   if (error) throw new Error('建立小碳任務失敗：' + error.message);
   return mapCarbonTask(data);
 }
-async function completeCarbonTask(id, resultText) {
+// actionType/actionPayload：小碳如果草擬了一個可執行的動作（例如draft_announcement
+// 工具回傳的公告草稿），存進這兩欄；老闆在「小碳的建議」畫面按確認時，前端（見
+// index.html renderCarbonInbox）才會真的去呼叫對應的createXxx()執行，執行成功後
+// 再呼叫markCarbonTaskExecuted()記錄——這支函式本身只負責存草稿，不執行任何動作。
+async function completeCarbonTask(id, resultText, actionType, actionPayload) {
   const supabase = getSupabase();
-  const { error } = await supabase.from('carbon_tasks').update({ status: 'completed', result_text: resultText }).eq('id', id);
+  const { error } = await supabase.from('carbon_tasks').update({
+    status: 'completed', result_text: resultText,
+    action_type: actionType || null, action_payload: actionPayload || null
+  }).eq('id', id);
   if (error) throw new Error('更新小碳任務失敗：' + error.message);
 }
 async function failCarbonTask(id, errorText) {
@@ -3025,6 +3033,17 @@ async function failCarbonTask(id, errorText) {
 async function reviewCarbonTask(id, adminStatus) {
   const supabase = getSupabase();
   const { error } = await supabase.from('carbon_tasks').update({ admin_status: adminStatus, reviewed_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw new Error('更新小碳任務失敗：' + error.message);
+}
+// 老闆按「確認並發布」、前端已經成功執行完實際動作（例如createAnnouncement）之後
+// 才呼叫這個——finalPayload存的是真的拿去執行的內容（老闆可能有微調過文字），
+// 跟小碳原本的草稿可能不完全一樣，方便事後對照「小碳寫的」跟「最後真的發的」。
+async function markCarbonTaskExecuted(id, finalPayload) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('carbon_tasks').update({
+    admin_status: 'approved', reviewed_at: new Date().toISOString(),
+    executed_at: new Date().toISOString(), action_payload: finalPayload
+  }).eq('id', id);
   if (error) throw new Error('更新小碳任務失敗：' + error.message);
 }
 async function fetchCarbonTasks(limit) {

@@ -43,9 +43,24 @@ const SYSTEM_PROMPT = `你是物流車隊系統的後台虛擬特助「小碳」
 規則：
 - 如果下面有提供「目前系統裡的相關資料」，那是系統已經用程式碼算好的事實（財務稽核、排班衝突等），你只能根據這些資料回答，絕對不能編造裡面沒有的人名、金額、日期。如果老闆問的問題超出這些資料能回答的範圍，要老實說資料沒有涵蓋到、需要工程師另外處理，不要硬掰一個答案。
 - 如果老闆是單純交辦一件需要你動腦判斷或撰寫的事（例如寫一段提案、整理一段說明、排出處理順序），直接用你的判斷完成。
-- 你只能「提案」——你沒有能力、也不會真的去改資料庫、發布班表或改金額。如果老闆要求的事情需要真的動到資料，要在回答裡清楚說這部分你只能先幫忙想好內容，實際動手需要老闆或工程師到後台操作。
+- 如果老闆明確要求你「寫」「草擬」「發」一則公告給夥伴看，呼叫draft_announcement工具把標題跟內容準備好，同時用一兩句話簡短說明你準備了什麼（這段話小金會唸給老闆聽）。不要自己發布——你沒有能力，也不會真的去寫資料庫，實際發布是老闆在後台看過草稿、按確認之後系統才做的事。老闆沒有明確要求公告的話，不要呼叫這個工具。
+- 除了公告之外，你目前還沒有能力真的去改班表、改金額或改路線——如果老闆要求的是這類事情，要在回答裡清楚說這部分你只能先幫忙想法，實際動手需要老闆或工程師到後台操作。
 - 語氣像一位細心的特助在跟老闆報告，簡潔，不要用條列符號硬湊，寫成好讀的幾段話。
 - 不要在回答裡提到你是「Claude」或任何底層模型名稱，你就是「小碳」。`;
+
+const TOOLS = [{
+  name: 'draft_announcement',
+  description: '老闆明確要求撰寫/草擬一則要發布給夥伴看的公告時使用，把草稿準備好交給老闆審核，不會自己發布。',
+  input_schema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: '公告標題' },
+      content: { type: 'string', description: '公告完整內容' }
+    },
+    required: ['title', 'content'],
+    additionalProperties: false
+  }
+}];
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -82,6 +97,7 @@ module.exports = async (req, res) => {
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',
       system: SYSTEM_PROMPT,
+      tools: TOOLS,
       messages: [{ role: 'user', content: parts.join('\n\n') }]
     });
 
@@ -89,11 +105,26 @@ module.exports = async (req, res) => {
       console.error('carbon-task 被安全機制拒絕:', JSON.stringify(msg.stop_details || {}));
       return res.status(502).json({ error: '小碳無法處理這個請求（安全機制擋下），請換個方式問或找工程師看看' });
     }
-    const text = (msg.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    if (!text) return res.status(502).json({ error: 'AI沒有回傳任何內容，請稍後再試' });
+
+    const content = msg.content || [];
+    const text = content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    const toolUse = content.find(b => b.type === 'tool_use' && b.name === 'draft_announcement');
+
+    let actionType = null, actionPayload = null;
+    if (toolUse) {
+      const input = toolUse.input || {};
+      const title = typeof input.title === 'string' ? input.title.trim() : '';
+      const draftContent = typeof input.content === 'string' ? input.content.trim() : '';
+      if (title && draftContent) { actionType = 'announcement'; actionPayload = { title, content: draftContent }; }
+    }
+
+    if (!text && !actionType) return res.status(502).json({ error: 'AI沒有回傳任何內容，請稍後再試' });
 
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ summary: text });
+    return res.status(200).json({
+      summary: text || `我幫你草擬了一份公告「${actionPayload.title}」，完整內容在後台「小碳的建議」等你確認。`,
+      actionType, actionPayload
+    });
   } catch (e) {
     console.error('carbon-task 呼叫失敗:', e && e.message, e && e.status);
     return res.status(502).json({ error: '連線 Claude 失敗：' + (e && e.message ? e.message : '請稍後再試') });

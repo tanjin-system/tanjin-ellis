@@ -1751,3 +1751,14 @@ create index idx_carbon_tasks_created on carbon_tasks(created_at desc);
 alter table carbon_tasks enable row level security;
 grant select, insert, update, delete on carbon_tasks to app_admin;
 create policy admin_all on carbon_tasks for all to app_admin using (true) with check (true);
+
+-- PART 47：小碳可以草擬「實際動作」，不只是回話（2026-10-30）
+-- 使用者要求：小碳不是只能寫一段文字回覆，有些任務（例如「幫我發一則公告」）
+-- 小碳應該要把實際要寫進系統的內容準備好（草稿），老闆在「小碳的建議」畫面
+-- 微調文字、按確認，系統才真的去執行那個動作（例如發布公告）——小碳本身
+-- 還是不會自己寫資料庫，實際寫入的那一步是前端在使用者按下確認之後才做的。
+-- action_type為null代表跟原本一樣，只是一段話，沒有可執行的動作。
+alter table carbon_tasks add column action_type text;
+alter table carbon_tasks add column action_payload jsonb;
+alter table carbon_tasks add column executed_at timestamptz;
+comment on column carbon_tasks.action_type is 'null＝單純文字回覆；有值（例如announcement）代表小碳草擬了一個可以直接執行的動作，payload放在action_payload，executed_at記錄老闆按確認、系統真的執行那一刻。';

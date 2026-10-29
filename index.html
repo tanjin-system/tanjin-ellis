@@ -567,10 +567,10 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=10"></script>
+<script defer src="js/data-layer.js?v=11"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
-<script defer src="js/voice.js?v=26"></script>
+<script defer src="js/voice.js?v=27"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -7313,7 +7313,7 @@ function renderSettings(c){
 async function renderCarbonInbox(c){
   c.innerHTML = `
     <h2 class="section-title">小碳的建議</h2>
-    <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆會先進這裡，等你確認或駁回——小碳不會自己改班表、改金額或發公告，一切還是要你自己動手。</p>
+    <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆（或草擬好的公告）會先進這裡。像公告這種有草稿的，你可以直接在這裡微調文字，按「確認並發布」系統才會真的發出去；其他單純的回覆或建議，按確認只代表你看過了，小碳不會自己改班表或改金額。</p>
     <div class="panel"><button class="btn ghost" id="cbxRefresh">🔄 重新整理</button></div>
     <div id="cbxList"><div class="empty">載入中…</div></div>`;
   document.getElementById('cbxRefresh').onclick = refresh;
@@ -7331,13 +7331,32 @@ async function renderCarbonInbox(c){
     tasks.forEach(t=>{
       const okBtn = document.getElementById('cbxOk_'+t.id);
       const noBtn = document.getElementById('cbxNo_'+t.id);
+      const pubBtn = document.getElementById('cbxPub_'+t.id);
       if(okBtn) okBtn.onclick = ()=>review(t.id, 'approved');
       if(noBtn) noBtn.onclick = ()=>review(t.id, 'dismissed');
+      if(pubBtn) pubBtn.onclick = ()=>publishAnnouncement(t);
     });
   }
   async function review(id, adminStatus){
     try{ await reviewCarbonTask(id, adminStatus); await refresh(); }
     catch(err){ alert(err.message); }
+  }
+  async function publishAnnouncement(t){
+    const titleEl = document.getElementById('cbxTitle_'+t.id);
+    const contentEl = document.getElementById('cbxContent_'+t.id);
+    const title = (titleEl.value||'').trim();
+    const content = (contentEl.value||'').trim();
+    if(!title || !content){ alert('標題跟內容都要填'); return; }
+    const btn = document.getElementById('cbxPub_'+t.id);
+    btn.disabled = true; btn.textContent = '發布中…';
+    try{
+      await createAnnouncement({ title, content, audience:'all' });
+      await markCarbonTaskExecuted(t.id, { title, content });
+      await refresh();
+    }catch(err){
+      alert('發布失敗：'+err.message);
+      btn.disabled = false; btn.textContent = '✅ 確認並發布';
+    }
   }
   function renderTaskCard(t){
     const when = (t.createdAt||'').replace('T',' ').slice(0,16);
@@ -7345,6 +7364,22 @@ async function renderCarbonInbox(c){
     let body, borderColor = 'var(--border)', actions = '';
     if(t.status==='pending'){ body = `<div class="empty">小碳還在處理中…（如果一直停在這裡，可能是處理時中斷了，請重新交辦一次）</div>`; borderColor = 'var(--border)'; }
     else if(t.status==='failed'){ body = `<p style="color:var(--danger); font-size:13.5px;">⚠️ 小碳處理失敗：${escapeHtml(t.errorText||'未知錯誤')}</p>`; borderColor = 'var(--danger)'; actions = t.adminStatus==='unreviewed' ? `<button class="btn ghost" id="cbxNo_${t.id}">知道了，關閉</button>` : `<span class="badge">已關閉</span>`; }
+    else if(t.actionType==='announcement'){
+      const p = t.actionPayload || {};
+      if(t.adminStatus==='unreviewed'){
+        body = `${t.resultText?`<p style="font-size:13px; color:var(--ink-soft); margin:0 0 8px 0;">${escapeHtml(t.resultText)}</p>`:''}
+          <div class="field"><label>公告標題（可修改）</label><input id="cbxTitle_${t.id}" type="text" value="${escapeHtml(p.title||'')}"></div>
+          <div class="field"><label>公告內容（可修改）</label><textarea id="cbxContent_${t.id}" rows="5">${escapeHtml(p.content||'')}</textarea></div>`;
+        borderColor = 'var(--accent)';
+        actions = `<button class="btn" id="cbxPub_${t.id}">✅ 確認並發布</button> <button class="btn ghost" id="cbxNo_${t.id}">駁回，不發布</button>`;
+      } else {
+        body = `<div class="panel" style="margin:0;"><p style="font-weight:600; margin:0 0 4px 0;">${escapeHtml(p.title||'')}</p><p style="white-space:pre-wrap; font-size:13.5px; margin:0;">${escapeHtml(p.content||'')}</p></div>`;
+        borderColor = 'var(--border)';
+        actions = t.adminStatus==='approved'
+          ? `<span class="badge completed">✅ 已發布${t.executedAt?'（'+t.executedAt.replace('T',' ').slice(0,16)+'）':''}</span>`
+          : `<span class="badge pending">已駁回，沒有發布</span>`;
+      }
+    }
     else {
       body = `<p style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(t.resultText)}</p>`;
       borderColor = t.adminStatus==='unreviewed' ? 'var(--accent)' : 'var(--border)';
