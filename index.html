@@ -561,6 +561,7 @@
 <script defer src="js/data-layer.js?v=8"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
+<script defer src="js/voice.js?v=1"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -2494,7 +2495,10 @@ async function renderLeavePanel(){
   const today = todayStr();
   host.innerHTML = `<div class="panel">
     <div class="toolbar"><h3 style="margin:0;">📝 請假／回報不可排班</h3>
-      <button class="btn ghost" id="leaveAddBtn" style="padding:4px 12px; font-size:12.5px;">新增</button>
+      <div style="display:flex; gap:6px;">
+        <button class="btn ghost" id="leaveVoiceBtn" style="padding:4px 12px; font-size:12.5px;">🎙️ 語音</button>
+        <button class="btn ghost" id="leaveAddBtn" style="padding:4px 12px; font-size:12.5px;">新增</button>
+      </div>
     </div>
     <div id="leaveFormBox" style="display:none; margin-top:8px;">
       <div class="grid3">
@@ -2510,6 +2514,7 @@ async function renderLeavePanel(){
     document.getElementById('leaveFormBox').style.display = 'block';
     document.getElementById('leaveAddBtn').style.display = 'none';
   };
+  document.getElementById('leaveVoiceBtn').onclick = ()=> voiceStart();
   document.getElementById('leaveCancelBtn').onclick = ()=>{
     document.getElementById('leaveFormBox').style.display = 'none';
     document.getElementById('leaveAddBtn').style.display = '';
