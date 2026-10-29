@@ -100,12 +100,13 @@ const VOICE_FN_BROWSE_INFO_DRIVER = {
 };
 const VOICE_FN_BROWSE_INFO_ADMIN = {
   name: 'browse_info',
-  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）。',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, drop_point_info, channel_info, channel_revenue, announcements, 或 drivers_by_earnings' },
-    keyword: { type: 'STRING', description: '查詢關鍵字，依topic決定要不要填' },
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, 或 undelivered_stops' },
+    keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info的夥伴姓名），依topic決定要不要填' },
     month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings可以用，沒講就用這個月' },
-    minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' }
+    minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' },
+    date: { type: 'STRING', description: 'YYYY-MM-DD，只有undelivered_stops會用，沒講就查今天' }
   }, required: ['topic'] }
 };
 
@@ -220,6 +221,34 @@ const VOICE_TOPICS_ADMIN = {
     }).filter(x => x.tripTotal >= minAmount).sort((a, b) => b.tripTotal - a.tripTotal);
     if (!results.length) return `${month}沒有任何在職夥伴的報酬合計達到${minAmount}元以上。`;
     return `${month}報酬合計達到${minAmount}元以上的夥伴共${results.length}位：` + results.map(x => `${x.name}（約${Math.round(x.tripTotal)}元，${x.trips}趟）`).join('、') + '。';
+  },
+  // 2026-10-29使用者要求：要匯款給夥伴時直接問語音助理要銀行資訊。這份資料
+  // 主控本來就能在「夥伴」管理畫面看到（匯款本來就要用），跟登入密碼/驗證碼
+  // 那種系統祕密不一樣，所以可以開放；但帳號資訊單獨開一個主題，不要混在
+  // get_driver_lookup（問今天跑什麼/賺多少）裡，問別的問題不會順便就講出帳號。
+  driver_bank_info: async args => {
+    const found = voiceFindDriverByName((args && args.keyword) || '');
+    if (found.error) return found.error;
+    const d = found.driver, b = d.bank || {};
+    if (!b.bankName && !b.account) return `${d.name}目前還沒有填寫銀行資訊，請提醒他到「我的資料」補上才能匯款。`;
+    return `${d.name}的匯款資訊：戶名${b.holder || d.name}，銀行${b.bankName || '未填'}，分行${b.branch || '未填'}，帳號${b.account || '未填'}。`;
+  },
+  // 2026-10-29使用者要求：問「還有哪些店沒送完」要查得到。掃今天所有在跑的
+  // 任務，把還沒標記完成的下貨點抓出來——跟戰情室（WarRoom）判斷「完成」的
+  // 依據（dp.status==='completed'）是同一套，不是另外發明一套邏輯。
+  undelivered_stops: async args => {
+    const date = (args && args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) ? args.date : todayStr();
+    let assignments;
+    try { assignments = await fetchAssignmentsInRange(date, date); } catch (e) { return '查詢未完成店點時發生錯誤，請稍後再試。'; }
+    const active = assignments.filter(a => !a.isSupport && a.published !== false && a.status !== 'cancelled');
+    const pending = [];
+    active.forEach(a => (a.dropPoints || []).forEach(dp => {
+      if (dp.status !== 'completed') pending.push({ label: dpLabel(dp), route: routeName(a.routeId), driver: driverName(a.driverId), issue: dp.issueReason || '' });
+    }));
+    if (!pending.length) return `${date}目前所有店點都已經送完了。`;
+    const shown = pending.slice(0, 10);
+    const text = shown.map(p => `${p.label}（${p.route}・${p.driver}）${p.issue ? '，異常：' + p.issue : ''}`).join('、');
+    return `${date}還有${pending.length}個店點沒送完：` + text + (pending.length > shown.length ? `，還有${pending.length - shown.length}個沒列出，可以到戰情室看完整清單` : '') + '。';
   }
 };
 async function voiceToolBrowseInfo(args) {
@@ -244,9 +273,11 @@ function voiceSystemInstructionAdmin() {
 - get_driver_lookup：主控問某位夥伴的狀況（今天跑什麼、這個月跑幾趟/賺多少）
   就呼叫這個。
 - get_weather：主控問天氣就呼叫這個。
-- browse_info：問路線、店點、通路（含費率）、營收、公告這類目錄/營運資料，或問
-  「有哪些夥伴報酬超過OO元」這種條件篩選，就呼叫這個，topic要用browse_info
-  工具說明裡列出的其中一個，不要自己亂編topic名稱。
+- browse_info：問路線、店點、通路（含費率）、營收、公告這類目錄/營運資料，問
+  「有哪些夥伴報酬超過OO元」這種條件篩選，問某位夥伴的匯款銀行資訊（要匯款時
+  用），或問「還有哪些店沒送完」，就呼叫這個，topic要用browse_info工具說明裡
+  列出的其中一個，不要自己亂編topic名稱。查到銀行帳號的時候，數字要一個一個
+  唸清楚（例如「0、2、1、0、1、8」），不要唸成一長串數字含糊帶過。
 這幾個工具以外（例如詳細勞報單/請款單明細、系統設定），你看不到，被問到就老實
 說看不到、建議主控自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的時候，也
 照實說查詢失敗，不要自己編一個答案出來。
@@ -387,11 +418,13 @@ async function voiceToolGetFleetStatus(args) {
 // 改成雙向比對（driverName包含姓名，或姓名包含driverName都算），完全比對不到
 // 的時候再退一步找「至少共用2個字」的候選名單讓使用者確認，不要直接判死刑。
 // 語音辨識本身聽錯字沒辦法靠這裡的邏輯完全修正，這點要老實跟使用者說。
-async function voiceToolGetDriverLookup(args) {
-  const raw = ((args && args.driverName) || '').trim();
+// 抽成共用函式，get_driver_lookup跟browse_info的driver_bank_info都要用同一套
+// 比對邏輯，不要各寫一次、品質不一致。
+function voiceFindDriverByName(rawQuery) {
+  const raw = (rawQuery || '').trim();
   const q = raw.replace(/[的嗎呢吧啊喔]+$/g, '') || raw; // 去掉語音常見的結尾贅字，去完變空字串就還用原字
-  if (!q) return '沒有聽清楚要查哪位夥伴，請再說一次姓名。';
-  let matches = (state.data.drivers || []).filter(d => { const name = d.name || ''; return name.includes(q) || q.includes(name); });
+  if (!q) return { error: '沒有聽清楚要查哪位夥伴，請再說一次姓名。' };
+  const matches = (state.data.drivers || []).filter(d => { const name = d.name || ''; return name.includes(q) || q.includes(name); });
   if (!matches.length) {
     const candidates = (state.data.drivers || []).filter(d => {
       const name = d.name || '';
@@ -399,11 +432,16 @@ async function voiceToolGetDriverLookup(args) {
       for (const ch of q) if (name.includes(ch)) shared++;
       return shared >= 2;
     });
-    if (candidates.length) return `查不到「${q}」，你是不是要找：${candidates.slice(0, 5).map(d => d.name).join('、')}？`;
-    return `查不到叫「${q}」的夥伴，請確認姓名（語音辨識中文姓名有時候會聽錯字，可以試著講更完整或換個講法）。`;
+    if (candidates.length) return { error: `查不到「${q}」，你是不是要找：${candidates.slice(0, 5).map(d => d.name).join('、')}？` };
+    return { error: `查不到叫「${q}」的夥伴，請確認姓名（語音辨識中文姓名有時候會聽錯字，可以試著講更完整或換個講法）。` };
   }
-  if (matches.length > 1) return `有${matches.length}位夥伴的名字都包含「${q}」（${matches.map(d => d.name).join('、')}），請講更完整的姓名。`;
-  const d = matches[0];
+  if (matches.length > 1) return { error: `有${matches.length}位夥伴的名字都包含「${q}」（${matches.map(d => d.name).join('、')}），請講更完整的姓名。` };
+  return { driver: matches[0] };
+}
+async function voiceToolGetDriverLookup(args) {
+  const found = voiceFindDriverByName((args && args.driverName) || '');
+  if (found.error) return found.error;
+  const d = found.driver;
   const today = todayStr(), month = today.slice(0, 7);
   let todays, monthAssignments;
   try {
