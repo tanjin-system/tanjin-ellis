@@ -567,10 +567,10 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=9"></script>
+<script defer src="js/data-layer.js?v=10"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=2"></script>
-<script defer src="js/voice.js?v=24"></script>
+<script defer src="js/voice.js?v=25"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -1477,6 +1477,7 @@ function getWeekDates(offset){
 // ---------- Tabs ----------
 const ADMIN_TABS = [
   {id:'home', label:'首頁', icon:'🏠'},
+  {id:'carbon_inbox', label:'小碳的建議', icon:'🧠'},
   {id:'warroom', label:'戰情室', icon:'🛰️', group:'排班'},
   {id:'announcements', label:'公告管理', icon:'📢', group:'排班'},
   {id:'schedule', label:'週期任務清單', icon:'📅', group:'排班'},
@@ -1696,7 +1697,7 @@ function renderContent(){
   const mainEl = c && c.closest('main');
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
-    ({home:renderHomeAdmin, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+    ({home:renderHomeAdmin, carbon_inbox:renderCarbonInbox, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
       origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, reconciliation:renderReconciliation, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
@@ -4473,16 +4474,8 @@ async function renderScheduleConflicts(startDate, endDate){
   try{ list = await fetchDriverUnavailabilities(startDate, endDate); }
   catch(e){ return; } // 這面板只是提醒用，悄悄失敗不影響主要排班功能
   if(state.tab!=='schedule' || !document.getElementById('schedConflictBox')) return; // 使用者可能已經切走這一頁或翻了別週
-  const conflicts = [];
-  list.forEach(u=>{
-    state.data.assignments.forEach(a=>{
-      if(a.driverId===u.driverId && a.date===u.date && a.status!=='cancelled' && !a.isSupport){
-        conflicts.push({ date:u.date, note:u.note, driverId:u.driverId, routeId:a.routeId, published:a.published });
-      }
-    });
-  });
+  const conflicts = computeScheduleConflicts(list, state.data.assignments);
   if(!conflicts.length){ box.innerHTML = ''; return; } // 沒有衝突就不顯示面板，不佔畫面空間（保險起見明確清空，不假設box本來就是空的）
-  conflicts.sort((x,y)=> x.date.localeCompare(y.date));
   box.innerHTML = `<div class="panel" style="border-color:var(--danger); border-width:2px; margin-bottom:8px;">
     <h3 style="margin-top:0;">⚠️ ${conflicts.length}筆排班衝突：夥伴已回報請假，但這天還是排了班</h3>
     ${conflicts.map(x=>`<div style="padding:5px 0; border-top:1px solid var(--border); font-size:13px;">${x.date} ${escapeHtml(routeName(x.routeId))}・${escapeHtml(driverName(x.driverId))}${x.note?`（請假備註：${escapeHtml(x.note)}）`:''}${x.published===false?' <span class="badge pending" style="font-size:10.5px;">草稿</span>':''}</div>`).join('')}
@@ -7312,6 +7305,62 @@ function renderSettings(c){
 // 彼此不對齊（例如7-11是27日~次月26日，其他可能是自然月），要正確合併需要
 // 分別抓每個通路自己的區間再加總，這次先不做，避免倉促做出看起來權威、其實
 // 對不齊日期的誤導數字——這塊之後驗證過基本規則有用、信任建立起來再加。
+// 小碳的任務收件箱：老闆跟小金說「叫小碳...」轉過來的任務，跟後台財務稽核
+// 畫面按「請小碳整理重點」不一樣——那個是當場看當場用，不會存檔；這裡存的是
+// 「小碳想完了，但老闆還沒看過／還沒點頭」的東西，所以需要一個專門畫面讓老闆
+// 事後進來確認或駁回。小碳不會自己改任何資料，老闆按確認也只是「我看過了、
+// 知道了」，不會觸發任何自動動作——真的要改班表/金額，還是要去對應畫面手動做。
+async function renderCarbonInbox(c){
+  c.innerHTML = `
+    <h2 class="section-title">小碳的建議</h2>
+    <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆會先進這裡，等你確認或駁回——小碳不會自己改班表、改金額或發公告，一切還是要你自己動手。</p>
+    <div class="panel"><button class="btn ghost" id="cbxRefresh">🔄 重新整理</button></div>
+    <div id="cbxList"><div class="empty">載入中…</div></div>`;
+  document.getElementById('cbxRefresh').onclick = refresh;
+  await refresh();
+  async function refresh(){
+    const list = document.getElementById('cbxList');
+    if(!list) return;
+    list.innerHTML = '<div class="empty">載入中…</div>';
+    let tasks;
+    try{ tasks = await fetchCarbonTasks(50); }
+    catch(err){ list.innerHTML = `<div class="empty">載入失敗：${escapeHtml(err.message)}</div>`; return; }
+    if(state.tab!=='carbon_inbox' || !document.getElementById('cbxList')) return;
+    if(!tasks.length){ list.innerHTML = '<div class="empty">目前還沒有交辦過任何任務給小碳。你可以跟小金說「叫小碳幫我查一下...」試試看。</div>'; return; }
+    list.innerHTML = tasks.map(renderTaskCard).join('');
+    tasks.forEach(t=>{
+      const okBtn = document.getElementById('cbxOk_'+t.id);
+      const noBtn = document.getElementById('cbxNo_'+t.id);
+      if(okBtn) okBtn.onclick = ()=>review(t.id, 'approved');
+      if(noBtn) noBtn.onclick = ()=>review(t.id, 'dismissed');
+    });
+  }
+  async function review(id, adminStatus){
+    try{ await reviewCarbonTask(id, adminStatus); await refresh(); }
+    catch(err){ alert(err.message); }
+  }
+  function renderTaskCard(t){
+    const when = (t.createdAt||'').replace('T',' ').slice(0,16);
+    const srcLabel = t.source==='voice' ? '🎙️ 語音交辦' : '🖥️ 後台交辦';
+    let body, borderColor = 'var(--border)', actions = '';
+    if(t.status==='pending'){ body = `<div class="empty">小碳還在處理中…（如果一直停在這裡，可能是處理時中斷了，請重新交辦一次）</div>`; borderColor = 'var(--border)'; }
+    else if(t.status==='failed'){ body = `<p style="color:var(--danger); font-size:13.5px;">⚠️ 小碳處理失敗：${escapeHtml(t.errorText||'未知錯誤')}</p>`; borderColor = 'var(--danger)'; actions = t.adminStatus==='unreviewed' ? `<button class="btn ghost" id="cbxNo_${t.id}">知道了，關閉</button>` : `<span class="badge">已關閉</span>`; }
+    else {
+      body = `<p style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(t.resultText)}</p>`;
+      borderColor = t.adminStatus==='unreviewed' ? 'var(--accent)' : 'var(--border)';
+      actions = t.adminStatus==='unreviewed'
+        ? `<button class="btn" id="cbxOk_${t.id}">✅ 確認，我看過了</button> <button class="btn ghost" id="cbxNo_${t.id}">駁回</button>`
+        : `<span class="badge ${t.adminStatus==='approved'?'completed':'pending'}">${t.adminStatus==='approved'?'已確認':'已駁回'}</span>`;
+    }
+    return `<div class="panel" style="border-color:${borderColor}; border-width:2px; margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--muted); margin-bottom:6px;"><span>${srcLabel}</span><span>${when}</span></div>
+      <p style="font-weight:600; font-size:13.5px; margin:0 0 8px 0;">💬 ${escapeHtml(t.requestText)}</p>
+      ${body}
+      <div style="margin-top:8px;">${actions}</div>
+    </div>`;
+  }
+}
+
 function renderReconciliation(c){
   const month = state._reconMonth || todayStr().slice(0,7);
   c.innerHTML = `
@@ -7334,32 +7383,38 @@ function renderReconciliation(c){
     catch(err){ resultEl.innerHTML = `<div class="empty">掃描失敗：${escapeHtml(err.message)}</div>`; return; }
     if(state.tab!=='reconciliation' || !document.getElementById('reconResult')) return; // 使用者可能已經切走這一頁
 
-    const completed = assignments.filter(a=>a.status==='completed' && !a.isSupport && a.published!==false);
-    const issues = [];
-    completed.forEach(a=>{
-      if(tripPay(a)<=0) issues.push({ kind:'已完成卻沒有報酬', text:`${a.date} ${routeName(a.routeId)}・${driverName(a.driverId)}` });
-      const byCh = effectiveByChannelForAssignment(a) || {};
-      const chTotal = Object.values(byCh).reduce((s,v)=>s+(Number(v)||0), 0);
-      if(chTotal<=0) issues.push({ kind:'已完成卻沒有跟任何通路請款', text:`${a.date} ${routeName(a.routeId)}（${(a.dropPoints||[]).length}個店點）` });
-    });
     const statements = (state.data.statements||[]).filter(s=>s.month===m);
-    statements.filter(s=>s.status!=='awaiting_signature').forEach(s=>{
-      const expected = computePayrollDeductions(s.tripTotal + s.adjTotal, s.reimbursementAmount);
-      if(expected.withholdTax !== s.withholdTax) issues.push({ kind:'勞報單起扣門檻判斷疑義', text:`${driverName(s.driverId)} ${s.month}勞報單：依目前金額反推應該${expected.withholdTax?'要':'不用'}扣稅，但單上記錄的是${s.withholdTax?'有扣':'沒扣'}，請人工複核（可能是調整項事後異動造成）` });
-    });
-    const today = todayStr();
-    statements.filter(s=>s.status==='awaiting_signature' && s.periodEnd && ymd(addDays(s.periodEnd,14))<today).forEach(s=>{
-      issues.push({ kind:'勞報單逾期未簽名（超過2週）', text:`${driverName(s.driverId)} ${s.month}勞報單（期間至${s.periodEnd}）` });
-    });
+    const issues = computeReconciliationIssues(assignments, statements);
+    state._reconIssues = issues; // 小碳按鈕要用，跟畫面上看到的是同一份資料
 
     if(!issues.length){ resultEl.innerHTML = '<div class="empty">這個月掃描下來沒有發現需要留意的地方 🎉</div>'; return; }
     const groups = new Map();
     issues.forEach(it => { if(!groups.has(it.kind)) groups.set(it.kind, []); groups.get(it.kind).push(it); });
-    resultEl.innerHTML = Array.from(groups.entries()).map(([kind, list]) => `
+    resultEl.innerHTML = `<div class="panel"><button class="btn" id="reconAskCarbon">🧠 請小碳幫我整理重點</button><div id="reconCarbonResult"></div></div>` +
+      Array.from(groups.entries()).map(([kind, list]) => `
       <div class="panel" style="border-color:var(--danger); border-width:2px;">
         <h3 style="margin-top:0;">⚠️ ${escapeHtml(kind)}（${list.length}筆）</h3>
         ${list.map(it=>`<div style="padding:5px 0; border-top:1px solid var(--border); font-size:13px;">${escapeHtml(it.text)}</div>`).join('')}
       </div>`).join('');
+    document.getElementById('reconAskCarbon').onclick = askCarbonForSummary;
+  }
+  async function askCarbonForSummary(){
+    const btn = document.getElementById('reconAskCarbon');
+    const box = document.getElementById('reconCarbonResult');
+    if(!btn || !box) return;
+    btn.disabled = true; btn.textContent = '小碳正在整理…';
+    box.innerHTML = '';
+    try{
+      const auth = getStoredAuth();
+      const r = await fetch('/api/carbon-task', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+auth.token }, body: JSON.stringify({ items: state._reconIssues||[] }) });
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||'小碳處理失敗');
+      box.innerHTML = `<div class="panel" style="border-color:var(--accent); border-width:2px; margin-top:8px;"><h3 style="margin-top:0;">🧠 小碳的整理</h3><p style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(j.summary)}</p></div>`;
+    }catch(err){
+      box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    }finally{
+      btn.disabled = false; btn.textContent = '🧠 請小碳幫我整理重點';
+    }
   }
 }
 

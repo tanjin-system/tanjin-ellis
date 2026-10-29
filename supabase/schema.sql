@@ -1730,3 +1730,24 @@ grant select, insert, delete on driver_unavailabilities to app_driver;
 create policy driver_select_own on driver_unavailabilities for select to app_driver using (driver_id = auth_driver_id());
 create policy driver_insert_own on driver_unavailabilities for insert to app_driver with check (driver_id = auth_driver_id());
 create policy driver_delete_own on driver_unavailabilities for delete to app_driver using (driver_id = auth_driver_id());
+
+-- PART 46：小碳特助任務收件箱（2026-10-30）
+-- 老闆透過小金（語音）或後台把任務交辦給小碳，小碳想完回覆後存在這張表，
+-- 老闆在後台「小碳的建議」畫面確認或駁回——小碳本身不會寫其他任何表，
+-- 這張表只是它跟老闆之間的收件箱。只有主控看得到（夥伴不會用到這個功能）。
+create table carbon_tasks (
+  id uuid primary key default gen_random_uuid(),
+  request_text text not null,
+  source text not null default 'voice' check (source in ('voice','ui')),
+  status text not null default 'pending' check (status in ('pending','completed','failed')),
+  result_text text,
+  error_text text,
+  admin_status text not null default 'unreviewed' check (admin_status in ('unreviewed','approved','dismissed')),
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+comment on table carbon_tasks is '老闆透過小金語音或後台交辦給小碳的任務／問題，小碳的回覆存在result_text，老闆確認或駁回後記在admin_status；小碳沒有能力也不會透過這張表以外的任何方式寫資料。';
+create index idx_carbon_tasks_created on carbon_tasks(created_at desc);
+alter table carbon_tasks enable row level security;
+grant select, insert, update, delete on carbon_tasks to app_admin;
+create policy admin_all on carbon_tasks for all to app_admin using (true) with check (true);

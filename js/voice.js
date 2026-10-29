@@ -185,6 +185,61 @@ async function voiceToolGotoScreenAdmin(args) {
   return `還沒開放切到「${target}」這個畫面，可以自己從選單切換。`;
 }
 
+// 2026-10-30：使用者明確要求小碳不能只是「問一句答一句」的規則機器人，要能
+// 真的被老闆當特助使用——老闆跟小金說「叫小碳...」，小金就把原話轉給後台的
+// 小碳（api/carbon-task.js，實際呼叫Claude），小碳想完的回覆存進carbon_tasks
+// 表（見schema.sql PART 46），同時唸給老闆聽一次。背景資料（財務稽核／排班
+// 衝突）統一用computeReconciliationIssues()/computeScheduleConflicts()
+// 現抓現算，跟畫面上看到的是同一套規則，不是另外重寫一份——小碳只負責「這些
+// 已經算好的事實該怎麼解讀、怎麼排優先順序」，不負責重新判斷資料對不對。
+const VOICE_FN_ASK_CARBON = {
+  name: 'ask_carbon',
+  description: '把主控交辦的任務或問題轉達給後台的「小碳」（AI特助，負責財務稽核、排班這類比對判斷，跟小金是不同的助理）。主控說「叫小碳...」「請小碳...」「跟小碳說...」的時候用這個，request要填主控完整講的那句話（交辦內容本身，不要只填關鍵字或你自己的理解）。小碳想完的完整回覆會同時存進後台「小碳的建議」畫面給主控之後複查確認。',
+  parameters: { type: 'OBJECT', properties: {
+    request: { type: 'STRING', description: '主控交辦給小碳的完整內容，照原話轉述' }
+  }, required: ['request'] }
+};
+async function voiceToolAskCarbon(args) {
+  const request = ((args && args.request) || '').trim();
+  if (!request) return '沒聽清楚要交辦什麼給小碳，請再說一次。';
+  const auth = getStoredAuth();
+  if (!auth) return '目前沒有登入資訊，沒辦法轉交給小碳，請重新登入再試。';
+
+  let task;
+  try { task = await createCarbonTask(request, 'voice'); } catch (e) { return '轉交給小碳時發生錯誤：' + e.message; }
+
+  let items = [];
+  try {
+    const today = todayStr();
+    const month = today.slice(0, 7);
+    const monthAssignments = await fetchAssignmentsInRange(month + '-01', monthEndStr(month));
+    const statements = (state.data.statements || []).filter(s => s.month === month);
+    const reconIssues = computeReconciliationIssues(monthAssignments, statements);
+
+    const wkStart = today, wkEnd = ymd(addDays(today, 13));
+    const unavail = await fetchDriverUnavailabilities(wkStart, wkEnd);
+    const wkAssignments = await fetchAssignmentsInRange(wkStart, wkEnd);
+    const conflicts = computeScheduleConflicts(unavail, wkAssignments);
+
+    items = reconIssues.map(it => ({ kind: it.kind, text: it.text }))
+      .concat(conflicts.map(cf => ({ kind: '排班衝突', text: `${cf.date} ${routeName(cf.routeId)}・${driverName(cf.driverId)}${cf.note ? '（請假備註：' + cf.note + '）' : ''}` })));
+  } catch (e) { /* 背景資料抓不到就讓小碳只憑交辦內容判斷，不讓這一步變成整個功能失敗的原因 */ }
+
+  try {
+    const r = await fetch('/api/carbon-task', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token }, body: JSON.stringify({ request, items }) });
+    const j = await r.json();
+    if (!r.ok) {
+      try { await failCarbonTask(task.id, j.error || '未知錯誤'); } catch (e2) {}
+      return '小碳處理時發生錯誤：' + (j.error || '請稍後再試') + '，不過我已經把這件事記錄下來了。';
+    }
+    try { await completeCarbonTask(task.id, j.summary); } catch (e2) {}
+    return j.summary + '（完整內容我也存到後台「小碳的建議」了）';
+  } catch (e) {
+    try { await failCarbonTask(task.id, e.message); } catch (e2) {}
+    return '轉交給小碳時連線失敗，請稍後再試。';
+  }
+}
+
 const VOICE_FN_GOTO_SCREEN_DRIVER = {
   name: 'goto_screen',
   description: '幫使用者把畫面切到想看的分頁（純畫面導覽，不會改動任何資料）。target固定用下面其中一個：home（首頁）、today（今日任務）、history（歷史任務）、myEarnings（我的報酬）、myStatement（對帳單）、profile（我的資料）。',
@@ -448,13 +503,18 @@ function voiceSystemInstructionAdmin() {
   return `你是物流車隊系統「小金」語音助理，只講中文（台灣），語氣親切專業、像個得力
 助理。今天是${todayStr()}（星期${wd}）。
 
-你有一位後台同事叫「小碳」，負責財務稽核（掃過所有通路跟所有夥伴，找出請款／
-報酬可能有問題的地方，列在「財務稽核」畫面）、排班檢查（自動延續下週班表時，
-幫忙把夥伴已經請假的那天空出來，另外在「週期任務清單」列出請假跟班表對不上
-的衝突）。小碳跟你一樣只負責找問題、列出來或把明顯不該排的空出來，不會自己
-決定要不要發布班表、不會自動改任何金額——真正拍板都是主控的事。如果主控問
-起「後台」「另一個AI」「小碳」，大方介紹就好，不用裝作不知道；但小碳沒有
-語音功能、不會直接跟人對話，主控找小碳是去系統畫面上看，不是用講的。
+你有一位後台同事叫「小碳」，是主控的AI特助，平常自己會做財務稽核（掃過所有
+通路跟所有夥伴，找出請款／報酬可能有問題的地方）、排班檢查（自動延續下週
+班表時，幫忙把夥伴已經請假的那天空出來，另外列出請假跟班表對不上的衝突）；
+主控也可以隨時把任何任務或問題交辦給小碳，不限於這兩件事，例如「叫小碳查
+一下這個月對帳有沒有問題」「請小碳幫我想一下這段話要怎麼跟夥伴說」。主控
+說「叫小碳...」「請小碳...」「跟小碳說...」的時候，呼叫ask_carbon工具、
+request填主控完整講的那句話，不要自己先猜小碳會怎麼回答——小碳想完之後你
+要把回覆內容念給主控聽。小碳跟你一樣只負責想、列出來或提案，不會自己決定
+要不要發布班表、不會自動改任何金額或資料——真正拍板都是主控的事，小碳的
+完整回覆也會存進後台「小碳的建議」畫面給主控之後複查、按確認或駁回。小碳
+沒有自己的語音功能、不會主動開口，一定是透過你轉達；如果主控只是單純問起
+「後台」「另一個AI」「小碳」是誰，大方介紹就好，不用裝作不知道。
 
 ⚠️最高原則（比任何其他規則都優先）：對任何查到的姓名、資料、數字，只要不是
 100%確定，一定要老實跟主控確認，絕對不能把猜測的結果當成肯定的答案講出去。
@@ -1121,7 +1181,7 @@ async function voiceStart() {
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction() }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
-            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN]
+            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN, VOICE_FN_ASK_CARBON]
             : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER] }]
         }
       }));
@@ -1149,6 +1209,7 @@ async function voiceStart() {
             else if (fc.name === 'get_driver_lookup') resultText = await voiceToolGetDriverLookup(fc.args || {});
             else if (fc.name === 'browse_info') resultText = await voiceToolBrowseInfo(fc.args || {});
             else if (fc.name === 'goto_screen') resultText = await (voiceIsAdminMode() ? voiceToolGotoScreenAdmin(fc.args || {}) : voiceToolGotoScreenDriver(fc.args || {}));
+            else if (fc.name === 'ask_carbon') resultText = await voiceToolAskCarbon(fc.args || {});
           } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
           try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
           if (fc.name === 'report_unavailable') {

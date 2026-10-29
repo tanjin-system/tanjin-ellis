@@ -2957,6 +2957,83 @@ async function deleteDriverUnavailability(id) {
   if (error) throw new Error('刪除失敗：' + error.message);
 }
 
+// 財務稽核的4條規則／排班衝突的比對邏輯，抽成純函式。財務稽核畫面、排班衝突
+// 面板跟小碳的語音任務（voice.js的voiceToolAskCarbon）都呼叫這兩個函式，
+// 確保「異常」永遠是同一套規則算出來的，不會有兩套邏輯兜不起來的風險
+// （依賴index.html裡的routeName()/driverName()/effectiveByChannelForAssignment()，
+// 跟本檔案開頭依賴ymd()/addDays()/todayStr()是同一種既有的跨檔案依賴方式）。
+function computeReconciliationIssues(assignments, statements) {
+  const completed = (assignments || []).filter(a => a.status === 'completed' && !a.isSupport && a.published !== false);
+  const issues = [];
+  completed.forEach(a => {
+    if (tripPay(a) <= 0) issues.push({ kind: '已完成卻沒有報酬', text: `${a.date} ${routeName(a.routeId)}・${driverName(a.driverId)}` });
+    const byCh = effectiveByChannelForAssignment(a) || {};
+    const chTotal = Object.values(byCh).reduce((s, v) => s + (Number(v) || 0), 0);
+    if (chTotal <= 0) issues.push({ kind: '已完成卻沒有跟任何通路請款', text: `${a.date} ${routeName(a.routeId)}（${(a.dropPoints || []).length}個店點）` });
+  });
+  (statements || []).filter(s => s.status !== 'awaiting_signature').forEach(s => {
+    const expected = computePayrollDeductions(s.tripTotal + s.adjTotal, s.reimbursementAmount);
+    if (expected.withholdTax !== s.withholdTax) issues.push({ kind: '勞報單起扣門檻判斷疑義', text: `${driverName(s.driverId)} ${s.month}勞報單：依目前金額反推應該${expected.withholdTax ? '要' : '不用'}扣稅，但單上記錄的是${s.withholdTax ? '有扣' : '沒扣'}，請人工複核（可能是調整項事後異動造成）` });
+  });
+  const today = todayStr();
+  (statements || []).filter(s => s.status === 'awaiting_signature' && s.periodEnd && ymd(addDays(s.periodEnd, 14)) < today).forEach(s => {
+    issues.push({ kind: '勞報單逾期未簽名（超過2週）', text: `${driverName(s.driverId)} ${s.month}勞報單（期間至${s.periodEnd}）` });
+  });
+  return issues;
+}
+function computeScheduleConflicts(unavailabilities, assignments) {
+  const conflicts = [];
+  (unavailabilities || []).forEach(u => {
+    (assignments || []).forEach(a => {
+      if (a.driverId === u.driverId && a.date === u.date && a.status !== 'cancelled' && !a.isSupport) {
+        conflicts.push({ date: u.date, note: u.note, driverId: u.driverId, routeId: a.routeId, published: a.published });
+      }
+    });
+  });
+  conflicts.sort((x, y) => x.date.localeCompare(y.date));
+  return conflicts;
+}
+
+// ---------------- 小碳特助任務收件箱（carbon_tasks，2026-10-30） ----------------
+// 老闆透過小金語音或後台把任務交辦給小碳；小碳本身（api/carbon-task.js）不碰
+// 資料庫，存檔／更新狀態都是呼叫端（voice.js／index.html）做的，見schema.sql PART 46。
+function mapCarbonTask(row) {
+  return {
+    id: row.id, requestText: row.request_text, source: row.source, status: row.status,
+    resultText: row.result_text || '', errorText: row.error_text || '',
+    adminStatus: row.admin_status, reviewedAt: row.reviewed_at, createdAt: row.created_at
+  };
+}
+async function createCarbonTask(requestText, source) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('carbon_tasks').insert({
+    request_text: requestText, source: source === 'ui' ? 'ui' : 'voice'
+  }).select().single();
+  if (error) throw new Error('建立小碳任務失敗：' + error.message);
+  return mapCarbonTask(data);
+}
+async function completeCarbonTask(id, resultText) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('carbon_tasks').update({ status: 'completed', result_text: resultText }).eq('id', id);
+  if (error) throw new Error('更新小碳任務失敗：' + error.message);
+}
+async function failCarbonTask(id, errorText) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('carbon_tasks').update({ status: 'failed', error_text: errorText }).eq('id', id);
+  if (error) throw new Error('更新小碳任務失敗：' + error.message);
+}
+async function reviewCarbonTask(id, adminStatus) {
+  const supabase = getSupabase();
+  const { error } = await supabase.from('carbon_tasks').update({ admin_status: adminStatus, reviewed_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw new Error('更新小碳任務失敗：' + error.message);
+}
+async function fetchCarbonTasks(limit) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('carbon_tasks').select('*').order('created_at', { ascending: false }).limit(limit || 50);
+  if (error) throw new Error('查詢小碳任務失敗：' + error.message);
+  return (data || []).map(mapCarbonTask);
+}
+
 // 「尚未月結確認」名單用：只抓指定月份已完成任務的精簡欄位（沒有店點），一樣分頁避開1000筆上限。
 // 同一個月份在這個 session 只查一次（state._settleCache），首頁提醒與勞報單頁共用。
 async function fetchCompletedTripsLite(monthStr) {
