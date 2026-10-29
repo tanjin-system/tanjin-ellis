@@ -7332,11 +7332,16 @@ async function renderCarbonInbox(c){
     const list = document.getElementById('cbxList');
     if(!list) return;
     list.innerHTML = '<div class="empty">載入中…</div>';
-    let tasks;
-    try{ tasks = await fetchCarbonTasks(50); }
+    let allTasks;
+    try{ allTasks = await fetchCarbonTasks(50); }
     catch(err){ list.innerHTML = `<div class="empty">載入失敗：${escapeHtml(err.message)}</div>`; return; }
     if(state.tab!=='carbon_inbox' || !document.getElementById('cbxList')) return;
-    if(!tasks.length){ list.innerHTML = '<div class="empty">目前還沒有交辦過任何任務給小碳。你可以跟小金說「叫小碳幫我查一下...」試試看。</div>'; return; }
+    // 使用者要求：任務一旦按過確認/駁回/關閉就不要再一直留在畫面上——只顯示
+    // 還沒處理過的（adminStatus still unreviewed），處理過的紀錄還在資料庫裡，
+    // 只是這個清單不再顯示，避免越積越多。
+    const tasks = allTasks.filter(t=>t.adminStatus==='unreviewed');
+    if(!allTasks.length){ list.innerHTML = '<div class="empty">目前還沒有交辦過任何任務給小碳。你可以跟小金說「叫小碳幫我查一下...」試試看。</div>'; return; }
+    if(!tasks.length){ list.innerHTML = '<div class="empty">目前沒有待處理的任務，之前交辦的都已經處理過了。</div>'; return; }
     list.innerHTML = tasks.map(renderTaskCard).join('');
     tasks.forEach(t=>{
       const okBtn = document.getElementById('cbxOk_'+t.id);
@@ -7356,7 +7361,7 @@ async function renderCarbonInbox(c){
     const when = (t.createdAt||'').replace('T',' ').slice(0,16);
     const srcLabel = t.source==='voice' ? '🎙️ 語音交辦' : '🖥️ 後台交辦';
     let body, borderColor = 'var(--border)', actions = '';
-    if(t.status==='pending'){ body = `<div class="empty">小碳還在處理中…（如果一直停在這裡，可能是處理時中斷了，請重新交辦一次）</div>`; borderColor = 'var(--border)'; }
+    if(t.status==='pending'){ body = `<div class="empty">小碳還在處理中…（如果一直停在這裡，可能是處理時中斷了，請重新交辦一次）</div>`; borderColor = 'var(--border)'; actions = `<button class="btn ghost" id="cbxNo_${t.id}">關閉，不等了</button>`; }
     else if(t.status==='failed'){ body = `<p style="color:var(--danger); font-size:13.5px;">⚠️ 小碳處理失敗：${escapeHtml(t.errorText||'未知錯誤')}</p>`; borderColor = 'var(--danger)'; actions = t.adminStatus==='unreviewed' ? `<button class="btn ghost" id="cbxNo_${t.id}">知道了，關閉</button>` : `<span class="badge">已關閉</span>`; }
     else if(t.actionType && ACTION_TAB[t.actionType]){
       const p = t.actionPayload || {};
