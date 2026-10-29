@@ -6,7 +6,8 @@
 //                    （例如主控用自己的手機測試夥伴帳號），換人時偏好設定重置。
 //   POST ?op=status    → 這支手機目前是不是登記給「現在登入的這個人」（畫面用這個判斷，不能只看手機本身有沒有訂閱）。
 //   POST ?op=test  → 夥伴或主控傳一則測試通知給「自己」。
-//   GET  ?op=cron  → 每天一次的排程（vercel.json）：前一天提醒隔天有任務的夥伴；月底最後一天提醒對帳；超過 7 天沒備份提醒主控。
+//   GET  ?op=cron  → 每天一次的排程（vercel.json）：前一天提醒隔天有任務的夥伴；月底最後一天提醒對帳；超過 7 天沒備份提醒主控；
+//                    小碳的財務異常提醒主控（已完成卻沒報酬的趟次、勞報單即將/已經逾期未簽名）。
 //                    用 push_log 去重（同一天只會發一次），且 16 點以前不動作，所以就算網址被別人呼叫也不會重複打擾。
 // 通知內容只放路線與日期，不放店名、金額、電話（會顯示在鎖定畫面上）。
 const webpush = require('web-push');
@@ -15,7 +16,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-const KINDS = ['publish', 'change', 'announce', 'reminder', 'statement'];
+const KINDS = ['publish', 'change', 'announce', 'reminder', 'statement', 'audit'];
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
 
 function parseBody(req) {
@@ -134,6 +135,40 @@ async function runCron() {
     if ((days === null || days >= 7) && await claim('backup:' + bucket)) {
       out.backup = await sendMessages([{ to: { admin: true }, kind: 'backup', tag: 'backup-reminder', url: '/?go=settings',
         title: '該備份資料了', body: (days === null ? '還沒有備份紀錄' : '已經 ' + days + ' 天沒有備份') + '，請到「系統設定」下載完整備份。' }]);
+    }
+  }
+  // 4) 小碳的財務異常主動推播（2026-10-30，使用者要求主控不用自己天天上系統查）：
+  //    只做2條邏輯最單純、風險最低的規則（跟前端「小碳任務」財務稽核畫面裡4條規則
+  //    其中的2條同一套算法，但刻意不搬「已完成卻沒有跟任何通路請款」那條過來——那條
+  //    需要effectiveByChannelForAssignment()整串billing_adjustments/路線版本費率/
+  //    tripBilling()試算的複雜串接邏輯，在這支獨立的伺服器端函式裡重寫一份風險太高，
+  //    容易跟前端算法兜不起來、吃力不討好；真正要查完整異常還是要去「小碳任務」看）。
+  if (await claim('audit:' + today)) {
+    const monthStart = today.slice(0, 7) + '-01';
+    const { data: tripRows, error: tripErr } = await supabase.from('assignments')
+      .select('published, fare, payroll_fare_snapshot, extra_pay')
+      .eq('status', 'completed').gte('trip_date', monthStart).lte('trip_date', today);
+    if (tripErr) throw new Error(tripErr.message);
+    const noPay = (tripRows || []).filter(a => a.published !== false &&
+      ((Number(a.payroll_fare_snapshot ?? a.fare) || 0) + (Number(a.extra_pay) || 0)) <= 0).length;
+
+    const { data: stRows, error: stErr } = await supabase.from('statements')
+      .select('period_end').eq('status', 'awaiting_signature').not('period_end', 'is', null);
+    if (stErr) throw new Error(stErr.message);
+    const todayD = new Date(today + 'T00:00:00');
+    let dueSoon = 0, overdue = 0;
+    (stRows || []).forEach(s => {
+      const days = Math.floor((todayD - new Date(s.period_end + 'T00:00:00')) / 86400000);
+      if (days >= 14) overdue++; else if (days >= 10) dueSoon++;
+    });
+
+    const parts = [];
+    if (noPay) parts.push(noPay + '趟已完成卻沒有報酬');
+    if (overdue) parts.push(overdue + '份勞報單已超過2週未簽名');
+    if (dueSoon) parts.push(dueSoon + '份勞報單即將到期（4天內）');
+    if (parts.length) {
+      out.audit = await sendMessages([{ to: { admin: true }, kind: 'audit', tag: 'audit-' + today, url: '/?go=carbon_inbox',
+        title: '小碳的異常提醒', body: parts.join('、') + '，詳細內容請到「小碳任務」查看。' }]);
     }
   }
   return out;

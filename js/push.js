@@ -3,7 +3,7 @@
 // 主控的操作（發佈、換人、取消、公告）會呼叫 pushQueueTasks()／pushAnnouncement()，4 秒內的合併成「每位夥伴一則」，
 // 再由 /api/push?op=send 送出。前一天提醒與月底對帳由伺服器排程送（見 api/push.js）。
 const PUSH_KINDS_PARTNER = [['publish', '新任務'], ['change', '任務調整（換人、取消）'], ['announce', '公告'], ['reminder', '前一天提醒（隔天有任務）'], ['statement', '月底對帳']];
-const PUSH_KINDS_ADMIN = [['statement', '月底對帳提醒']];
+const PUSH_KINDS_ADMIN = [['statement', '月底對帳提醒'], ['audit', '小碳的財務異常提醒']];
 
 function pushSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
 function pushIsIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
@@ -83,7 +83,7 @@ async function pushRenderBox(el) {
   const sub = await pushCurrentSub();
   if (Notification.permission === 'denied') return msg('通知被關閉了。請到手機的「設定 → 通知」找到這個 App，把通知打開，再回到這裡。');
   if (!sub) {
-    el.innerHTML = '<p class="section-sub" style="margin:0 0 10px;">' + (state.role === 'admin' ? '開啟後，這支手機會收到月底對帳提醒。' : '開啟後，新任務、任務調整、公告、前一天提醒和月底對帳會直接跳到手機上，螢幕關著也收得到。') + '</p><button class="btn amber" id="pushOn">開啟通知</button>';
+    el.innerHTML = '<p class="section-sub" style="margin:0 0 10px;">' + (state.role === 'admin' ? '開啟後，這支手機會收到月底對帳提醒、小碳的財務異常提醒。' : '開啟後，新任務、任務調整、公告、前一天提醒和月底對帳會直接跳到手機上，螢幕關著也收得到。') + '</p><button class="btn amber" id="pushOn">開啟通知</button>';
     document.getElementById('pushOn').onclick = async ev => {
       ev.target.disabled = true;
       try { await pushEnable(); toast('已開啟通知'); } catch (e) { alert(e.message); }

@@ -569,7 +569,7 @@
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=13"></script>
 <script defer src="js/auth.js?v=1"></script>
-<script defer src="js/push.js?v=2"></script>
+<script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=30"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
@@ -2507,9 +2507,12 @@ function leaveUrgencyWarning(dateVal, dId){
   if(!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) return '';
   const today = todayStr();
   if(dateVal < today) return '';
-  const hasAssignment = (state.data.assignments||[]).some(a=>
+  // 2026-10-30：原本只講「你已經有排定的任務」太籠統，讓司機/主控看不出是哪一趟、
+  // 要不要緊急處理——直接把路線名稱、店點數一起顯示，跟排班衝突面板（小碳任務畫面）
+  // 看到的是同一筆資料，司機自己心裡有數「喔是這一趟」，不用再回頭確認。
+  const conflictAssignment = (state.data.assignments||[]).find(a=>
     a.driverId===dId && a.date===dateVal && a.status!=='cancelled' && a.published!==false && !a.isSupport);
-  if(hasAssignment) return `⚠️ ${dateVal} 你已經有排定的任務，這筆登記不會自動取消、也不會通知主控，請務必直接聯絡主控確認！`;
+  if(conflictAssignment) return `⚠️ ${dateVal} 你已經有排定的任務（${routeName(conflictAssignment.routeId)}，${(conflictAssignment.dropPoints||[]).length}個店點），這筆登記不會自動取消、也不會通知主控，請務必直接聯絡主控確認！`;
   const daysUntil = Math.round((new Date(dateVal+'T00:00:00') - new Date(today+'T00:00:00')) / 86400000);
   if(daysUntil<=1) return '⚠️ 這個日期太近了（今天或明天）。公司規則是星期五、六、日回報下週狀況，太晚回報系統可能來不及調整，請務必同時直接聯絡主控確認。';
   return '';
