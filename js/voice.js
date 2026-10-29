@@ -15,8 +15,13 @@
 // 畫面上跳出的錯誤訊息截圖/打字告訴我），把真正的錯誤內容給我，照實際錯誤調整，
 // 不要憑空猜。
 
-const VOICE_WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
-const VOICE_MODEL = 'models/gemini-2.0-flash-live-001';
+// 2026-10-29第一版用的是key=長效金鑰的連線方式＋舊的模型名稱（gemini-2.0-flash-live-001），
+// 實機測試直接連線失敗（code 1007）。查Google官方文件後修正：暫時性權杖要用
+// BidiGenerateContentConstrained這個方法（不是BidiGenerateContent）、網址參數是
+// access_token（不是key），模型名稱也早就換成gemini-3.8-live。這兩個如果Google
+// 之後又改了，連線失敗時主控台看到的錯誤碼/訊息是最準的依據。
+const VOICE_WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
+const VOICE_MODEL = 'models/gemini-3.8-live';
 
 const VOICE_FN_REPORT_UNAVAILABLE = {
   name: 'report_unavailable',
@@ -80,7 +85,11 @@ function voiceFloat32ToPCM16Base64(float32Array) {
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
-function voicePlayAudioChunk(audioCtx, base64) {
+function voiceParseRate(mimeType, fallback) {
+  const m = /rate=(\d+)/.exec(mimeType || '');
+  return m ? Number(m[1]) : fallback;
+}
+function voicePlayAudioChunk(audioCtx, base64, mimeType) {
   try {
     const bin = atob(base64);
     const bytes = new Uint8Array(bin.length);
@@ -89,7 +98,8 @@ function voicePlayAudioChunk(audioCtx, base64) {
     const n = bytes.length >> 1;
     const f32 = new Float32Array(n);
     for (let i = 0; i < n; i++) f32[i] = view.getInt16(i * 2, true) / 0x8000;
-    const buffer = audioCtx.createBuffer(1, n, 24000); // Gemini回傳的語音固定24kHz
+    const rate = voiceParseRate(mimeType, 24000); // 文件沒寫死輸出取樣率，優先用訊息自己附的mimeType，沒有才退回24kHz猜測值
+    const buffer = audioCtx.createBuffer(1, n, rate);
     buffer.copyToChannel(f32, 0);
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
@@ -107,7 +117,7 @@ function voiceStartStreamingMic(stream, audioCtx, ws) {
     if (!_voiceState || ws.readyState !== WebSocket.OPEN) return;
     const input = e.inputBuffer.getChannelData(0);
     const down = voiceDownsampleTo16k(input, audioCtx.sampleRate);
-    ws.send(JSON.stringify({ realtimeInput: { mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: voiceFloat32ToPCM16Base64(down) }] } }));
+    ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: voiceFloat32ToPCM16Base64(down) } } }));
   };
   source.connect(proc); proc.connect(mute); mute.connect(audioCtx.destination);
 }
@@ -123,6 +133,7 @@ function voiceStop() {
   try { _voiceState.ws && _voiceState.ws.readyState === WebSocket.OPEN && _voiceState.ws.close(); } catch (e) {}
   try { _voiceState.audioCtx && _voiceState.audioCtx.close(); } catch (e) {}
   const ov = document.getElementById('voiceOverlay'); if (ov) ov.remove();
+  voiceFabSetActive(false);
   _voiceState = null;
 }
 function voiceFail(message) {
@@ -131,11 +142,60 @@ function voiceFail(message) {
   alert(message);
 }
 
+// ---------- 懸浮小助手（2026-10-29，使用者要求：不要把語音功能藏在面板裡，
+// 做一個隨時看得到的懸浮圖示，點了就能講話）----------
+function voiceFabAvatarSvg() {
+  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+    <defs><linearGradient id="voiceFabBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFC2E2"/><stop offset="100%" stop-color="#C9A8FF"/>
+    </linearGradient></defs>
+    <circle cx="50" cy="50" r="50" fill="url(#voiceFabBg)"/>
+    <ellipse cx="18" cy="62" rx="10" ry="19" fill="#6B4A8A"/>
+    <ellipse cx="82" cy="62" rx="10" ry="19" fill="#6B4A8A"/>
+    <circle cx="50" cy="53" r="26" fill="#FFE4CF"/>
+    <path d="M24 47 Q26 19 50 19 Q74 19 76 47 Q70 33 50 33 Q30 33 24 47 Z" fill="#7A5AA0"/>
+    <path d="M38 35 Q40 45 36 51" stroke="#7A5AA0" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <path d="M62 35 Q60 45 64 51" stroke="#7A5AA0" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <ellipse cx="41" cy="55" rx="5.3" ry="6.8" fill="#2E2A3A"/>
+    <ellipse cx="59" cy="55" rx="5.3" ry="6.8" fill="#2E2A3A"/>
+    <circle cx="43" cy="52" r="1.6" fill="#fff"/>
+    <circle cx="61" cy="52" r="1.6" fill="#fff"/>
+    <ellipse cx="34" cy="63" rx="4.5" ry="3" fill="#FFAFC4" opacity="0.85"/>
+    <ellipse cx="66" cy="63" rx="4.5" ry="3" fill="#FFAFC4" opacity="0.85"/>
+    <path d="M46 66 Q50 70 54 66" stroke="#C06080" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    <path d="M26 47 Q50 29 74 47" stroke="#3A3A3A" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    <circle cx="76" cy="51" r="4.2" fill="#3A3A3A"/>
+    <circle cx="24" cy="51" r="4.2" fill="#3A3A3A"/>
+  </svg>`;
+}
+// renderContent()每次切分頁都會呼叫；show=是否該顯示（夥伴畫面／主控檢視夥伴畫面才顯示，
+// 主控自己的畫面不顯示）。按鈕本身只建立一次、之後只切display，不會被各分頁的innerHTML洗掉。
+function voiceFabEnsure(show) {
+  let fab = document.getElementById('voiceFab');
+  if (!show) { if (fab) fab.style.display = 'none'; return; }
+  if (!fab) {
+    fab = document.createElement('button');
+    fab.id = 'voiceFab';
+    fab.className = 'voice-fab';
+    fab.type = 'button';
+    fab.title = '語音助理（賈維斯）';
+    fab.innerHTML = voiceFabAvatarSvg();
+    fab.onclick = () => { _voiceState ? voiceStop() : voiceStart(); };
+    document.body.appendChild(fab);
+  }
+  fab.style.display = 'flex';
+}
+function voiceFabSetActive(active) {
+  const fab = document.getElementById('voiceFab');
+  if (fab) fab.classList.toggle('active', !!active);
+}
+
 async function voiceStart() {
   if (_voiceState) return; // 已經在進行中
   if (!voiceSupported()) { alert('這支手機／瀏覽器不支援語音功能（需要麥克風與WebSocket）。'); return; }
   if (!navigator.onLine) { alert('請先連上網路才能使用語音功能。'); return; }
   _voiceState = { closed: false };
+  voiceFabSetActive(true);
   voiceRenderOverlay('準備中…', false);
   try {
     const auth = getStoredAuth();
@@ -152,7 +212,7 @@ async function voiceStart() {
     const audioCtx = new AudioCtx();
     _voiceState.audioCtx = audioCtx;
 
-    const ws = new WebSocket(VOICE_WS_URL + '?key=' + encodeURIComponent(tj.token));
+    const ws = new WebSocket(VOICE_WS_URL + '?access_token=' + encodeURIComponent(tj.token));
     _voiceState.ws = ws;
 
     ws.onopen = () => {
@@ -165,8 +225,8 @@ async function voiceStart() {
         }
       }));
     };
-    ws.onerror = () => voiceFail('語音連線發生錯誤，請稍後再試。如果一直這樣，請把瀏覽器主控台的錯誤訊息告訴工程師。');
-    ws.onclose = ev => { if (_voiceState && !_voiceState.closed) voiceFail(`語音連線中斷（code ${ev.code}）。`); };
+    ws.onerror = () => { console.error('語音WebSocket錯誤', ws.url); voiceFail('語音連線發生錯誤，請稍後再試。如果一直這樣，請把瀏覽器主控台的錯誤訊息告訴工程師。'); };
+    ws.onclose = ev => { console.error('語音WebSocket關閉', ev.code, ev.reason); if (_voiceState && !_voiceState.closed) voiceFail(`語音連線中斷（code ${ev.code}${ev.reason ? '：' + ev.reason : ''}）。`); };
     ws.onmessage = async ev => {
       let msg;
       try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
@@ -189,7 +249,7 @@ async function voiceStart() {
       }
       if (msg.serverContent) {
         const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
-        parts.forEach(p => { if (p.inlineData && p.inlineData.data) voicePlayAudioChunk(audioCtx, p.inlineData.data); });
+        parts.forEach(p => { if (p.inlineData && p.inlineData.data) voicePlayAudioChunk(audioCtx, p.inlineData.data, p.inlineData.mimeType); });
         if (msg.serverContent.turnComplete) voiceRenderOverlay('請說話…', true);
       }
     };

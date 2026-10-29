@@ -465,6 +465,11 @@
   .tag-list span{ display:inline-block; background:var(--group); border-radius:2px; padding:2px 6px; margin:2px 3px 0 0; font-size:11.5px; }
   .modal-backdrop{ position:fixed; inset:0; background:rgba(27,33,41,.55); display:flex; align-items:flex-start; justify-content:center; padding:30px 16px; z-index:100; overflow-y:auto; }
   .modal-box{ background:var(--panel); border-radius:var(--radius); max-width:960px; width:100%; padding:20px; max-height:calc(100vh - 60px); overflow-y:auto; }
+  .voice-fab{ position:fixed; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); width:58px; height:58px; border-radius:50%; border:3px solid #fff; box-shadow:0 6px 18px rgba(122,90,160,.45); padding:0; overflow:hidden; cursor:pointer; z-index:90; display:none; align-items:center; justify-content:center; background:transparent; animation:voiceFabBreathe 2.6s ease-in-out infinite; }
+  .voice-fab svg{ width:100%; height:100%; display:block; }
+  .voice-fab.active{ animation:voiceFabPulse 1s ease-in-out infinite; }
+  @keyframes voiceFabBreathe{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.06); } }
+  @keyframes voiceFabPulse{ 0%,100%{ box-shadow:0 0 0 4px rgba(224,89,79,.35), 0 6px 18px rgba(122,90,160,.45); } 50%{ box-shadow:0 0 0 10px rgba(224,89,79,.12), 0 6px 18px rgba(122,90,160,.45); } }
   .modal-box .toolbar{ margin-bottom:10px; }
   /* 全部夥伴資料：視窗放寬到幾乎整個螢幕；姓名、狀態、帳號、戶名這些短欄位不換行（以前窄螢幕上會被擠成一字一行） */
   .modal-box.wide{ max-width:min(1700px, 97vw); width:97vw; padding:20px 24px; }
@@ -1693,6 +1698,7 @@ function renderContent(){
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
     maybeGreetDriver();
   }
+  if(typeof voiceFabEnsure==='function') voiceFabEnsure(inDriverView);
 }
 // ---------- 戰情室（主控電腦版／大螢幕） ----------
 // 只讀「今天」的任務（state.data.assignments，由 Realtime 即時更新），每 15 秒依現在時間重算一次，
@@ -2495,10 +2501,7 @@ async function renderLeavePanel(){
   const today = todayStr();
   host.innerHTML = `<div class="panel">
     <div class="toolbar"><h3 style="margin:0;">📝 請假／回報不可排班</h3>
-      <div style="display:flex; gap:6px;">
-        <button class="btn ghost" id="leaveVoiceBtn" style="padding:4px 12px; font-size:12.5px;">🎙️ 語音</button>
-        <button class="btn ghost" id="leaveAddBtn" style="padding:4px 12px; font-size:12.5px;">新增</button>
-      </div>
+      <button class="btn ghost" id="leaveAddBtn" style="padding:4px 12px; font-size:12.5px;">新增</button>
     </div>
     <div id="leaveFormBox" style="display:none; margin-top:8px;">
       <div class="grid3">
@@ -2514,7 +2517,6 @@ async function renderLeavePanel(){
     document.getElementById('leaveFormBox').style.display = 'block';
     document.getElementById('leaveAddBtn').style.display = 'none';
   };
-  document.getElementById('leaveVoiceBtn').onclick = ()=> voiceStart();
   document.getElementById('leaveCancelBtn').onclick = ()=>{
     document.getElementById('leaveFormBox').style.display = 'none';
     document.getElementById('leaveAddBtn').style.display = '';
