@@ -255,6 +255,11 @@ const VOICE_FN_GOTO_SCREEN_DRIVER = {
   description: '幫使用者把畫面切到想看的分頁（純畫面導覽，不會改動任何資料）。target固定用下面其中一個：home（首頁）、today（今日任務）、history（歷史任務）、myEarnings（我的報酬）、myStatement（對帳單）、profile（我的資料）。',
   parameters: { type: 'OBJECT', properties: { target: { type: 'STRING', description: 'home, today, history, myEarnings, myStatement, 或 profile' } }, required: ['target'] }
 };
+const VOICE_FN_NAVIGATE_DRIVER = {
+  name: 'navigate_to_stop',
+  description: '使用者問「OO怎麼走」「幫我導航到OO」「帶我去OO」這種要前往某個店點的需求時用這個，會直接幫忙開啟Google地圖導航前往該店點，keyword填店名或代號。',
+  parameters: { type: 'OBJECT', properties: { keyword: { type: 'STRING', description: '要導航過去的店點名稱或代號' } }, required: ['keyword'] }
+};
 const VOICE_DRIVER_TAB_MAP = {
   home: ['home', '首頁'], today: ['today', '今日任務'], history: ['history', '歷史任務'],
   myEarnings: ['my-earnings', '我的報酬'], myStatement: ['my-statement', '對帳單'], profile: ['profile', '我的資料']
@@ -265,6 +270,23 @@ async function voiceToolGotoScreenDriver(args) {
   if (!mapped) return `還沒開放切到「${target}」這個畫面。`;
   try { switchTab(mapped[0]); } catch (e) { return '切換畫面時發生錯誤，請自己點選看看。'; }
   return `好，已經幫你切到${mapped[1]}了。`;
+}
+
+// 2026-10-30使用者要求：夥伴問「OO怎麼走」，小金要能直接開Google地圖導航，不是
+// 只唸地址。沿用畫面上「🧭導航」按鈕同一個mapLink()連結，一樣用完整正確的店點
+// 比對（voiceFindSingleDropPoint的三層安全比對，查不到/模糊都先確認，不會導航
+// 去錯地方）。用location.href在原分頁跳轉（不是window.open開新分頁）——
+// window.open()不是使用者直接點擊觸發的，手機瀏覽器幾乎一定會被彈窗阻擋擋下來，
+// 用location.href正常導航才不會被擋。跳轉前留2.5秒讓小金把這句話講完，不然
+// 畫面直接跳走、聲音還沒講完就被打斷，使用者會覺得莫名其妙。
+async function voiceToolNavigateDriver(args) {
+  const found = voiceFindSingleDropPoint((args && args.keyword) || '');
+  if (found.error) return found.error;
+  const dp = found.entity;
+  if (!dp.address) return `${dpLabel(dp)}沒有登記地址，沒辦法幫你開導航，請跟主控確認地址。`;
+  const url = mapLink(dp.address);
+  setTimeout(() => { try { voiceStop(); } catch (e) {} location.href = url; }, 2500);
+  return `好，已經幫你開啟到${dpLabel(dp)}的Google地圖導航了。`;
 }
 
 function voiceIsAdminMode() { return state.role === 'admin' && !state.adminViewDriver; }
@@ -624,6 +646,10 @@ function voiceSystemInstructionDriver() {
 - browse_info：問公告、自己登記過哪些請假、或查路線/店點/通路資料（不含金額，
   那些是Ellis才看得到的）就呼叫這個，topic要用browse_info工具說明裡列出的其中
   一個，不要自己亂編topic名稱。
+- navigate_to_stop：使用者問「OO怎麼走」「幫我導航到OO」「帶我去OO」這種要去
+  某個店點的需求，就呼叫這個，keyword填店名或代號——會直接幫忙開啟Google地圖
+  導航，講完這句確認之後畫面很快就會跳走（這是正常的，不用特別解釋），不用再
+  另外唸地址給使用者聽。
 這幾個工具以外，你看不到系統裡其他資料（例如別的夥伴的狀況、確切的公司財務數字），
 被問到就老實說看不到、不要瞎編；工具查詢失敗或查不到的時候，也照實跟使用者說查詢
 失敗，不要自己編一個答案出來。
@@ -1205,7 +1231,7 @@ async function voiceStart() {
           systemInstruction: { parts: [{ text: voiceSystemInstruction(briefingText) }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
             ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN, VOICE_FN_ASK_CARBON]
-            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER] }]
+            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER, VOICE_FN_NAVIGATE_DRIVER] }]
         }
       }));
     };
@@ -1233,6 +1259,7 @@ async function voiceStart() {
             else if (fc.name === 'browse_info') resultText = await voiceToolBrowseInfo(fc.args || {});
             else if (fc.name === 'goto_screen') resultText = await (voiceIsAdminMode() ? voiceToolGotoScreenAdmin(fc.args || {}) : voiceToolGotoScreenDriver(fc.args || {}));
             else if (fc.name === 'ask_carbon') resultText = await voiceToolAskCarbon(fc.args || {});
+            else if (fc.name === 'navigate_to_stop') resultText = await voiceToolNavigateDriver(fc.args || {});
           } catch (e) { resultText = '查詢時發生錯誤，請稍後再試。'; }
           try { ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id, name: fc.name, response: { result: resultText } }] } })); } catch (e) {}
           if (fc.name === 'report_unavailable') {
