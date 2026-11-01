@@ -1213,24 +1213,14 @@ function exportPanelPrint(panelEl, title, heading, opts){
 // 時，每筆各自佔一頁，組成同一份合併PDF，方便一次下載全體夥伴的勞報單。
 // 有代墊款的夥伴，第2頁是 payrollAttachmentHtml() 的明細附件，緊接在該夥伴
 // 勞報單後面（也是各自佔一頁）。
-// 2026-11-11修正：window.open()原本寫在await loadPdfLibs()之後，瀏覽器（尤其Safari/
-// iOS）判斷「是不是使用者剛點擊觸發的」是看時間點，await一下去、事件已經結束，
-// 彈出視窗的動作就不算數了，會被悄悄擋掉（不會跳錯誤，使用者只會覺得「按了沒反應」）。
-// 「合併全體夥伴」那顆按鈕本身在呼叫這支函式之前還有好幾個await（抓任務資料），問題
-// 更明顯。改成：呼叫端如果能在自己的click handler最開頭（還沒await任何東西之前）就先
-// window.open()，可以把開好的視窗传進來（existingWin）；沒傳的話這裡才自己開，至少比
-// 原本晚一點點。
-async function exportPayrollPortraitPdf(slipHtmls, filename, existingWin){
-  if(!slipHtmls || !slipHtmls.length){ if(existingWin && !existingWin.closed) existingWin.close(); alert('沒有可產生的勞報單內容'); return; }
-  const previewWin = existingWin || window.open('', '_blank');
-  if(previewWin && !previewWin.closed){
-    try{ previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>'); }catch(e){}
-  }
-  // 開新分頁通常會把它變成最前面/作用中的分頁，實際在跑html2canvas運算的這個分頁反而被推到
-  // 背景——Safari（尤其桌機版）對背景分頁會刻意降速，大量運算（多位夥伴逐張html2canvas）在
-  // 背景跑可能慢到像當機。這裡搶回焦點，讓運算全程留在前景跑，跑完才讓新分頁顯示結果。
-  try{ window.focus(); }catch(e){}
-  try{ await loadPdfLibs(); }catch(e){ if(previewWin && !previewWin.closed) previewWin.close(); alert(e.message); return; }
+// 2026-11-11：開新分頁預覽（window.open+embed）這條路一直在補洞——先是時機太晚被
+// 悄悄擋掉，修了之後又換成新分頁搶走焦點、運算所在的分頁被瀏覽器降速到像當機，使用者
+// 實測在自己的iMac Safari多位夥伴合併時還是卡很久。使用者要求乾脆比照請款單，不要
+// 預覽，做完直接觸發下載——這樣完全不需要開任何新分頁/視窗，上面兩種問題的根本原因
+// （多一個分頁）直接不存在，運算也還是在原本這個分頁跑，不會被降速。
+async function exportPayrollPortraitPdf(slipHtmls, filename){
+  if(!slipHtmls || !slipHtmls.length){ alert('沒有可產生的勞報單內容'); return; }
+  try{ await loadPdfLibs(); }catch(e){ alert(e.message); return; }
   const scrollX = window.scrollX || window.pageXOffset || 0;
   const scrollY = window.scrollY || window.pageYOffset || 0;
   try{
@@ -1260,26 +1250,8 @@ async function exportPayrollPortraitPdf(slipHtmls, filename, existingWin){
       if(i>0) pdf.addPage();
       pdf.addImage(canvas.toDataURL('image/jpeg',0.95), 'JPEG', xOffset, marginMm, drawWmm, drawHmm);
     }
-    const dataUri = pdf.output('datauristring');
-    if(previewWin && !previewWin.closed){
-      previewWin.document.open();
-      previewWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${filename}</title></head>
-        <body style="margin:0; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;">
-          <div style="padding:10px 14px; background:#F5F5F2; border-bottom:1px solid #D9DCE1; display:flex; align-items:center; justify-content:space-between;">
-            <span style="font-size:13px; color:#5B6472;">${filename}.pdf</span>
-            <a href="${dataUri}" download="${filename}.pdf" style="color:#E0902E; font-weight:600; text-decoration:none; font-size:13.5px;">⬇ 下載PDF</a>
-          </div>
-          <embed src="${dataUri}" type="application/pdf" style="width:100%; height:calc(100vh - 44px); border:none; display:block;">
-        </body></html>`);
-      previewWin.document.close();
-      try{ previewWin.focus(); }catch(e){}
-    } else {
-      const a = document.createElement('a');
-      a.href = dataUri; a.download = filename+'.pdf';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    }
+    pdf.save(filename+'.pdf');
   }catch(err){
-    if(previewWin && !previewWin.closed) previewWin.close();
     alert('產生PDF失敗：' + err.message);
   }
 }
@@ -5903,11 +5875,6 @@ function renderPayrollPage(c){
     const monthStr = document.getElementById('pAllMonth').value;
     const records = state.data.statements.filter(s=>s.month===monthStr);
     if(!records.length){ alert(`${monthStr} 沒有任何夥伴完成月結確認`); return; }
-    // 這顆按鈕本身呼叫exportPayrollPortraitPdf()之前還要先await抓任務資料，如果window.open()
-    // 擺在那之後才做，使用者點擊這個動作早就「過期」了，瀏覽器會悄悄擋掉彈出視窗、不會跳錯誤，
-    // 看起來就像「按了沒反應」。在還沒有任何await之前、點擊當下就先開好視窗。
-    const previewWin = window.open('', '_blank');
-    if(previewWin) previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">讀取資料中，請稍候…</body>');
     const rangeStart = records.reduce((m,x)=>{ const a=statementRange(x)[0]; return a<m?a:m; }, monthStr+'-01');
     const rangeEnd = records.reduce((m,x)=>{ const b=statementRange(x)[1]; return b>m?b:m; }, monthEndStr(monthStr));
     const btn = document.getElementById('printAllStatements');
@@ -5917,8 +5884,8 @@ function renderPayrollPage(c){
       monthAssignments = await fetchAssignmentsInRange(rangeStart, rangeEnd);
       await ensureAdjustmentsRange(rangeStart); await ensureFuelClaimsRange(rangeStart);
     }
-    catch(err){ alert(err.message); btn.disabled=false; btn.textContent=originalText; if(previewWin && !previewWin.closed) previewWin.close(); return; }
-    btn.disabled = false; btn.textContent = originalText;
+    catch(err){ alert(err.message); btn.disabled=false; btn.textContent=originalText; return; }
+    btn.textContent = 'PDF 產生中…';
     const slips = records.map(record=>{
       const driver = state.data.drivers.find(d=>d.id===record.driverId);
       if(!driver) return null;
@@ -5926,7 +5893,8 @@ function renderPayrollPage(c){
       const { slipHtml, attHtml } = buildSlipHtmls(driver, record, monthAssignments);
       return [slipHtml, attHtml].filter(Boolean);
     }).filter(Boolean).flat();
-    exportPayrollPortraitPdf(slips, `全體夥伴勞報單_${monthStr}`, previewWin);
+    try{ await exportPayrollPortraitPdf(slips, `全體夥伴勞報單_${monthStr}`); }
+    finally{ btn.disabled = false; btn.textContent = originalText; }
   };
   // 尚未月結名單（勞報單頁）：只在每月 1～15 號顯示、只看上個月、可收合；每位夥伴有「查看並月結」與「無需月結」，
   // 已標無需月結的可在底下恢復。16 號起整個消失，不論有沒有月結。
