@@ -5585,7 +5585,7 @@ function payrollAttachmentHtml(driver, monthStr, r, opts){
       <h3 style="text-align:center; margin:0 0 14px;">附件：${opts.period ? '代墊款明細' : Number(m)+'月代墊款明細'}</h3>
       <table>
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
-        <tr><td>所得人姓名</td><td>${escapeHtml(driver.bank.holder||driver.name)}</td><td>${opts.period ? '所屬期間' : '所屬月份'}</td><td>${opts.period ? opts.period.start+'～'+opts.period.end : monthStr}</td></tr>
+        <tr><td>所得人姓名</td><td>${escapeHtml(driver.name)}</td><td>${opts.period ? '所屬期間' : '所屬月份'}</td><td>${opts.period ? opts.period.start+'～'+opts.period.end : monthStr}</td></tr>
       </table>
       <p style="font-size:12px; margin:12px 0 4px;">以下為所得人代墊（加油、車輛保養等）、發票憑證開立公司統編之款項，已包含在${opts.period ? '本期間' : '本月'}報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
       <table>
@@ -5639,7 +5639,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       <h3 style="text-align:center; margin:0 0 14px;">${opts.period ? '勞務報酬單' : Number(m)+'月勞務報酬單'}</h3>
       <table>
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
-        <tr><td>所得人姓名</td><td>${escapeHtml(driver.bank.holder||driver.name)}</td><td>身分證／居留證號</td><td>${escapeHtml(driver.idNumber||'（未填寫）')}</td></tr>
+        <tr><td>所得人姓名</td><td>${escapeHtml(driver.name)}</td><td>身分證／居留證號</td><td>${escapeHtml(driver.idNumber||'（未填寫）')}</td></tr>
         <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>${opts.payMethod==='cash'?'現金':'銀行轉帳'}</td></tr>
         ${opts.payMethod==='cash' ? '' : `<tr><td>銀行／分行</td><td>${escapeHtml(driver.bank.bankName||'—')}／${escapeHtml(driver.bank.branch||'—')}</td><td>帳號</td><td>${escapeHtml(driver.bank.account||'—')}</td></tr>`}
       </table>
