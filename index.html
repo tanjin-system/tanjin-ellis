@@ -5634,7 +5634,7 @@ function renderPayrollPage(c){
       </div>`;
     })()}
     ${(()=>{
-      const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
+      const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending' && (!scope || f.driverId===scope)).sort((a,b)=>a.date.localeCompare(b.date));
       if(!pending.length) return '';
       return `<div class="panel">
         <h3 style="margin-top:0;">夥伴代墊申報待確認（${pending.length}）</h3>
@@ -5850,13 +5850,11 @@ function renderPayrollPage(c){
     catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
     if(!el.isConnected) return;
     const mine = groups.filter(g=>g.driverId===driverId);
-    const others = groups.filter(g=>g.driverId!==driverId);
     el.innerHTML = `<div class="panel no-print" ${mine.some(g=>deferredStatus(g.due)==='overdue')?'style="border-color:var(--danger); border-width:2px;"':''}>
       <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
       ${mine.length ? `<table><thead><tr><th>區間</th><th>趟報酬合計</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
         <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
         <div id="dfPayForm"></div>` : '<div style="font-size:13px;">這位夥伴目前沒有待付款。</div>'}
-      ${others.length ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:8px;">其他夥伴還有 ${others.length} 筆待付款：${others.map(g=>`${escapeHtml(driverName(g.driverId))}（${g.due}）`).join('、')}</div>` : ''}
     </div>`;
     el.querySelectorAll('[data-dfcancel]').forEach(b=>{
       b.onclick = async ()=>{
