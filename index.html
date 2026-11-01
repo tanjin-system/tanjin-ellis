@@ -1479,7 +1479,7 @@ function profitDailyHtml(){
   return `<div style="overflow-x:auto;"><table>
     <thead><tr><th>日期</th><th>任務數</th><th>請款總額</th><th>夥伴薪資支出</th><th>利潤</th></tr></thead>
     <tbody>${rows.map(r=>`<tr><td>${r.date.slice(5).replace('-','/')}（${WD[new Date(r.date+'T00:00:00').getDay()]}）</td><td class="amount">${r.trips}</td><td class="amount">${fmt(r.revenue)}</td><td class="amount">${fmt(r.expense)}</td>${profitCell(r.revenue-r.expense)}</tr>`).join('')}
-    <tr style="font-weight:700; background:#F4F3EF;"><td>本月合計</td><td class="amount">${sum.trips}</td><td class="amount">${fmt(sum.revenue)}</td><td class="amount">${fmt(sum.expense)}</td>${profitCell(sum.revenue-sum.expense)}</tr></tbody>
+    <tr style="font-weight:700; background:var(--group);"><td>本月合計</td><td class="amount">${sum.trips}</td><td class="amount">${fmt(sum.revenue)}</td><td class="amount">${fmt(sum.expense)}</td>${profitCell(sum.revenue-sum.expense)}</tr></tbody>
   </table></div>
   <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0;">每天的數字是當天完成的任務；加減項依調整項日期歸入（沒填日期的算在 1 號）；請款結算的「例外調整」併入備註開頭日期（沒寫就用登打日）那天的請款總額。僅供參考。</p>`;
 }
@@ -5814,7 +5814,7 @@ function renderPayrollPage(c){
       ${rows.length ? `<table>
         <thead><tr><th>夥伴</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
         <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
-        <tr style="font-weight:700; background:#F4F3EF;"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
+        <tr style="font-weight:700; background:var(--group);"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
       </table>` : '<div style="font-size:13px;">這個月所有有完成任務的夥伴都已月結確認或標為無需月結。</div>'}
       ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
         <div style="margin-top:4px;">${skipped.map(d=>`<span style="margin-right:12px; font-size:12.5px;">${escapeHtml(d.name)} <button class="btn ghost" data-settlerestore="${d.id}" style="padding:2px 8px; font-size:11.5px;">恢復</button></span>`).join('')}</div></details>` : ''}
