@@ -568,7 +568,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=20"></script>
-<script defer src="js/driver-ui.js?v=3"></script>
+<script defer src="js/driver-ui.js?v=4"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=34"></script>
@@ -817,20 +817,28 @@ function openCameraCapture(maxShots, storeName){
     };
   });
 }
-// 台灣財政部電子發票QR Code（左邊那個）固定格式：冒號分隔，第一段(前75碼)依序是
-// 發票字軌(2)+發票號碼(8)+發票年月民國(5)+隨機碼(4)+銷售額16進位(8)+總計金額16進位(8)+
-// 買方統編(8)+賣方統編(8)+加密驗證(24)。這裡只取「發票字軌+號碼」跟「總計金額」兩個
-// 有把握、格式固定的欄位；發票年月只到月沒有日，日期這種容易弄錯的欄位故意不去動，
-// 讓夥伴自己選，掃描只是省打字、不是全自動，欄位都還看得到可以自己改再送出。
+// 台灣財政部電子發票QR Code（左邊那個）固定格式：冒號分隔，第一段(前77碼)依序是
+// 發票字軌(2)+發票號碼(8)+發票日期民國年月日(7＝年3+月2+日2)+隨機碼(4)+銷售額16進位(8)+
+// 總計金額16進位(8)+買方統編(8)+賣方統編(8)+加密驗證(24)。
+// 2026-11-11：日期原本以為只有「民國年＋月」5碼，少算了「日」2碼，導致後面所有欄位
+// （含金額）位移錯位——用使用者實測發票的原始掃描字串核對過：FK78126879 + 1150923
+// （115年09月23日）+ 4350（隨機碼）+ 00000039（銷售額57）+ 0000003c（總計金額60，跟
+// 發票印的「總計：60」一致）+ 00000000（買方統編，個人消費沒有）+ 42519913（賣方統編，
+// 跟發票印的一致）——位置完全對上，7碼才是對的。日期現在信心足夠，一併自動帶入。
 function parseTaiwanInvoiceQR(text){
   const head = (text||'').split(':')[0] || '';
-  if(head.length<75) return null;
+  if(head.length<77) return null;
   const invoiceNo = head.slice(0,10);
-  const amountHex = head.slice(27,35);
   if(!/^[A-Z]{2}\d{8}$/.test(invoiceNo)) return null;
+  const dateDigits = head.slice(10,17);
+  if(!/^\d{7}$/.test(dateDigits)) return null;
+  const rocYear = Number(dateDigits.slice(0,3)), mm = dateDigits.slice(3,5), dd = dateDigits.slice(5,7);
+  if(Number(mm)<1 || Number(mm)>12 || Number(dd)<1 || Number(dd)>31) return null;
+  const date = `${rocYear+1911}-${mm}-${dd}`;
+  const amountHex = head.slice(29,37);
   const amount = parseInt(amountHex,16);
   if(!Number.isFinite(amount) || amount<=0) return null;
-  return { invoiceNo, amount };
+  return { invoiceNo, date, amount };
 }
 // 掃發票QR：跟openCameraCapture()同一套鏡頭開關/串流處理方式，差別是這裡不是等
 // 使用者按快門，而是用requestAnimationFrame連續把目前畫面丟給jsQR辨識，掃到

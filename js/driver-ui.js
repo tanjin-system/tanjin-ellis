@@ -1008,7 +1008,8 @@ function renderFuelPanel(){
     if(r.fallback){ alert('這台裝置/瀏覽器沒辦法掃描，請直接手動輸入發票號碼跟金額。'); return; }
     document.getElementById('fcInvoice').value = r.invoiceNo;
     document.getElementById('fcAmount').value = r.amount;
-    toast(`已掃描發票 ${r.invoiceNo}，金額 $${money(r.amount)}，請確認日期與類別後送出`);
+    if(r.date) document.getElementById('fcDate').value = r.date;
+    toast(`已掃描發票 ${r.invoiceNo}，${r.date||''} 金額 $${money(r.amount)}，請確認類別後送出`);
   };
   document.getElementById('fcSubmit').onclick = async ()=>{
     const input = { driverId:dId, category:document.getElementById('fcCategory').value, date:document.getElementById('fcDate').value, amount:document.getElementById('fcAmount').value, invoiceNo:document.getElementById('fcInvoice').value, note:document.getElementById('fcNote').value };
