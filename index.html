@@ -6225,15 +6225,19 @@ function renderPayrollPage(c){
 
 // ---------- 夥伴匯款清單（2026-11-01） ----------
 // 使用者要求：每個月要去銀行轉帳給大家之前，想要一次看完所有在職夥伴的匯款
-// 資訊＋應付金額，不用一個一個點開報酬結算頁查。純讀取、不寫任何資料；金額
+// 資訊＋應付金額，不用一個一個點開報酬結算頁查。純讀取、不寫任何資料；基礎金額
 // 算法呼叫computeDriverPayable()，跟報酬結算頁用同一套規則，確保兩邊金額
 // 一定一致。含銀行帳號、身分證字號這類敏感資料，只有主控看得到（這個分頁
 // 本來就只在ADMIN_TABS，夥伴端完全不會有這個分頁、也查不到別人的這些資料）。
+// 2026-11-01補：加上掛帳（延後付款）處理——computeDriverPayable()本身不管掛帳，
+// 這個月掛到以後才付的要先扣掉（不是這個月真的要匯的錢），以前月份掛到這個月付的
+// 要加回來，這樣這裡的金額才會是「這個月真的要轉出去的錢」，不只是跟報酬結算頁
+// 一致而已（報酬結算頁的「可領淨額」本身也沒扣掛帳，只在旁邊加註提醒，要人工判斷）。
 async function renderPaymentList(c){
   const month = state._paymentListMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">夥伴匯款清單</h2>
-    <p class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額（已扣預支、已扣已付款），方便去銀行轉帳前核對。金額算法跟「報酬結算」頁完全一致；這裡純粹是彙整檢視，不會寫入或異動任何資料。點姓名可以直接跳去那位夥伴的報酬結算明細，數字對不起來可以在那裡調整。</p>
+    <p class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額（已扣預支、已扣已付款、已處理掛帳），方便去銀行轉帳前核對。基礎算法跟「報酬結算」頁完全一致；差別是這裡會把「掛帳」處理掉——這個月有掛到下個月才付的部分不算進這個月的匯款金額，上個月掛到這個月付的部分會加進來，確保這裡的數字就是這個月真的要匯出去的錢。純彙整檢視，不會寫入或異動任何資料。點姓名可以直接跳去那位夥伴的報酬結算明細。</p>
     <div class="panel no-print">
       <div class="grid2">
         <div class="field" style="max-width:200px;"><label>月份</label><select id="plMonth">${monthOptionsHtml(month)}</select></div>
@@ -6253,14 +6257,22 @@ async function renderPaymentList(c){
     state._paymentListMonth = monthStr;
     const box = document.getElementById('plResult');
     box.innerHTML = '<div class="empty">載入中…</div>';
-    let monthAssignments;
+    let monthAssignments, allDeferred;
     try{
       monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr));
       await ensureAdjustmentsRange(monthStr+'-01');
+      allDeferred = await fetchDeferredTrips();
     }catch(err){ box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; return; }
     if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能已經切走這一頁或換了月份
     const drivers = [...state.data.drivers].filter(d=>d.status==='active').sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));
-    const rows = drivers.map(d=>({ driver:d, ...computeDriverPayable(d.id, monthStr, monthAssignments) }));
+    const monthStart = monthStr+'-01', monthEnd = monthEndStr(monthStr);
+    const rows = drivers.map(d=>{
+      const base = computeDriverPayable(d.id, monthStr, monthAssignments);
+      const defSplit = deferredSplit(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
+      // 這個月做的事有一部分約好晚點付（inRange），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來。
+      const payable = base.payable - defSplit.inRange.total + defSplit.other.total;
+      return { driver:d, payable, defSplit };
+    });
     const total = rows.reduce((s,x)=>s+x.payable, 0);
     const missingBank = rows.filter(x=>!x.driver.bank.account || !x.driver.idNumber);
     box.innerHTML = `
@@ -6268,14 +6280,14 @@ async function renderPaymentList(c){
       <div class="panel">
         <table id="plTable">
           <thead><tr><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
-          <tbody>${rows.map(({driver:d, payable})=>`<tr ${!d.bank.account||!d.idNumber?'style="background:rgba(214,69,69,.08);"':''}>
+          <tbody>${rows.map(({driver:d, payable, defSplit})=>`<tr ${!d.bank.account||!d.idNumber?'style="background:rgba(214,69,69,.08);"':''}>
             <td><button class="btn ghost" data-plgopayroll="${d.id}" style="padding:2px 8px; font-size:12.5px;" title="前往這位夥伴的報酬結算明細">${escapeHtml(d.name)}</button></td>
             <td>${escapeHtml(d.bank.holder||'—')}</td>
             <td>${escapeHtml(d.bank.bankName||'—')}</td>
             <td>${escapeHtml(d.bank.branch||'—')}</td>
             <td class="mono">${escapeHtml(d.bank.account||'—')}</td>
             <td class="mono">${escapeHtml(d.idNumber||'—')}</td>
-            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}</td>
+            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${defSplit.inRange.total||defSplit.other.total?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${defSplit.inRange.total?`已扣掛帳待${defSplit.inRange.dues.join('、')}付 $${money(defSplit.inRange.total)}`:''}${defSplit.other.total?`${defSplit.inRange.total?'；':''}含上期掛帳 $${money(defSplit.other.total)}`:''}</div>`:''}</td>
           </tr>`).join('') || `<tr><td colspan="7"><div class="empty">沒有在職夥伴</div></td></tr>`}</tbody>
           <tfoot><tr><td colspan="6" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
         </table>
