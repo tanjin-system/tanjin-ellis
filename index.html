@@ -844,13 +844,17 @@ function openInvoiceScanner(){
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
     overlay.innerHTML = `
-      <video autoplay playsinline muted style="flex:1; width:100%; height:100%; object-fit:cover; background:#000;"></video>
-      <div style="padding:10px 16px; background:#111; color:#fff; font-size:13px; text-align:center;">把發票左邊的QR Code對準畫面中間</div>
+      <div style="position:relative; flex:1; overflow:hidden;">
+        <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
+        <div data-invframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:min(70vw,70vh); height:min(70vw,70vh); border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.45); pointer-events:none;"></div>
+      </div>
+      <div style="padding:10px 16px; background:#111; color:#fff; font-size:13px; text-align:center;">把發票左邊的QR Code對準框框，盡量貼近鏡頭、對焦後再拿穩</div>
       <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
         <button type="button" data-invcancel style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消，改手動輸入</button>
       </div>`;
     document.body.appendChild(overlay);
     const video = overlay.querySelector('video');
+    const frameEl = overlay.querySelector('[data-invframe]');
     let stream = null, settled = false, raf = null;
     function cleanup(){
       if(raf) cancelAnimationFrame(raf);
@@ -866,14 +870,34 @@ function openInvoiceScanner(){
     overlay.querySelector('[data-invcancel]').onclick = ()=> settle({ cancelled:true });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    // 只裁切畫面中間的取景框那一塊來辨識（不是整個鏡頭畫面）：範圍更小、兩張QR Code不會
+    // 互相干擾，使用者看得到框框知道要對準哪裡；辨識前先縮到最多900px寬，原始相機畫面
+    // 動輒1920px以上，整張丟給jsQR逐格辨識非常慢，是「很難掃、要對很久」的主因。
+    // inversionAttempts設dontInvert：發票都是白底黑字，不需要嘗試反相，可以再省一半運算。
     function tick(){
       if(settled) return;
-      if(video.videoWidth && video.videoHeight){
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if(vw && vh){
+        const frameRect = frameEl.getBoundingClientRect();
+        const videoRect = video.getBoundingClientRect();
+        // object-fit:cover時，video顯示畫面跟實際影像畫素的縮放比例跟裁切量要自己算。
+        const scale = Math.max(videoRect.width/vw, videoRect.height/vh);
+        const dispW = vw*scale, dispH = vh*scale;
+        const offX = (videoRect.width-dispW)/2, offY = (videoRect.height-dispH)/2;
+        const sx = Math.max(0, (frameRect.left-videoRect.left-offX)/scale);
+        const sy = Math.max(0, (frameRect.top-videoRect.top-offY)/scale);
+        let sw = Math.min(vw-sx, frameRect.width/scale);
+        let sh = Math.min(vh-sy, frameRect.height/scale);
+        // 版面還沒量到尺寸（極少數第一格就跑到這裡）時sw/sh會是0或NaN，退回整張畫面，
+        // 不要整個卡死辨識不到東西。
+        if(!(sw>0) || !(sh>0)){ sw = vw; sh = vh; }
+        const maxDim = 900;
+        const outScale = Math.min(1, maxDim/Math.max(sw,sh));
+        canvas.width = Math.round(sw*outScale); canvas.height = Math.round(sh*outScale);
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
         try{
           const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(img.data, img.width, img.height);
+          const code = jsQR(img.data, img.width, img.height, { inversionAttempts:'dontInvert' });
           if(code && code.data){
             const parsed = parseTaiwanInvoiceQR(code.data);
             if(parsed){ settle(parsed); return; }
