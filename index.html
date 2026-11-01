@@ -6382,14 +6382,14 @@ function enhanceDriverSelect(sel, opts){
     const q = input.value.trim().toLowerCase();
     const filtering = q && q !== currentText().toLowerCase();
     const items = options().filter(o=> !filtering || o.text.toLowerCase().includes(q));
-    const rowHtml = o=>`<div class="dpick-item" data-v="${escapeHtml(o.value)}" style="padding:7px 12px; cursor:pointer; font-size:13.5px; ${o.value===sel.value?'background:#F4F3EF;':''}">${escapeHtml(o.text)}${freq && freq.get(o.value) ? `<span style="color:var(--ink-soft); font-size:11.5px; margin-left:6px;">近60天 ${freq.get(o.value)} 趟</span>` : ''}</div>`;
+    const rowHtml = o=>`<div class="dpick-item" data-v="${escapeHtml(o.value)}" style="padding:7px 12px; cursor:pointer; font-size:13.5px; ${o.value===sel.value?'background:var(--bg-hover);':''}">${escapeHtml(o.text)}${freq && freq.get(o.value) ? `<span style="color:var(--ink-soft); font-size:11.5px; margin-left:6px;">近60天 ${freq.get(o.value)} 趟</span>` : ''}</div>`;
     let html;
     if(freq && freq.size){
       const common = items.filter(o=>o.value && freq.has(o.value)).sort((a,b)=>freq.get(b.value)-freq.get(a.value));
       const other = items.filter(o=>!(o.value && freq.has(o.value)));
       const og = opts.getOrigin && opts.getOrigin();
-      html = (common.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--teal); background:#F4F3EF;">${escapeHtml(originLabel(og))} 常跑的夥伴</div>${common.map(rowHtml).join('')}` : '')
-        + (other.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--ink-soft); background:#F4F3EF;">${common.length?'其他夥伴':'夥伴'}</div>${other.map(rowHtml).join('')}` : '');
+      html = (common.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--teal); background:var(--bg-hover);">${escapeHtml(originLabel(og))} 常跑的夥伴</div>${common.map(rowHtml).join('')}` : '')
+        + (other.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--ink-soft); background:var(--bg-hover);">${common.length?'其他夥伴':'夥伴'}</div>${other.map(rowHtml).join('')}` : '');
     } else html = items.map(rowHtml).join('');
     list.innerHTML = html || '<div style="padding:8px 12px; font-size:12.5px; color:var(--ink-soft);">找不到符合的夥伴</div>';
     list.querySelectorAll('.dpick-item').forEach(el=>{
