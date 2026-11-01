@@ -6197,7 +6197,6 @@ function renderPayrollPage(c){
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的夥伴/月份
     const live = driverMonthly(driverId, monthStr, monthAssignments);
     const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
-    const periodOverlap = record ? null : findOverlappingStatement(driverId, monthStr+'-01', monthEndStr(monthStr));
     const isFrozen = !!record;
     // 還沒月結確認的預覽，要用「排除預支」的淨額（跟confirmMonthlyStatement()
     // 存檔時算的邏輯一致），不能直接用live.net（那個是含預支扣減的即時參考值）。
@@ -6211,7 +6210,7 @@ function renderPayrollPage(c){
     // 開出的區間／月結勞報單各自依自己期間正確算過，直接採用其實領金額；還
     // 沒被任何勞報單涵蓋的部分，不假設扣稅，用原始金額顯示——真正會不會扣
     // 稅，要等實際開單那天依那筆自己的金額才知道。
-    let ded, coveringStatements = [];
+    let ded, coveringStatements = [], fullyCovered = false;
     if(isFrozen){
       ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
     } else {
@@ -6225,6 +6224,12 @@ function renderPayrollPage(c){
       const documentedTax = coveringStatements.reduce((s,x)=>s+x.taxAmount, 0);
       const documentedNhi = coveringStatements.reduce((s,x)=>s+x.nhiAmount, 0);
       const isCovered = date => coveringStatements.some(s=>{ const [a,b]=statementRange(s); return date>=a && date<=b; });
+      // 這個月每一天是不是都已經被某張區間勞報單涵蓋——全涵蓋的話月結這塊完全沒事可做，
+      // 不用再提醒「尚未月結確認」（天數不多，逐日檢查成本可以忽略）。
+      fullyCovered = coveringStatements.length>0;
+      for(let d=new Date(monthStart+'T00:00:00'); fullyCovered && ymd(d)<=monthEnd; d.setDate(d.getDate()+1)){
+        if(!isCovered(ymd(d))) fullyCovered = false;
+      }
       const undocTripTotal = live.trips.filter(a=>!isCovered(a.date)).reduce((s,a)=>s+tripPay(a), 0);
       const undocAdjustments = live.adjustments.filter(a=>!isCovered(adjustmentEffectiveDate(a)));
       const undocNet = statementNetFromAdjustments(undocTripTotal, undocAdjustments).net;
@@ -6257,10 +6262,13 @@ function renderPayrollPage(c){
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
-        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方「可領淨額」已經改用已開出的區間勞報單金額＋尚未開單部分原始金額計算（不會假設整月合併扣稅），請改用下方「區間勞報單」處理尚未開單的日期。</div>` : ''}
-        ${!isFrozen && coveringStatements.length ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}），下方金額已採用各自實際扣稅後的實領金額；其餘尚未開單的日期以原始金額顯示，實際扣不扣稅要等開單那天依那筆自己的金額才知道。</div>` : ''}
         ${statementDriftNote(record, live)}
-        ${!record ? `<div class="note">尚未月結確認。配送明細、調整項、可領淨額請直接看下方「區間勞報單」的即時預覽（預設期間就是整個月）——這裡不再重複顯示一次一樣的數字，調整項如果要新增，用上方的「新增調整項」表單即可。</div>` : `
+        ${!record ? (fullyCovered
+          ? `<div class="note">這個月已經透過區間勞報單（${coveringStatements.map(statementLabel).join('、')}）處理完畢，不用再開單；詳情跟簽名狀態請看下方「區間勞報單」。新增調整項會算進下一張還沒開的勞報單。</div>`
+          : coveringStatements.length
+            ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}）涵蓋部分日期，其餘日期請在下方「區間勞報單」處理；下方「可領淨額」已採用已開出部分的實際扣稅後金額＋尚未開單部分的原始金額計算（不假設整月合併扣稅）。</div>`
+            : `<div class="note">尚未月結確認。配送明細、調整項、可領淨額請直接看下方「區間勞報單」的即時預覽（預設期間就是整個月）——這裡不再重複顯示一次一樣的數字，調整項如果要新增，用上方的「新增調整項」表單即可。</div>`
+        ) : `
         <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span class="fold-chev">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
