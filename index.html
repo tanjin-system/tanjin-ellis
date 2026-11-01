@@ -6266,7 +6266,13 @@ async function renderPaymentList(c){
       allDeferred = await fetchDeferredTrips();
     }catch(err){ box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; return; }
     if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能已經切走這一頁或換了月份
-    const drivers = [...state.data.drivers].filter(d=>d.status==='active').sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));
+    // 同一家銀行的排在一起，方便去那家銀行網銀/APP時一次處理完；銀行內再依姓名排序；沒填銀行的排最後。
+    const drivers = [...state.data.drivers].filter(d=>d.status==='active').sort((a,b)=>{
+      const bankA = a.bank.bankName||'', bankB = b.bank.bankName||'';
+      if(!bankA && bankB) return 1;
+      if(bankA && !bankB) return -1;
+      return bankA.localeCompare(bankB,'zh-Hant') || a.name.localeCompare(b.name,'zh-Hant');
+    });
     const monthStart = monthStr+'-01', monthEnd = monthEndStr(monthStr);
     const allRows = drivers.map(d=>{
       const base = computeDriverPayable(d.id, monthStr, monthAssignments);
@@ -6286,7 +6292,10 @@ async function renderPaymentList(c){
         ${skipped ? `<p class="note" style="margin-top:0;">另有 ${skipped} 位在職夥伴本月淨額為 $0（或以下），免匯款，未列在下面清單。</p>` : ''}
         <table id="plTable">
           <thead><tr><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
-          <tbody>${rows.map(({driver:d, payable, defSplit})=>`<tr ${!d.bank.account||!d.idNumber?'style="background:rgba(214,69,69,.08);"':''}>
+          <tbody>${rows.map(({driver:d, payable, defSplit}, i)=>{
+            const newBank = i>0 && (d.bank.bankName||'')!==(rows[i-1].driver.bank.bankName||'');
+            const baseStyle = !d.bank.account||!d.idNumber ? 'background:rgba(214,69,69,.08);' : '';
+            return `<tr style="${baseStyle}${newBank?' border-top:2px solid var(--border);':''}">
             <td><button class="btn ghost" data-plgopayroll="${d.id}" style="padding:2px 8px; font-size:12.5px;" title="前往這位夥伴的報酬結算明細">${escapeHtml(d.name)}</button></td>
             <td>${escapeHtml(d.bank.holder||'—')}</td>
             <td>${escapeHtml(d.bank.bankName||'—')}</td>
@@ -6294,7 +6303,8 @@ async function renderPaymentList(c){
             <td class="mono">${escapeHtml(d.bank.account||'—')}</td>
             <td class="mono">${escapeHtml(d.idNumber||'—')}</td>
             <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${defSplit.inRange.total||defSplit.other.total?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${defSplit.inRange.total?`已扣掛帳待${defSplit.inRange.dues.join('、')}付 $${money(defSplit.inRange.total)}`:''}${defSplit.other.total?`${defSplit.inRange.total?'；':''}含上期掛帳 $${money(defSplit.other.total)}`:''}</div>`:''}</td>
-          </tr>`).join('') || `<tr><td colspan="7"><div class="empty">${allRows.length?'這個月所有在職夥伴淨額都是$0（或以下），沒有人需要匯款':'沒有在職夥伴'}</div></td></tr>`}</tbody>
+          </tr>`;
+          }).join('') || `<tr><td colspan="7"><div class="empty">${allRows.length?'這個月所有在職夥伴淨額都是$0（或以下），沒有人需要匯款':'沒有在職夥伴'}</div></td></tr>`}</tbody>
           <tfoot><tr><td colspan="6" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
         </table>
       </div>`;
