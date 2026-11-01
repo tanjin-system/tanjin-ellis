@@ -2404,11 +2404,11 @@ function groupDeferred(trips) {
 // 掛帳金額依「檢視的期間」拆成兩塊：期間內（已經算在該月報酬裡，只註明已掛帳）與期間外、但約定
 // 這個月付（要另外加進應付合計）。dues 是預計付款日（去重、由早到晚）。
 // 2026-11-11修正：other原本只看「任務日期不在這個月」，沒有比對預計付款日，導致一筆掛帳從掛上去
-// 那個月開始，之後每個月（看到天荒地老）都會被算進「應付合計」——9月做的事掛到11月付，結果10月、
-// 11月、12月…的匯款清單/報酬結算全部都顯示這筆，不是只有真正到期的11月才有。改成要「預計付款日
-// 不晚於這個月月底」（到期或已逾期）才算進other：還沒到期的月份（例如10月）不會看到；到了11月開始
-// 出現，如果到時候還沒點「已付款」，之後逾期的月份（12月…）會繼續顯示（真的還沒付，不該悄悄消失），
-// 直到實際標記已付款為止。
+// 那個月開始，之後每個月（看到天荒地老）都會被算進「應付合計」——9月做的事掛到10月付，結果10月、
+// 11月、12月…的匯款清單/報酬結算全部都顯示這筆，不是只有真正到期的10月才有。改成要「預計付款日
+// 落在這個月範圍內」才算進other：一筆錢只會在它真正到期的那一個月被算進應付合計，之前之後的月份
+// 都不會出現。已經逾期還沒付的另外由首頁「待辦提醒」的逾期待付款清單提醒（deferredStatus），
+// 不靠這裡每個月重複顯示來提醒，避免同一筆錢在好幾個月的匯款清單都被加進去。
 function deferredSplit(trips, start, end) {
   const pack = list => ({
     total: list.reduce((sum, t) => sum + tripPay(t), 0),
@@ -2416,7 +2416,7 @@ function deferredSplit(trips, start, end) {
   });
   return {
     inRange: pack(trips.filter(t => t.date >= start && t.date <= end)),
-    other: pack(trips.filter(t => (t.date < start || t.date > end) && t.payDueDate <= end))
+    other: pack(trips.filter(t => (t.date < start || t.date > end) && t.payDueDate >= start && t.payDueDate <= end))
   };
 }
 // 首頁用：5 分鐘內共用同一份結果，付款／掛帳動作會清掉快取。
