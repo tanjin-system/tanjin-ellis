@@ -232,7 +232,7 @@ async function runCron() {
     const month = now.getUTCMonth() + 1;
     out.statement = await sendMessages([
       { to: { all: true }, kind: 'statement', tag: 'statement-' + today.slice(0, 7), url: '/?go=my-earnings', title: '月底對帳', body: month + ' 月結束了，請到「我的報酬」確認本月任務與報酬是否正確' },
-      { to: { admin: true }, kind: 'statement', tag: 'statement-admin-' + today.slice(0, 7), url: '/?go=slips', title: '月底對帳', body: month + ' 月結束了，記得進行月結：報酬結算與勞報單' }
+      { to: { admin: true }, kind: 'statement', tag: 'statement-admin-' + today.slice(0, 7), url: '/?go=payroll', title: '月底對帳', body: month + ' 月結束了，記得進行月結：報酬結算與勞報單' }
     ]);
   }
   // 3) 備份提醒：超過 7 天沒下載完整備份（或從來沒有），每兩天提醒主控一次，直到備份為止

@@ -144,7 +144,7 @@ function voiceFindSingleDropPoint(rawQuery) {
 
 const VOICE_FN_GOTO_SCREEN_ADMIN = {
   name: 'goto_screen',
-  description: '幫Ellis把畫面切到想查看的地方（純畫面導覽，不會改動任何資料）。target用driver（某位夥伴的資料，keyword填姓名）、drop_point（某個店點，keyword填店名或代號）、route（某條路線的編輯畫面，keyword填路線名稱），或下面這些固定分頁之一：home（總覽首頁）、warroom（戰情室）、schedule（排班）、drivers（夥伴列表）、dropPoints（店點列表）、routes（路線列表）、payroll（報酬結算）、billing（請款結算）、channels（通路）、origins（任務起點）、announcements（公告）、slips（勞報單）、export（資料匯出）、settings（系統設定）。',
+  description: '幫Ellis把畫面切到想查看的地方（純畫面導覽，不會改動任何資料）。target用driver（某位夥伴的資料，keyword填姓名）、drop_point（某個店點，keyword填店名或代號）、route（某條路線的編輯畫面，keyword填路線名稱），或下面這些固定分頁之一：home（總覽首頁）、warroom（戰情室）、schedule（排班）、drivers（夥伴列表）、dropPoints（店點列表）、routes（路線列表）、payroll（報酬結算，含月結/區間勞報單與簽名）、billing（請款結算）、channels（通路）、origins（任務起點）、announcements（公告）、export（資料匯出）、settings（系統設定）。',
   parameters: { type: 'OBJECT', properties: {
     target: { type: 'STRING', description: 'driver, drop_point, route, 或上面列出的固定分頁名稱之一' },
     keyword: { type: 'STRING', description: 'driver/drop_point/route需要填姓名或名稱，固定分頁不用填' }
@@ -154,7 +154,7 @@ const VOICE_ADMIN_TAB_MAP = {
   home: ['home', '總覽首頁'], warroom: ['warroom', '戰情室'], schedule: ['schedule', '排班'],
   drivers: ['drivers', '夥伴列表'], dropPoints: ['dropPoints', '店點列表'], routes: ['routes', '路線列表'],
   payroll: ['payroll', '報酬結算'], billing: ['billing', '請款結算'], channels: ['channels', '通路'],
-  origins: ['origins', '任務起點'], announcements: ['announcements', '公告'], slips: ['slips', '勞報單'],
+  origins: ['origins', '任務起點'], announcements: ['announcements', '公告'],
   export: ['export', '資料匯出'], settings: ['settings', '系統設定']
 };
 async function voiceToolGotoScreenAdmin(args) {

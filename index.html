@@ -568,10 +568,10 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=14"></script>
-<script defer src="js/driver-ui.js?v=1"></script>
+<script defer src="js/driver-ui.js?v=2"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
-<script defer src="js/voice.js?v=33"></script>
+<script defer src="js/voice.js?v=34"></script>
 <script>
 let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
 
@@ -1529,7 +1529,6 @@ const ADMIN_TABS = [
   {id:'origins', label:'任務起點資料庫', icon:'🏭', group:'基本資料'},
   {id:'routes', label:'路線管理', icon:'🛣️', group:'基本資料'},
   {id:'payroll', label:'報酬結算', icon:'💰', group:'帳務'},
-  {id:'slips', label:'勞報單', icon:'📝', group:'帳務'},
   {id:'paymentList', label:'夥伴匯款清單', icon:'🏦', group:'帳務'},
   {id:'billing', label:'請款結算', icon:'🧾', group:'帳務'},
   {id:'export', label:'資料匯出', icon:'📤', group:'系統'},
@@ -1740,7 +1739,7 @@ function renderContent(){
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
     ({home:renderHomeAdmin, carbon_inbox:renderCarbonInbox, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
-      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, paymentList:renderPaymentList, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayrollPage, paymentList:renderPaymentList, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
@@ -2440,11 +2439,11 @@ async function renderHomeAdmin(c){
       <h3>⏰ 待辦提醒 <span class="rem-count">${[emptyTrips.length,covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
       ${emptyTrips.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${emptyTrips.length} 趟任務沒有任何店點（夥伴會看到空的行程）：${emptyTrips.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${emptyTrips.length>6?'…':''}。請到週期任務清單刪掉重排，或到路線管理重新套用。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:'', covNow.imprecise.length?`📍 ${covNow.imprecise.length} 家店座標可能不精確`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
-      ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="slips">前往勞報單</button></div>` : ''}
+      ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
       ${stuckTasks.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
       ${draftWeekCount ? `<div class="rem" data-lv="info"><div class="rem-t">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${deferredDue.length ? `<div class="rem" data-lv="danger"><div class="rem-t">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gopay="${deferredDue[0].driverId}">前往報酬結算</button></div>` : ''}
-      ${unsettledNames.length ? `<div class="rem" data-lv="warn"><div class="rem-t">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosettle="${prevMonthStr}">前往勞報單</button></div>` : ''}
+      ${unsettledNames.length ? `<div class="rem" data-lv="warn"><div class="rem-t">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosettle="${prevMonthStr}">前往報酬結算</button></div>` : ''}
       ${pendingFuelCount ? `<div class="rem" data-lv="warn"><div class="rem-t">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
       ${backupReminder ? `<div class="rem" data-lv="info"><div class="rem-t">📦 ${backupReminder}，建議去「系統設定」做一次備份。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div class="rem" data-lv="warn"><div class="rem-t">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="billing">前往請款結算</button></div>`).join('')}
@@ -2477,7 +2476,7 @@ async function renderHomeAdmin(c){
   c.querySelectorAll('[data-gostuck]').forEach(el=>{ el.onclick = ()=>{ const d = el.dataset.gostuck; for(let off=-8; off<=8; off++){ if(getWeekDates(off).includes(d)){ state.weekOffset = off; break; } } state._mDay = d; goTab('schedule'); }; });
   c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
   c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
-  c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; goTab('slips'); }; });
+  c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; state._payDriverId = ''; goTab('payroll'); }; });
   c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
 }
 
@@ -5482,7 +5481,7 @@ function renderAssignmentDetail(id, box){
 const PAYROLL_PAYER_NAME = '信興行銷有限公司';
 const PAYROLL_PAYER_TAX_ID = '62091835';
 // 正式的「勞務報酬單」樣式（取代原本單純的摘要表格），單一夥伴、單一月份、
-// 直式A4剛好一頁。r 是 driverMonthly() 或月結凍結後的資料（見 renderPayroll()
+// 直式A4剛好一頁。r 是 driverMonthly() 或月結凍結後的資料（見 renderPayrollPage()
 // 呼叫端怎麼組出 r），ded 是 computePayrollDeductions() 算出來的稅務欄位
 // （月結確認前是即時預覽用系統自動判斷的結果，確認後就是當時凍結的數字，
 // 兩種情況欄位長得一樣，呼叫端統一組好再傳進來）。
@@ -5592,31 +5591,27 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
     </div>`;
 }
 let payrollTripsExpanded = false; // 該夥伴配送明細（日期/路線/車資）預設收合，跟其他清單一致
-// 報酬結算頁（算錢：調整項、報酬明細、可領淨額）與勞報單頁（文件：月結確認、區間勞報單、簽名、
-// 下載）共用同一份畫面程式，用 mode 決定要顯示哪些區塊；夥伴／月份選擇存在 state，兩頁連動。
-function renderPayroll(c){ return renderPayrollPage(c, 'pay'); }
-function renderSlips(c){ return renderPayrollPage(c, 'slip'); }
-function renderPayrollPage(c, mode){
-  const isSlip = mode==='slip';
+// 報酬結算＋勞報單合併成一個畫面（2026-11-01：原本拆兩個分頁、同一份資料要跳兩次頁才能做完
+// 一件事，使用者反饋操作太複雜）。調整項、報酬明細、可領淨額、月結與區間勞報單、簽名、下載，
+// 全部在同一頁依流程順序呈現；選了夥伴才會看到編輯／開單區塊，選「全部夥伴」只看收件匣與提醒。
+function renderPayrollPage(c){
   const month = state._payrollMonth || todayStr().slice(0,7);
   const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
-  // 勞報單頁：選了夥伴，整個畫面（收件匣、尚未回簽、尚未月結、月結與區間勞報單）都只看這一位；
-  // 選「全部夥伴」才看總覽清單。報酬結算頁沒有「全部」，一定是某一位。
-  let scope = isSlip ? (state._payDriverId || '') : '';
+  let scope = state._payDriverId || '';
   if(scope && !state.data.drivers.some(d=>d.id===scope)) scope = '';
-  if(isSlip) state._payDriverId = scope;
+  state._payDriverId = scope;
   const inScope = x => !scope || x.driverId===scope;
   const inbox = state.data.statements.filter(s=>inScope(s) && (s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
   c.innerHTML = `
-    <h2 class="section-title">${isSlip ? '勞報單' : '報酬結算'}</h2>
-    <p class="section-sub">${isSlip ? '月底先由主控端「月結確認」凍結金額，夥伴才能看到並線上回簽；回簽完成的勞報單會出現在下方收件匣。' : '管理調整項（預支、加減項、代墊款）並查看每位夥伴的報酬明細與可領淨額；開立勞報單請到「勞報單」頁。'}</p>
+    <h2 class="section-title">報酬結算</h2>
+    <p class="section-sub">選夥伴後可管理調整項（預支、加減項、代墊款）、查看報酬明細與可領淨額，並開立勞報單（月結或區間）讓夥伴線上簽名；不選夥伴則看全體的回簽與提醒。</p>
     <div class="panel no-print" style="position:sticky; top:0; z-index:20; box-shadow:0 2px 6px rgba(27,33,41,.12);">
       <div class="grid2">
-        <div class="field"><label>夥伴</label><select id="pDriver">${isSlip?'<option value="">全部夥伴</option>':''}${driverOpts}</select></div>
+        <div class="field"><label>夥伴</label><select id="pDriver"><option value="">全部夥伴</option>${driverOpts}</select></div>
         <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
     </div>
-    ${isSlip && inbox.length ? `<div class="panel">
+    ${inbox.length ? `<div class="panel">
       <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
       ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
         <span>${driverName(s.driverId)} － ${statementLabel(s)}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'} ${s.status==='confirmed'?'<span class="badge signed">已鎖定</span>':'<span class="badge progress">未鎖定</span>'}</span>
@@ -5624,7 +5619,6 @@ function renderPayrollPage(c, mode){
       </div>`).join('')}
     </div>` : ''}
     ${(()=>{
-      if(!isSlip) return '';
       // 月結確認後、夥伴還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
       const unsigned = state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature')
         .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
@@ -5641,7 +5635,7 @@ function renderPayrollPage(c, mode){
     })()}
     ${(()=>{
       const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').sort((a,b)=>a.date.localeCompare(b.date));
-      if(isSlip || !pending.length) return '';
+      if(!pending.length) return '';
       return `<div class="panel">
         <h3 style="margin-top:0;">夥伴代墊申報待確認（${pending.length}）</h3>
         <p class="note" style="margin-top:0;">請核對夥伴交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
@@ -5652,14 +5646,14 @@ function renderPayrollPage(c, mode){
         </table>
       </div>`;
     })()}
-    ${isSlip && !scope ? `<div class="panel">
+    ${!scope ? `<div class="panel">
       <div class="grid2">
         <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
         <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體夥伴勞報單（合併PDF）</button></div>
       </div>
       <p class="note">只會納入「已完成月結確認」的夥伴（每人各佔一頁，直式）；當月尚未月結確認的夥伴不會出現在合併檔案裡。</p>
     </div>` : ''}
-    ${isSlip ? '' : `<div class="panel">
+    ${scope ? `<div class="panel">
       <div class="grid3">
         <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option></select></div>
         <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
@@ -5667,8 +5661,8 @@ function renderPayrollPage(c, mode){
       </div>
       <div class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
       <button class="btn ghost" id="addAdj">新增調整項</button>
-    </div>`}
-    ${isSlip ? '' : `<div class="panel no-print">
+    </div>` : ''}
+    ${scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">延後付款（掛帳）</h3>
       <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
       <div class="grid3">
@@ -5680,9 +5674,9 @@ function renderPayrollPage(c, mode){
       <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
       <button class="btn amber" id="dfSave">掛帳</button>
     </div>
-    <div id="deferredList"></div>`}
-    ${isSlip ? `<div id="payrollPending"></div>` : ''}
-    ${isSlip ? (()=>{
+    <div id="deferredList"></div>` : ''}
+    <div id="payrollPending"></div>
+    ${(()=>{
       // 各夥伴的全部月份勞報單（月結＋區間），每位夥伴一組、預設收合；組內點「查看」切到那一份。
       const stText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">待簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
       const groups = state.data.drivers.filter(d=>inScope({driverId:d.id})).map(d=>({ d, list: state.data.statements.filter(x=>x.driverId===d.id).sort((a,b)=> statementRange(b)[1].localeCompare(statementRange(a)[1])) })).filter(g=>g.list.length);
@@ -5695,8 +5689,8 @@ function renderPayrollPage(c, mode){
             <tbody>${g.list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
         </details>`; }).join('')}
       </div>`;
-    })() : ''}
-    ${isSlip && scope ? `<div class="panel no-print">
+    })()}
+    ${scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
       <p class="note">夥伴每週（或每次）請款時，選一段期間開一張勞報單，夥伴簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成任務與調整項日期自動算出，不能手動修改；期間不能跟該夥伴其他勞報單（月結或區間）重疊。</p>
       <p class="note" style="margin-top:0;">夥伴沿用上方「夥伴」選單。</p>
@@ -6050,13 +6044,9 @@ function renderPayrollPage(c, mode){
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     state._payrollMonth = monthStr; state._payDriverId = driverId;
-    if(!driverId){ document.getElementById('payrollResult').innerHTML = isSlip ? '<div class="panel"><div class="empty">請先選擇夥伴，或從上方清單點「查看」，就會顯示這位夥伴的月結與區間勞報單。</div></div>' : '<div class="empty">請先建立夥伴資料</div>'; return; }
-    // 勞報單頁不再提供「整月預覽／月結確認」：沒有月結勞報單的月份直接提示改用區間勞報單；
-    // 已經月結過的舊勞報單仍可在這裡查看、退回簽名、收回。
-    if(isSlip && !state.data.statements.some(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr)){
-      document.getElementById('payrollResult').innerHTML = `<div class="panel"><div class="empty">${escapeHtml(driverName(driverId))} ${monthStr} 沒有月結勞報單。要開單請在上方「區間勞報單」選期間產生。</div></div>`;
-      return;
-    }
+    if(!driverId){ document.getElementById('payrollResult').innerHTML = '<div class="panel"><div class="empty">請先選擇夥伴，或從上方清單點「查看」，就會顯示這位夥伴的月結與區間勞報單。</div></div>'; return; }
+    // 不再提供「整月月結確認」開新單（沿用2026-10-30起的規則：新單一律走下方「區間勞報單」，
+    // 避免整月合併扣稅跟實際已開區間單對不起來）；已經月結過的舊勞報單仍可在這裡查看、退回簽名、收回。
     // 這個畫面只讀不寫，直接跟資料庫要這個月的任務，不碰共用的
     // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
     // 也不影響其他畫面的效能，查哪個月份都一樣快。
@@ -6125,12 +6115,11 @@ function renderPayrollPage(c, mode){
     const defSplit = deferredSplit(defTrips, monthStr+'-01', monthEndStr(monthStr));
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
-        <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3>
-          <button class="btn ghost" data-togo="${isSlip?'payroll':'slips'}">${isSlip?'查看報酬結算明細 →':`前往 ${escapeHtml(driverName(driverId))} 的勞報單 →`}</button></div>
-        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方「可領淨額」已經改用已開出的區間勞報單金額＋尚未開單部分原始金額計算（不會假設整月合併扣稅），請改用上方「區間勞報單」處理尚未開單的日期。</div>` : ''}
+        <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
+        ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方「可領淨額」已經改用已開出的區間勞報單金額＋尚未開單部分原始金額計算（不會假設整月合併扣稅），請改用下方「區間勞報單」處理尚未開單的日期。</div>` : ''}
         ${!isFrozen && coveringStatements.length ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}），下方金額已採用各自實際扣稅後的實領金額；其餘尚未開單的日期以原始金額顯示，實際扣不扣稅要等開單那天依那筆自己的金額才知道。</div>` : ''}
         ${statementDriftNote(record, live)}
-        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。${isSlip?'確認無誤後按「月結確認」凍結金額並開放夥伴回簽。':'金額確認無誤後，到「勞報單」頁用「區間勞報單」開單，開放夥伴簽名。'}</div>` : ''}
+        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。金額確認無誤後，請在下方「區間勞報單」選期間開單，開放夥伴簽名。</div>` : ''}
         <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span class="fold-chev">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
@@ -6158,14 +6147,12 @@ function renderPayrollPage(c, mode){
           <tr><td><strong>應付合計（含掛帳）</strong></td><td class="amount"><strong>$${money(payable+defSplit.other.total)}</strong></td></tr>` : ''}
         </table>
       </div>
-      ${isSlip ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
+      <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
-        ${!record && !periodOverlap ? `<button class="btn amber" id="confirmMonth">月結確認（開放夥伴回簽）</button>` : ''}
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
         ${record ? `<button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>` : ''}
-      </div>` : ''}`;
-    document.querySelectorAll('[data-togo]').forEach(b=>{ b.onclick = ()=> goTab(b.dataset.togo); });
+      </div>`;
     const printBtn = document.getElementById('printStatement');
     if(printBtn) printBtn.onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
     const tripsToggle = document.querySelector('[data-tripstoggle]');
@@ -6186,14 +6173,8 @@ function renderPayrollPage(c, mode){
     };
     const revokeBtn = document.getElementById('revokeBtn');
     if(revokeBtn) revokeBtn.onclick = ()=> doRevoke([record]);
-    const confirmBtn = document.getElementById('confirmMonth');
-    if(confirmBtn) confirmBtn.onclick = async ()=>{
-      if(!confirm(`確定將 ${driverName(driverId)} ${monthStr} 的金額凍結並開放夥伴回簽？凍結後任務報酬不會再變動。`)) return;
-      try{ await confirmMonthlyStatement(driverId, monthStr, live); renderContent(); }
-      catch(err){ alert(err.message); }
-    };
   }
-  // 夥伴／月份選擇存在 state，報酬結算頁與勞報單頁共用，切頁不用重選。
+  // 夥伴／月份選擇存在 state，切換夥伴不用重選月份。
   const pDriverEl = document.getElementById('pDriver');
   if(state._payDriverId && [...pDriverEl.options].some(o=>o.value===state._payDriverId)) pDriverEl.value = state._payDriverId;
   state._payDriverId = pDriverEl.value;
@@ -6208,11 +6189,10 @@ function renderPayrollPage(c, mode){
   { const ms = document.getElementById('pMonth'); if(![...ms.options].some(o=>o.value===month)) ms.add(new Option(month, month)); ms.value = month; }
   pDriverEl.onchange = ()=>{
     state._payDriverId = pDriverEl.value;
-    if(isSlip){ state._periodSel = null; renderContent(); }   // 選了夥伴，整頁重畫成只看這一位
-    else { refresh(); renderDeferredPanel(); const upd = document.getElementById('dfStart'); if(upd) upd.dispatchEvent(new Event('input')); }
+    state._periodSel = null; renderContent();   // 選了夥伴，整頁重畫（會不會出現編輯區塊取決於有沒有選夥伴）
   };
   document.getElementById('pMonth').onchange = refresh;
-  if(isSlip && scope){
+  if(scope){
     // 區間區塊：換夥伴時，預設開始日＝這位夥伴上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
     const sel = state._periodSel;
     if(sel && sel.driverId===pDriverEl.value){
@@ -6223,9 +6203,9 @@ function renderPayrollPage(c, mode){
     ['perStart','perEnd','perPay'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
     document.getElementById('perPreview').onclick = periodRefresh;
     periodRefresh();
+    wireDeferredForm(); renderDeferredPanel();
   }
-  if(isSlip) renderPendingSettlePanel();
-  else { wireDeferredForm(); renderDeferredPanel(); }
+  renderPendingSettlePanel();
   if(state._scrollTo){
     const sid = state._scrollTo; state._scrollTo = null;
     setTimeout(()=>{ const el = document.getElementById(sid); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); }, 1200);
@@ -6255,7 +6235,7 @@ async function renderPaymentList(c){
   const month = state._paymentListMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">夥伴匯款清單</h2>
-    <p class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額（已扣預支、已扣已付款），方便去銀行轉帳前核對。金額算法跟「報酬結算」頁完全一致；這裡純粹是彙整檢視，不會寫入或異動任何資料。</p>
+    <p class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額（已扣預支、已扣已付款），方便去銀行轉帳前核對。金額算法跟「報酬結算」頁完全一致；這裡純粹是彙整檢視，不會寫入或異動任何資料。點姓名可以直接跳去那位夥伴的報酬結算明細，數字對不起來可以在那裡調整。</p>
     <div class="panel no-print">
       <div class="grid2">
         <div class="field" style="max-width:200px;"><label>月份</label><select id="plMonth">${monthOptionsHtml(month)}</select></div>
@@ -6286,12 +6266,12 @@ async function renderPaymentList(c){
     const total = rows.reduce((s,x)=>s+x.payable, 0);
     const missingBank = rows.filter(x=>!x.driver.bank.account || !x.driver.idNumber);
     box.innerHTML = `
-      ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;">${escapeHtml(x.driver.name)}</div>`).join('')}</div>` : ''}
+      ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;"><button class="btn ghost" data-plfixdriver="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} → 前往夥伴資料補齊</button></div>`).join('')}</div>` : ''}
       <div class="panel">
         <table id="plTable">
           <thead><tr><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
           <tbody>${rows.map(({driver:d, payable})=>`<tr ${!d.bank.account||!d.idNumber?'style="background:rgba(214,69,69,.08);"':''}>
-            <td>${escapeHtml(d.name)}</td>
+            <td><button class="btn ghost" data-plgopayroll="${d.id}" style="padding:2px 8px; font-size:12.5px;" title="前往這位夥伴的報酬結算明細">${escapeHtml(d.name)}</button></td>
             <td>${escapeHtml(d.bank.holder||'—')}</td>
             <td>${escapeHtml(d.bank.bankName||'—')}</td>
             <td>${escapeHtml(d.bank.branch||'—')}</td>
@@ -6302,6 +6282,12 @@ async function renderPaymentList(c){
           <tfoot><tr><td colspan="6" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
         </table>
       </div>`;
+    box.querySelectorAll('[data-plgopayroll]').forEach(btn=>{
+      btn.onclick = ()=>{ state._payDriverId = btn.dataset.plgopayroll; state._payrollMonth = monthStr; goTab('payroll'); };
+    });
+    box.querySelectorAll('[data-plfixdriver]').forEach(btn=>{
+      btn.onclick = ()=>{ const d = state.data.drivers.find(x=>x.id===btn.dataset.plfixdriver); if(d) driverListSearch = d.name; switchTab('drivers'); };
+    });
   }
 }
 
@@ -7246,7 +7232,7 @@ function renderSettings(c){
 // ---------- 財務稽核（2026-10-30，雙大腦計劃「後台」第一塊：掃過所有通路、
 // 所有在職夥伴，找出請款/報酬可能有問題的地方，列出來給主控人工複核。這個
 // 畫面只負責找問題、列出來，不會自動改動任何金額或資料——要處理請到「請款
-// 結算」「報酬結算」「勞報單」畫面操作，跟「AI只能提案、人要點頭才算數」
+// 結算」「報酬結算」畫面操作，跟「AI只能提案、人要點頭才算數」
 // 同一個原則。
 //
 // 範圍刻意只挑「不需要猜測、對錯清楚」的規則，避免製造一堆似是而非的誤報：
@@ -7364,7 +7350,7 @@ function renderReconciliation(c){
   const month = state._reconMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h3 style="margin-top:0;">🔍 財務稽核（小碳的例行查驗）</h3>
-    <p class="section-sub">掃過這個月所有通路、所有在職夥伴，找出請款/報酬可能需要留意的地方。這裡只負責找問題、列出來，不會自動改動任何金額或資料；確認要怎麼處理，請到「請款結算」「報酬結算」「勞報單」畫面操作。</p>
+    <p class="section-sub">掃過這個月所有通路、所有在職夥伴，找出請款/報酬可能需要留意的地方。這裡只負責找問題、列出來，不會自動改動任何金額或資料；確認要怎麼處理，請到「請款結算」「報酬結算」畫面操作。</p>
     <div class="panel">
       <div class="field" style="max-width:200px;"><label>稽核月份</label><select id="reconMonth">${(()=>{ const ms = recentMonthOptions(24); if(month && !ms.includes(month)) ms.push(month); ms.sort().reverse(); const thisMonth = todayStr().slice(0,7); return ms.map(m=>`<option value="${m}" ${m===month?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join(''); })()}</select></div>
       <button class="btn amber" id="reconRun">重新掃描</button>
@@ -7696,7 +7682,7 @@ let lastHomeRefreshAt = null;
 // 使用者正在輸入、或開著明細／簽名視窗時，不硬重畫（以免打到一半的字被洗掉），改成稍後安全時再更新。
 const LIVE_TABS = {
   assignments: ['home','schedule','today','history','my-earnings','warroom'],
-  statements: ['home','slips','my-statement'],
+  statements: ['home','payroll','my-statement'],
   adjustments: ['home','payroll','my-earnings'],
   fuel_claims: ['home','payroll','my-earnings']
 };
