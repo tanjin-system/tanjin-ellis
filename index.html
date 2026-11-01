@@ -5744,19 +5744,21 @@ function renderPayrollPage(c){
       <button class="btn ghost" id="addAdj">新增調整項</button>
     </div>` : ''}
     ${scope ? `<div class="panel no-print">
-      <h3 style="margin-top:0;">延後付款（掛帳）</h3>
-      <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
-      <div class="grid3">
-        <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
-        <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
-        <div class="field"><label>歸屬月份</label><select id="dfMonth"></select></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label>預計付款日（實際轉帳日）</label><input id="dfDue" type="date"></div>
-        <div class="field"><label>備註（選填，例如：夥伴要求）</label><input id="dfNote" maxlength="60"></div>
-      </div>
-      <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
-      <button class="btn amber" id="dfSave">掛帳</button>
+      <details id="dfPanel">
+        <summary style="cursor:pointer; font-weight:600;">延後付款（掛帳）<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">－少用，夥伴同意晚點領時才需要</span></summary>
+        <p class="note">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+        <div class="grid3">
+          <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
+          <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
+          <div class="field"><label>歸屬月份</label><select id="dfMonth"></select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>預計付款日（實際轉帳日）</label><input id="dfDue" type="date"></div>
+          <div class="field"><label>備註（選填，例如：夥伴要求）</label><input id="dfNote" maxlength="60"></div>
+        </div>
+        <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
+        <button class="btn amber" id="dfSave">掛帳</button>
+      </details>
     </div>
     <div id="deferredList"></div>` : ''}
     <div id="payrollPending"></div>
@@ -5962,11 +5964,16 @@ function renderPayrollPage(c){
     catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
     if(!el.isConnected) return;
     const mine = groups.filter(g=>g.driverId===driverId);
+    // 掛帳是極少數情況，沒有待付款時整個面板不顯示（不留「目前沒有待付款」這種常態性空面板佔畫面）；
+    // 有待付款時順便把上面收合的「延後付款」面板自動展開，提醒主控這位夥伴有掛帳在進行中。
+    if(!mine.length){ el.innerHTML = ''; return; }
+    const dfPanel = document.getElementById('dfPanel');
+    if(dfPanel) dfPanel.open = true;
     el.innerHTML = `<div class="panel no-print" ${mine.some(g=>deferredStatus(g.due)==='overdue')?'style="border-color:var(--danger); border-width:2px;"':''}>
       <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
-      ${mine.length ? `<table><thead><tr><th>區間</th><th>趟報酬合計</th><th>歸屬月份</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
+      <table><thead><tr><th>區間</th><th>趟報酬合計</th><th>歸屬月份</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
         <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.dueMonth||'—'}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
-        <div id="dfPayForm"></div>` : '<div style="font-size:13px;">這位夥伴目前沒有待付款。</div>'}
+      <div id="dfPayForm"></div>
     </div>`;
     el.querySelectorAll('[data-dfcancel]').forEach(b=>{
       b.onclick = async ()=>{
@@ -6253,7 +6260,7 @@ function renderPayrollPage(c){
         ${periodOverlap ? `<div class="note" style="color:var(--danger);">⚠️ 這個月已有區間勞報單（${statementLabel(periodOverlap)}）涵蓋部分日期，不能再整月月結（避免同一段期間重複開單）。下方「可領淨額」已經改用已開出的區間勞報單金額＋尚未開單部分原始金額計算（不會假設整月合併扣稅），請改用下方「區間勞報單」處理尚未開單的日期。</div>` : ''}
         ${!isFrozen && coveringStatements.length ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}），下方金額已採用各自實際扣稅後的實領金額；其餘尚未開單的日期以原始金額顯示，實際扣不扣稅要等開單那天依那筆自己的金額才知道。</div>` : ''}
         ${statementDriftNote(record, live)}
-        ${!record ? `<div class="note">尚未月結確認，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。金額確認無誤後，請在下方「區間勞報單」選期間開單，開放夥伴簽名。</div>` : ''}
+        ${!record ? `<div class="note">尚未月結確認。配送明細、調整項、可領淨額請直接看下方「區間勞報單」的即時預覽（預設期間就是整個月）——這裡不再重複顯示一次一樣的數字，調整項如果要新增，用上方的「新增調整項」表單即可。</div>` : `
         <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span class="fold-chev">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
@@ -6267,7 +6274,7 @@ function renderPayrollPage(c){
         <h4 style="margin:14px 0 8px; font-size:13.5px;">調整項</h4>
         <table>
           <thead><tr><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
-          <tbody>${r.adjustments.map(a=>`<tr><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td>${!record?`<button class="btn danger" data-deladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
+          <tbody>${r.adjustments.map(a=>`<tr><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">無調整項</div></td></tr>'}</tbody>
         </table>
         <table style="margin-top:10px;">
           <tr><td>報酬總額（任務＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
@@ -6279,7 +6286,7 @@ function renderPayrollPage(c){
           ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
           ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待付（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
           <tr><td><strong>應付合計（含掛帳）</strong></td><td class="amount"><strong>$${money(payable+defSplit.other.total)}</strong></td></tr>` : ''}
-        </table>
+        </table>`}
       </div>
       ${record ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
@@ -6291,14 +6298,6 @@ function renderPayrollPage(c){
     if(printBtn) printBtn.onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
     const tripsToggle = document.querySelector('[data-tripstoggle]');
     if(tripsToggle) tripsToggle.onclick = ()=>{ payrollTripsExpanded = !payrollTripsExpanded; refresh(); };
-    document.querySelectorAll('[data-deladj]').forEach(btn=>{
-      btn.onclick=async()=>{
-        const adj = r.adjustments.find(x=>x.id===btn.dataset.deladj);
-        if(!confirm(`確定要刪除這筆「${adj?adjTypeLabel(adj.type):''}」調整項嗎（$${money(adj?.amount||0)}，${adj?.note||'無備註'}）？刪除後會影響這個月的報酬總額計算，無法復原。`)) return;
-        try{ await deleteAdjustment(btn.dataset.deladj); refresh(); }
-        catch(err){ alert(err.message); }
-      };
-    });
     const rejectBtn = document.getElementById('rejectSignBtn');
     if(rejectBtn) rejectBtn.onclick = async ()=>{
       if(!confirm(`確定要退回 ${driverName(driverId)} ${monthStr} 的簽名嗎？退回後夥伴需要重新簽名。`)) return;
