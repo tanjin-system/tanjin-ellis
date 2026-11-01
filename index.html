@@ -5768,17 +5768,13 @@ function renderPayrollPage(c){
     </div>` : ''}
     ${scope ? `<div class="panel">
       <div class="grid3">
-        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option></select></div>
-        <div class="field"><label>金額</label><input id="aAmount" type="number"></div>
-        <div class="field"><label>備註</label><input id="aNote"></div>
+        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option><option value="defer">延後付款（掛帳，少用）</option></select></div>
+        <div id="aAmountField" class="field"><label>金額</label><input id="aAmount" type="number"></div>
+        <div id="aNoteField" class="field"><label>備註</label><input id="aNote"></div>
       </div>
-      <div class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
-      <button class="btn ghost" id="addAdj">新增調整項</button>
-    </div>` : ''}
-    ${scope ? `<div class="panel no-print">
-      <details id="dfPanel">
-        <summary style="cursor:pointer; font-weight:600;">延後付款（掛帳）<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">－少用，夥伴同意晚點領時才需要</span></summary>
-        <p class="note">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+      <div id="aDateField" class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
+      <div id="aDeferFields" hidden>
+        <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
         <div class="grid3">
           <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
           <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
@@ -5789,8 +5785,8 @@ function renderPayrollPage(c){
           <div class="field"><label>備註（選填，例如：夥伴要求）</label><input id="dfNote" maxlength="60"></div>
         </div>
         <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
-        <button class="btn amber" id="dfSave">掛帳</button>
-      </details>
+      </div>
+      <button class="btn ghost" id="addAdj">新增調整項</button>
     </div>
     <div id="deferredList"></div>` : ''}
     <div id="payrollPending"></div>
@@ -5919,7 +5915,9 @@ function renderPayrollPage(c){
   async function renderPendingSettlePanel(){
     const el = document.getElementById('payrollPending');
     if(!el) return;
-    const mon = settleReminderMonth();
+    // 選了特定夥伴時不顯示這個名單——這是「全部夥伴」才需要的總覽提醒，選了夥伴代表已經
+    // 在處理這一位，不需要再看一次跨夥伴的名單（跟這次合併畫面「選夥伴只看這一位」原則一致）。
+    const mon = scope ? null : settleReminderMonth();
     if(!mon){ el.innerHTML = ''; return; }
     el.innerHTML = '<div class="panel"><div class="empty">載入上月尚未月結名單…</div></div>';
     let rows, skipped;
@@ -6036,8 +6034,7 @@ function renderPayrollPage(c){
     });
   }
   function wireDeferredForm(){
-    const save = document.getElementById('dfSave');
-    if(!save) return;
+    if(!document.getElementById('dfStart')) return;
     const pv = document.getElementById('dfPreview');
     let timer=null, seq=0;
     // 歸屬月份預設＝區間結束日的下個月（最常見用法：9月做的事併入10月薪資）；
@@ -6079,15 +6076,22 @@ function renderPayrollPage(c){
     document.getElementById('dfMonth').innerHTML = monthOptionsHtml(todayStr().slice(0,7));
     defaultsFromEnd();
     update();
-    save.onclick = async ()=>{
-      const driverId = document.getElementById('pDriver').value;
-      const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueMonth:document.getElementById('dfMonth').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
-      if(!driverId){ alert('請先選擇夥伴'); return; }
-      if(!args.dueDate){ alert('請選擇預計付款日'); return; }
-      if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的任務掛帳，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款嗎？`)) return;
-      try{ const r = await deferPayment(args); alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款`); document.getElementById('dfNote').value=''; renderDeferredPanel(); update(); }
-      catch(err){ alert(err.message); }
-    };
+  }
+  // 延後付款（掛帳）送出：原本是獨立的「掛帳」按鈕，現在跟其他調整類型共用上面的
+  // 「新增調整項」按鈕，選了「延後付款」這個類型才會呼叫到這支函式。
+  async function submitDeferPayment(){
+    const driverId = document.getElementById('pDriver').value;
+    const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueMonth:document.getElementById('dfMonth').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
+    if(!driverId){ alert('請先選擇夥伴'); return; }
+    if(!args.dueDate){ alert('請選擇預計付款日'); return; }
+    if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的任務掛帳，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款嗎？`)) return;
+    try{
+      const r = await deferPayment(args);
+      alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款`);
+      document.getElementById('dfNote').value='';
+      renderDeferredPanel();
+      document.getElementById('dfStart').dispatchEvent(new Event('input'));
+    }catch(err){ alert(err.message); }
   }
   // 已開單（金額凍結）的勞報單，如果跟「現在的即時帳務」對不上（例如開單後才補代墊款日期、
   // 加減項被改），在主控端提醒收回重開；夥伴看到的仍是凍結的數字，這裡只是給主控的警示。
@@ -6384,8 +6388,25 @@ function renderPayrollPage(c){
     const sid = state._scrollTo; state._scrollTo = null;
     setTimeout(()=>{ const el = document.getElementById(sid); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); }, 1200);
   }
+  // 「延後付款」併進調整類型選單（2026-11-11，使用者要求不要另外一個獨立表單）：
+  // 選了這個類型，底下欄位換成掛帳用的那一組，「新增調整項」按鈕也改呼叫掛帳邏輯。
   const addAdjBtn = document.getElementById('addAdj');
+  const aTypeEl = document.getElementById('aType');
+  if(aTypeEl && addAdjBtn){
+    const syncAFields = ()=>{
+      const isDefer = aTypeEl.value==='defer';
+      document.getElementById('aAmountField').hidden = isDefer;
+      document.getElementById('aNoteField').hidden = isDefer;
+      document.getElementById('aDateField').hidden = isDefer;
+      document.getElementById('aDeferFields').hidden = !isDefer;
+      addAdjBtn.textContent = isDefer ? '掛帳' : '新增調整項';
+      addAdjBtn.className = isDefer ? 'btn amber' : 'btn ghost';
+    };
+    aTypeEl.onchange = syncAFields;
+    syncAFields();
+  }
   if(addAdjBtn) addAdjBtn.onclick = async ()=>{
+    if(aTypeEl && aTypeEl.value==='defer'){ await submitDeferPayment(); return; }
     const driverId = document.getElementById('pDriver').value;
     const monthStr = document.getElementById('pMonth').value;
     const amount = document.getElementById('aAmount').value;
