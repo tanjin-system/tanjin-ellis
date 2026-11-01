@@ -979,6 +979,7 @@ function renderFuelPanel(){
     <div class="panel">
       <h3 style="margin-top:0;">代墊費用申報（加油／車輛保養）</h3>
       ${readOnly ? '<p class="note" style="margin-top:0;">主控檢視中：夥伴本人登入後才能填寫申報；待確認的申報請到「報酬結算」確認。</p>' : `<p class="note" style="margin-top:0;">加油或車輛保養時，請把發票打上公司統編（${PAYROLL_PAYER_TAX_ID}），並填寫下面資料；主控核對發票後會列入代墊款。送出後在主控確認前還可以修改或刪除。</p>
+      <button type="button" class="btn ghost" id="fcScan" style="margin-bottom:10px;">📷 掃描發票 QR Code 自動帶入</button>
       <div class="grid3">
         <div class="field"><label>類別</label><select id="fcCategory">${Object.entries(CLAIM_CATEGORY_LABEL).map(([k,v])=>`<option value="${k}" ${(editing?editing.category:'fuel')===k?'selected':''}>${v}</option>`).join('')}</select></div>
         <div class="field"><label>日期</label><input id="fcDate" type="date" max="${todayStr()}" value="${editing?editing.date:todayStr()}"></div>
@@ -1001,6 +1002,14 @@ function renderFuelPanel(){
       </table>
     </div>`;
   if(readOnly) return;
+  document.getElementById('fcScan').onclick = async ()=>{
+    const r = await openInvoiceScanner();
+    if(r.cancelled) return;
+    if(r.fallback){ alert('這台裝置/瀏覽器沒辦法掃描，請直接手動輸入發票號碼跟金額。'); return; }
+    document.getElementById('fcInvoice').value = r.invoiceNo;
+    document.getElementById('fcAmount').value = r.amount;
+    toast(`已掃描發票 ${r.invoiceNo}，金額 $${money(r.amount)}，請確認日期與類別後送出`);
+  };
   document.getElementById('fcSubmit').onclick = async ()=>{
     const input = { driverId:dId, category:document.getElementById('fcCategory').value, date:document.getElementById('fcDate').value, amount:document.getElementById('fcAmount').value, invoiceNo:document.getElementById('fcInvoice').value, note:document.getElementById('fcNote').value };
     try{
