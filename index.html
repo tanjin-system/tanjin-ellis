@@ -6229,12 +6229,15 @@ function renderPayrollPage(c){
     }
     const driver = state.data.drivers.find(d=>d.id===driverId);
     const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">夥伴已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">夥伴已回簽（未鎖定）</span>' : '<span class="badge progress">等待夥伴回簽</span>';
-    const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
-      v2: slipUsesV2(record), serviceName: record ? record.serviceName : (driver && driver.serviceName),
-      payMethod: record ? record.payMethod : 'transfer',
-      signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
-    });
-    const attHtml = payrollAttachmentHtml(driver, monthStr, r);
+    // 沒有月結記錄時（現在的常態——整月月結新開單已停用，新單一律走下方「區間勞報單」），
+    // 不組勞報單/附件預覽：這裡只是即時參考數字，下方區間勞報單區塊自己會算一次完整預覽，
+    // 兩邊都顯示同一份配送明細＋勞報單文件會變成整頁看起來重複兩次（2026-11-11使用者
+    // 實測發現）。只有已存在的舊月結記錄（record）才需要在這裡顯示/列印/管理正式文件。
+    const slipHtml = record ? payrollSlipHtml(driver, monthStr, r, ded, {
+      v2: slipUsesV2(record), serviceName: record.serviceName, payMethod: record.payMethod,
+      signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
+    }) : '';
+    const attHtml = record ? payrollAttachmentHtml(driver, monthStr, r) : '';
     const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
     // 可領淨額＝勞報單實領金額（已扣稅／補充保費）再扣掉預支與已付款（現金／轉帳先付的），即這個月還要實際匯給夥伴的現金。
     const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
@@ -6278,12 +6281,12 @@ function renderPayrollPage(c){
           <tr><td><strong>應付合計（含掛帳）</strong></td><td class="amount"><strong>$${money(payable+defSplit.other.total)}</strong></td></tr>` : ''}
         </table>
       </div>
-      <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
+      ${record ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
-        ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
-        ${record ? `<button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>` : ''}
-      </div>`;
+        ${(record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
+        <button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>
+      </div>` : ''}`;
     const printBtn = document.getElementById('printStatement');
     if(printBtn) printBtn.onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
     const tripsToggle = document.querySelector('[data-tripstoggle]');
