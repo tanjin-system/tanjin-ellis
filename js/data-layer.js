@@ -22,7 +22,8 @@ function mapDriver(row) {
     bank: { bankName: row.bank_name || '', branch: row.bank_branch || '', account: row.bank_account || '', holder: row.bank_holder || '' },
     idNumber: row.id_number || '',
     unionInsured: !!row.union_insured, unionProofPath: row.union_proof_path || '',
-    serviceName: row.service_name || ''
+    serviceName: row.service_name || '',
+    payrollName: row.payroll_name || ''
   };
 }
 
@@ -642,6 +643,9 @@ async function updateDriverProfile(driverId, fields) {
   if ('unionProofPath' in fields) payload.union_proof_path = fields.unionProofPath || null;
   // 勞報單勞務名稱（空白＝用預設）：只有主控能改，月結確認時才凍結進 statements.service_name。
   if ('serviceName' in fields) payload.service_name = (fields.serviceName || '').trim() || null;
+  // 勞報單「所得人姓名」覆蓋（空白＝用銀行戶名）：只有主控能改，戶名不是夥伴本人時
+  // （例如帳戶是家人代收）用這欄填夥伴本人法定姓名，勞報單才會跟身分證字號對得起來。
+  if ('payrollName' in fields) payload.payroll_name = (fields.payrollName || '').trim() || null;
   const supabase = getSupabase();
   const { data, error } = await supabase.from('drivers').update(payload).eq('id', driverId).select().single();
   if (error) throw new Error('更新資料失敗：' + error.message);

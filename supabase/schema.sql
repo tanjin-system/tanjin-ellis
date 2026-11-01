@@ -1794,3 +1794,10 @@ grant select (pay_due_month) on assignments to app_driver;
 -- 外流個資的風險）。開區間勞報單時可以選付款方式，選現金的話凍結存檔，之後查看/列印都記得
 -- 不顯示銀行資訊；預設維持轉帳（原本的唯一行為），不影響任何既有勞報單。
 alter table statements add column if not exists pay_method text not null default 'transfer' check (pay_method in ('transfer','cash'));
+
+-- PART 51：勞報單「所得人姓名」覆蓋欄位（2026-11-11）
+-- 使用者情境：少部分夥伴的銀行帳戶是家人代收（例如女兒），勞報單預設仍用銀行戶名當所得人
+-- 姓名（多數夥伴戶名就是本人，符合銀行開戶實名驗證）；但戶名不是本人的這幾位，需要能指定
+-- 勞報單上實際顯示的所得人姓名（夥伴本人的法定姓名），才會跟身分證/居留證號對得起來。只有
+-- 主控能設定（不開放給app_driver的update grant），留空時沿用舊行為（用銀行戶名）。
+alter table drivers add column if not exists payroll_name text check (payroll_name is null or char_length(payroll_name) <= 30);
