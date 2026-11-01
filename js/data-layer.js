@@ -2342,24 +2342,35 @@ async function cancelPaymentGroup(groupId) {
 }
 
 // ---------------- 延後付款（掛帳）與待付款清單 ----------------
-// 夥伴同意晚一點領（例如 9/30 的報酬約好 11/15 才付）：主控把那段期間「已完成、還沒付」的任務掛帳，
-// 記錄預計付款日；到了預計日轉帳後，用上面的區間付款登記，掛帳自動消失。只標記有掛帳的任務，
-// 舊月份沒有逐趟標過已付，不會被誤當成欠款。完全不影響勞報單與可領淨額計算。
-async function deferPayment({ driverId, start, end, dueDate, note }) {
+// 夥伴同意晚一點領（例如 9月做的事併入10月薪資、11/15才撥款）：主控把那段期間「已完成、還沒付」的
+// 任務掛帳，記錄「歸屬月份」（算進哪個月的應付/匯款清單）跟「預計付款日」（實際轉帳日，可能跟歸屬
+// 月份不同月——公司慣例是歸屬月份的次月15日撥款）；到了預計日轉帳後，用上面的區間付款登記，掛帳
+// 自動消失。只標記有掛帳的任務，舊月份沒有逐趟標過已付，不會被誤當成欠款。完全不影響勞報單與可領
+// 淨額計算。
+// 2026-11-11：原本只有「預計付款日」一個欄位，同時兼當「算進哪個月」跟「實際轉帳日」用，使用者
+// 實測發現兩者常常不同月（歸屬10月、但11/15才撥款），硬共用一個欄位會讓應付清單出現在錯的月份。
+// 拆成pay_due_month（歸屬月份）＋pay_due_date（實際撥款日）兩個獨立欄位。
+function shiftMonth(monthStr, n) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+async function deferPayment({ driverId, start, end, dueDate, dueMonth, note }) {
   validatePaymentRange(start, end);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate || '')) throw new Error('請選擇預計付款日');
+  if (!/^\d{4}-\d{2}$/.test(dueMonth || '')) throw new Error('請選擇歸屬月份');
   const text = (note || '').trim();
   if (text.length > 60) throw new Error('備註請控制在60字以內');
   const trips = await fetchDriverTripsInRange(driverId, start, end);
   const targets = trips.filter(t => t.status === 'completed' && !(Number(t.paidAmount) > 0));
   if (!targets.length) throw new Error('這個區間內沒有「已完成、尚未付款」的任務可以掛帳');
   const supabase = getSupabase();
-  const results = await Promise.all(targets.map(t => supabase.from('assignments').update({ pay_due_date: dueDate, pay_due_note: text || null }).eq('id', t.id)));
+  const results = await Promise.all(targets.map(t => supabase.from('assignments').update({ pay_due_date: dueDate, pay_due_month: dueMonth, pay_due_note: text || null }).eq('id', t.id)));
   const failed = results.find(r => r.error);
   if (failed) throw new Error('掛帳失敗（部分任務可能已更新，請重新整理後檢查）：' + failed.error.message);
   targets.forEach(t => {
     const a = state.data.assignments.find(x => x.id === t.id);
-    if (a) { a.payDueDate = dueDate; a.payDueNote = text; }
+    if (a) { a.payDueDate = dueDate; a.payDueMonth = dueMonth; a.payDueNote = text; }
   });
   state._pendingPayCache = null;
   return { count: targets.length, total: targets.reduce((s, t) => s + tripPay(t), 0) };
@@ -2367,9 +2378,9 @@ async function deferPayment({ driverId, start, end, dueDate, note }) {
 
 async function cancelDeferredPayment(assignmentIds) {
   const supabase = getSupabase();
-  const { error } = await supabase.from('assignments').update({ pay_due_date: null, pay_due_note: null }).in('id', assignmentIds);
+  const { error } = await supabase.from('assignments').update({ pay_due_date: null, pay_due_month: null, pay_due_note: null }).in('id', assignmentIds);
   if (error) throw new Error('取消掛帳失敗：' + error.message);
-  state.data.assignments.forEach(a => { if (assignmentIds.includes(a.id)) { a.payDueDate = null; a.payDueNote = ''; } });
+  state.data.assignments.forEach(a => { if (assignmentIds.includes(a.id)) { a.payDueDate = null; a.payDueMonth = null; a.payDueNote = ''; } });
   state._pendingPayCache = null;
 }
 
@@ -2377,7 +2388,7 @@ async function cancelDeferredPayment(assignmentIds) {
 async function fetchDeferredTrips(driverId) {
   const supabase = getSupabase();
   let q = supabase.from('assignments')
-    .select('id, trip_date, driver_id, fare, payroll_fare_snapshot, extra_pay, pay_due_date, pay_due_note')
+    .select('id, trip_date, driver_id, fare, payroll_fare_snapshot, extra_pay, pay_due_date, pay_due_month, pay_due_note')
     .eq('status', 'completed').eq('paid_amount', 0).not('pay_due_date', 'is', null).order('pay_due_date').limit(1000);
   if (driverId) q = q.eq('driver_id', driverId);
   const { data, error } = await q;
@@ -2385,15 +2396,18 @@ async function fetchDeferredTrips(driverId) {
   return (data || []).map(r => ({
     id: r.id, date: r.trip_date, driverId: r.driver_id, fare: Number(r.fare),
     payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
-    extraPay: Number(r.extra_pay || 0), payDueDate: r.pay_due_date, payDueNote: r.pay_due_note || ''
+    extraPay: Number(r.extra_pay || 0), payDueDate: r.pay_due_date,
+    // 舊資料沒有歸屬月份（這欄是後來加的）：用預計付款日往前推一個月當預設值，不會憑空消失或算錯月份。
+    payDueMonth: r.pay_due_month || shiftMonth(r.pay_due_date.slice(0, 7), -1),
+    payDueNote: r.pay_due_note || ''
   }));
 }
-// 同一位夥伴＋同一個預計付款日＋同一備註 合成一筆待付款。
+// 同一位夥伴＋同一個歸屬月份＋同一個預計付款日＋同一備註 合成一筆待付款。
 function groupDeferred(trips) {
   const map = new Map();
   trips.forEach(t => {
-    const k = `${t.driverId}|${t.payDueDate}|${t.payDueNote}`;
-    const g = map.get(k) || { driverId: t.driverId, due: t.payDueDate, note: t.payDueNote, ids: [], start: t.date, end: t.date, total: 0 };
+    const k = `${t.driverId}|${t.payDueMonth}|${t.payDueDate}|${t.payDueNote}`;
+    const g = map.get(k) || { driverId: t.driverId, dueMonth: t.payDueMonth, due: t.payDueDate, note: t.payDueNote, ids: [], start: t.date, end: t.date, total: 0 };
     g.ids.push(t.id); g.total += tripPay(t);
     if (t.date < g.start) g.start = t.date;
     if (t.date > g.end) g.end = t.date;
@@ -2401,22 +2415,20 @@ function groupDeferred(trips) {
   });
   return [...map.values()].sort((a, b) => a.due.localeCompare(b.due) || String(a.driverId).localeCompare(String(b.driverId)));
 }
-// 掛帳金額依「檢視的期間」拆成兩塊：期間內（已經算在該月報酬裡，只註明已掛帳）與期間外、但約定
-// 這個月付（要另外加進應付合計）。dues 是預計付款日（去重、由早到晚）。
-// 2026-11-11修正：other原本只看「任務日期不在這個月」，沒有比對預計付款日，導致一筆掛帳從掛上去
-// 那個月開始，之後每個月（看到天荒地老）都會被算進「應付合計」——9月做的事掛到10月付，結果10月、
-// 11月、12月…的匯款清單/報酬結算全部都顯示這筆，不是只有真正到期的10月才有。改成要「預計付款日
-// 落在這個月範圍內」才算進other：一筆錢只會在它真正到期的那一個月被算進應付合計，之前之後的月份
-// 都不會出現。已經逾期還沒付的另外由首頁「待辦提醒」的逾期待付款清單提醒（deferredStatus），
-// 不靠這裡每個月重複顯示來提醒，避免同一筆錢在好幾個月的匯款清單都被加進去。
+// 掛帳金額依「檢視的月份」拆成兩塊：inRange是這個月做的事、但掛到別的月份算（只註明已掛帳，不計入
+// 應付合計）；other是別的月份做的事、但「歸屬月份」是這個月（要算進這個月的應付合計）。判斷other用
+// 歸屬月份（pay_due_month），不是實際付款日——同一筆錢只會在它歸屬的那一個月被算進應付合計，不會
+// 因為付款日是別的月份就算錯月份，也不會每個月重複出現。dues 是實際預計付款日（去重、由早到晚），
+// 單純顯示用，不影響算在哪個月。
 function deferredSplit(trips, start, end) {
+  const monthStr = start.slice(0, 7);
   const pack = list => ({
     total: list.reduce((sum, t) => sum + tripPay(t), 0),
     dues: [...new Set(list.map(t => t.payDueDate))].sort()
   });
   return {
     inRange: pack(trips.filter(t => t.date >= start && t.date <= end)),
-    other: pack(trips.filter(t => (t.date < start || t.date > end) && t.payDueDate >= start && t.payDueDate <= end))
+    other: pack(trips.filter(t => (t.date < start || t.date > end) && t.payDueMonth === monthStr))
   };
 }
 // 首頁用：5 分鐘內共用同一份結果，付款／掛帳動作會清掉快取。

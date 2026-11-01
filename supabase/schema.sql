@@ -1779,3 +1779,12 @@ comment on table carbon_briefings is '小碳每天早上自動產生的簡短口
 alter table carbon_briefings enable row level security;
 grant select on carbon_briefings to app_admin;
 create policy admin_select on carbon_briefings for select to app_admin using (true);
+
+-- PART 49：掛帳拆成「歸屬月份」與「預計付款日」兩個欄位（2026-11-11）
+-- 原本pay_due_date（預計付款日）一個欄位同時兼當「這筆錢算哪個月的應付/匯款清單」跟「實際轉帳日」
+-- 用，使用者實測發現兩者常常不是同一個月（例如9月做的事併入10月薪資、但公司慣例次月15日才撥款，
+-- 等於是11/15撥款）——硬共用一個欄位會讓報酬結算/匯款清單把這筆錢算到錯的月份。拆成pay_due_month
+-- （歸屬月份，YYYY-MM）獨立存，pay_due_date維持原本「實際預計撥款日」的意思不變。
+alter table assignments add column if not exists pay_due_month text check (pay_due_month is null or pay_due_month ~ '^\d{4}-\d{2}$');
+create index if not exists idx_assignments_pay_due_month on assignments(pay_due_month) where pay_due_month is not null;
+grant select (pay_due_month) on assignments to app_driver;

@@ -567,7 +567,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=16"></script>
+<script defer src="js/data-layer.js?v=17"></script>
 <script defer src="js/driver-ui.js?v=2"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
@@ -5664,13 +5664,16 @@ function renderPayrollPage(c){
     </div>` : ''}
     ${scope ? `<div class="panel no-print">
       <h3 style="margin-top:0;">延後付款（掛帳）</h3>
-      <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9/30 的報酬約好 11/15 才付）：選區間與預計付款日，把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+      <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
       <div class="grid3">
         <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
         <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
-        <div class="field"><label>預計付款日</label><input id="dfDue" type="date"></div>
+        <div class="field"><label>歸屬月份</label><select id="dfMonth"></select></div>
       </div>
-      <div class="field"><label>備註（選填，例如：夥伴要求）</label><input id="dfNote" maxlength="60"></div>
+      <div class="grid2">
+        <div class="field"><label>預計付款日（實際轉帳日）</label><input id="dfDue" type="date"></div>
+        <div class="field"><label>備註（選填，例如：夥伴要求）</label><input id="dfNote" maxlength="60"></div>
+      </div>
       <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
       <button class="btn amber" id="dfSave">掛帳</button>
     </div>
@@ -5854,8 +5857,8 @@ function renderPayrollPage(c){
     const mine = groups.filter(g=>g.driverId===driverId);
     el.innerHTML = `<div class="panel no-print" ${mine.some(g=>deferredStatus(g.due)==='overdue')?'style="border-color:var(--danger); border-width:2px;"':''}>
       <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
-      ${mine.length ? `<table><thead><tr><th>區間</th><th>趟報酬合計</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
-        <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
+      ${mine.length ? `<table><thead><tr><th>區間</th><th>趟報酬合計</th><th>歸屬月份</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
+        <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.dueMonth||'—'}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
         <div id="dfPayForm"></div>` : '<div style="font-size:13px;">這位夥伴目前沒有待付款。</div>'}
     </div>`;
     el.querySelectorAll('[data-dfcancel]').forEach(b=>{
@@ -5891,6 +5894,22 @@ function renderPayrollPage(c){
     if(!save) return;
     const pv = document.getElementById('dfPreview');
     let timer=null, seq=0;
+    // 歸屬月份預設＝區間結束日的下個月（最常見用法：9月做的事併入10月薪資）；
+    // 預計付款日預設＝歸屬月份次月15日（公司慣例），兩個都可以手動改。
+    const defaultsFromEnd = ()=>{
+      const end = document.getElementById('dfEnd').value;
+      if(!end) return;
+      const dm = shiftMonth(end.slice(0,7), 1);
+      const ms = document.getElementById('dfMonth');
+      if(![...ms.options].some(o=>o.value===dm)) ms.add(new Option(dm, dm));
+      ms.value = dm;
+      syncDueDefault();
+    };
+    const syncDueDefault = ()=>{
+      const dm = document.getElementById('dfMonth').value;
+      if(!dm) return;
+      document.getElementById('dfDue').value = shiftMonth(dm, 1)+'-15';
+    };
     const update = ()=>{
       clearTimeout(timer);
       timer = setTimeout(async ()=>{
@@ -5907,17 +5926,20 @@ function renderPayrollPage(c){
         }catch(err){ if(my===seq) pv.textContent = err.message; }
       }, 300);
     };
-    ['dfStart','dfEnd'].forEach(id=> document.getElementById(id).oninput = update);
+    ['dfStart','dfEnd'].forEach(id=> document.getElementById(id).oninput = ()=>{ update(); if(id==='dfEnd') defaultsFromEnd(); });
+    document.getElementById('dfMonth').onchange = syncDueDefault;
     document.getElementById('dfStart').value = ymd(addDays(todayStr(), -1));
     document.getElementById('dfEnd').value = ymd(addDays(todayStr(), -1));
+    document.getElementById('dfMonth').innerHTML = monthOptionsHtml(todayStr().slice(0,7));
+    defaultsFromEnd();
     update();
     save.onclick = async ()=>{
       const driverId = document.getElementById('pDriver').value;
-      const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
+      const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueMonth:document.getElementById('dfMonth').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
       if(!driverId){ alert('請先選擇夥伴'); return; }
       if(!args.dueDate){ alert('請選擇預計付款日'); return; }
-      if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的任務掛帳，預計 ${args.dueDate} 付款嗎？`)) return;
-      try{ const r = await deferPayment(args); alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，預計 ${args.dueDate} 付款`); document.getElementById('dfNote').value=''; renderDeferredPanel(); update(); }
+      if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的任務掛帳，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款嗎？`)) return;
+      try{ const r = await deferPayment(args); alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款`); document.getElementById('dfNote').value=''; renderDeferredPanel(); update(); }
       catch(err){ alert(err.message); }
     };
   }
