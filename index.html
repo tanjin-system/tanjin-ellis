@@ -6360,7 +6360,7 @@ function enhanceDriverSelect(sel, opts){
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:relative; width:100%;';
   const input = document.createElement('input');
-  input.type = 'text'; input.autocomplete = 'off';
+  input.type = 'text'; input.autocomplete = 'off'; input.readOnly = true;
   input.style.cssText = 'width:100%;';
   const list = document.createElement('div');
   list.style.cssText = 'display:none; position:absolute; left:0; right:0; top:100%; z-index:60; max-height:280px; overflow:auto; background:var(--panel,#fff); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 18px rgba(27,33,41,.18); margin-top:2px;';
@@ -6369,7 +6369,7 @@ function enhanceDriverSelect(sel, opts){
   // 「選擇夥伴」這種空白提示選項不列進清單（只有「全部夥伴」這種有意義的空值保留）。
   const options = ()=> [...sel.options].filter(o=>o.value || o.textContent.includes('全部')).map(o=>({ value:o.value, text:o.textContent }));
   const currentText = ()=>{ const o = sel.options[sel.selectedIndex]; return o && o.value ? o.textContent : (o && o.textContent.includes('全部') ? o.textContent : ''); };
-  const syncText = ()=>{ input.value = currentText(); input.placeholder = (sel.options[0] && !sel.options[0].value && !sel.options[0].textContent.includes('全部')) ? sel.options[0].textContent+'（可輸入名字搜尋）' : '輸入名字搜尋…'; };
+  const syncText = ()=>{ input.value = currentText(); input.placeholder = (sel.options[0] && !sel.options[0].value && !sel.options[0].textContent.includes('全部')) ? sel.options[0].textContent+'（點選瀏覽，點兩下打字搜尋）' : '點選瀏覽，點兩下打字搜尋…'; };
   sel.syncPicker = syncText;
   let freq = null; // Map(driverId -> 趟數)，這個任務起點最近60天常跑的
   const loadFreq = ()=>{
@@ -6400,11 +6400,26 @@ function enhanceDriverSelect(sel, opts){
     sel.value = v;
     syncText();
     list.style.display = 'none';
+    input.readOnly = true;
     sel.dispatchEvent(new Event('change'));
   }
-  input.onfocus = ()=>{ loadFreq(); input.select(); render(); list.style.display = 'block'; };
+  // 第一下點擊／focus：唯讀狀態，只開清單瀏覽，手機不會跳鍵盤；再點一下（這時已經focus著）
+  // 才解除唯讀讓輸入框可以打字搜尋——用mousedown時機判斷「點之前是不是已經focus在這格」，
+  // 不能直接用click判斷（click觸發時focus一定已經發生過，沒辦法分辨是第一下還第二下）。
+  let wasFocused = false;
+  input.onmousedown = ()=>{ wasFocused = (document.activeElement===input); };
+  input.onfocus = ()=>{ loadFreq(); render(); list.style.display = 'block'; };
+  input.onclick = ()=>{
+    if(wasFocused && input.readOnly){
+      input.readOnly = false;
+      input.blur(); input.focus(); input.select(); // 先blur再focus：iOS只有在這個使用者手勢裡重新focus，才會跳出鍵盤
+      render();
+    }
+  };
   input.oninput = ()=>{ render(); list.style.display = 'block'; };
-  input.onblur = ()=>{ setTimeout(()=>{ list.style.display = 'none'; syncText(); }, 120); };
+  // 解除唯讀那步會先blur()再focus()觸發iOS鍵盤，也會讓這個onblur被叫到；
+  // 120ms後真的還是blur狀態（不是中途被重新focus）才收尾，不然打字打一半清單突然關掉、字被洗掉。
+  input.onblur = ()=>{ setTimeout(()=>{ if(document.activeElement!==input){ list.style.display = 'none'; syncText(); input.readOnly = true; } }, 120); };
   input.onkeydown = e=>{
     if(e.key==='Escape'){ list.style.display='none'; input.blur(); }
     if(e.key==='Enter'){ e.preventDefault(); const first = list.querySelector('.dpick-item'); if(first) choose(first.dataset.v); }
