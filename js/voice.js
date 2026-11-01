@@ -1026,9 +1026,9 @@ function voiceFabAvatarSvg() {
   return `<img src="assets/voice-avatar.png" alt="小金" draggable="false">`;
 }
 // 懸浮球拖曳＋記住位置（2026-10-29，使用者要求：球可能擋到畫面內容，要能自己拖去別的地方）。
-// 固定寬高跟.voice-fab CSS的width/height一致（58px），位置存這支手機的localStorage，
+// 固定寬高跟.voice-fab CSS的width/height一致（70px），位置存這支手機的localStorage，
 // 換手機、清過瀏覽器資料就會回到預設右下角，不影響任何人共用的資料。
-const VOICE_FAB_SIZE = 58;
+const VOICE_FAB_SIZE = 70;
 const VOICE_FAB_POS_KEY = 'fleet_voice_fab_pos';
 function voiceFabLoadPos() {
   try { const p = JSON.parse(localStorage.getItem(VOICE_FAB_POS_KEY) || 'null'); if (p && typeof p.x === 'number' && typeof p.y === 'number') return p; } catch (e) {}
