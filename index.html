@@ -1029,6 +1029,10 @@ function exportPrintable(title, bodyHtml, heading, opts){
   if(previewWin){
     previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
   }
+  // 開新分頁通常會讓它變成最前面/作用中的分頁，實際在跑html2canvas運算的這個分頁反而
+  // 被推到背景——Safari對背景分頁會刻意降速，大量運算在背景跑可能慢到像當機。搶回
+  // 焦點讓運算留在前景跑，跑完才讓新分頁顯示結果（下面canPreview那段會focus回去）。
+  try{ window.focus(); }catch(e){}
   // 注意：wrap 不能用 position:fixed/absolute——html2canvas 對離版面定位元素
   // 會量到高度0，截出全空白PDF。維持一般文件流（直接接在body最後面），但給
   // 明確寬度，避免受周圍版面影響。
@@ -1183,6 +1187,7 @@ function exportPrintable(title, bodyHtml, heading, opts){
           <embed src="${dataUri}" type="application/pdf" style="width:100%; height:calc(100vh - 44px); border:none; display:block;">
         </body></html>`);
       previewWin.document.close();
+      try{ previewWin.focus(); }catch(e){}
     } else {
       if(previewWin && !previewWin.closed) previewWin.close();
       const a = document.createElement('a');
@@ -1221,6 +1226,10 @@ async function exportPayrollPortraitPdf(slipHtmls, filename, existingWin){
   if(previewWin && !previewWin.closed){
     try{ previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>'); }catch(e){}
   }
+  // 開新分頁通常會把它變成最前面/作用中的分頁，實際在跑html2canvas運算的這個分頁反而被推到
+  // 背景——Safari（尤其桌機版）對背景分頁會刻意降速，大量運算（多位夥伴逐張html2canvas）在
+  // 背景跑可能慢到像當機。這裡搶回焦點，讓運算全程留在前景跑，跑完才讓新分頁顯示結果。
+  try{ window.focus(); }catch(e){}
   try{ await loadPdfLibs(); }catch(e){ if(previewWin && !previewWin.closed) previewWin.close(); alert(e.message); return; }
   const scrollX = window.scrollX || window.pageXOffset || 0;
   const scrollY = window.scrollY || window.pageYOffset || 0;
@@ -1263,6 +1272,7 @@ async function exportPayrollPortraitPdf(slipHtmls, filename, existingWin){
           <embed src="${dataUri}" type="application/pdf" style="width:100%; height:calc(100vh - 44px); border:none; display:block;">
         </body></html>`);
       previewWin.document.close();
+      try{ previewWin.focus(); }catch(e){}
     } else {
       const a = document.createElement('a');
       a.href = dataUri; a.download = filename+'.pdf';
