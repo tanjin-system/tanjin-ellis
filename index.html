@@ -567,7 +567,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=17"></script>
+<script defer src="js/data-layer.js?v=18"></script>
 <script defer src="js/driver-ui.js?v=2"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
@@ -5796,6 +5796,10 @@ function renderPayrollPage(c){
   };
   // 尚未月結名單（勞報單頁）：只在每月 1～15 號顯示、只看上個月、可收合；每位夥伴有「查看並月結」與「無需月結」，
   // 已標無需月結的可在底下恢復。16 號起整個消失，不論有沒有月結。
+  // 2026-11-11：使用者要求小碳幫忙批次處理，但勞報單是正式文件、確認後夥伴馬上能簽名，不該讓AI自己
+  // 送出去——改成「一鍵批次確認」：所得額（總額扣代墊，扣稅門檻基礎）$20,000以下、這個月完全沒開過
+  // 勞報單的夥伴，列成一組，主控看過金額後一次按確認（還是要主控自己點，不是AI自動做）；超過$20,000
+  // 或這個月已經有部分勞報單的，維持原本「開區間勞報單」逐一手動處理。
   async function renderPendingSettlePanel(){
     const el = document.getElementById('payrollPending');
     if(!el) return;
@@ -5811,17 +5815,38 @@ function renderPayrollPage(c){
     }catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
     if(!el.isConnected) return;
     const total = rows.reduce((sum,r)=>sum+r.net, 0);
+    const autoRows = rows.filter(r=>r.clean && r.taxable<=PAYROLL_WITHHOLD_THRESHOLD);
+    const manualRows = rows.filter(r=>!(r.clean && r.taxable<=PAYROLL_WITHHOLD_THRESHOLD));
+    const rowHtml = r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td class="amount">$${money(r.reimbursement)}</td><td class="amount">$${money(r.taxable)}</td><td>${!r.clean?'<span class="badge" style="background:var(--chip);">已有部分勞報單</span>':r.taxable>PAYROLL_WITHHOLD_THRESHOLD?'<span class="badge pending">超過門檻</span>':''}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`;
     el.innerHTML = `<details class="panel no-print" ${rows.length?'style="border-color:var(--amber); border-width:2px;"':''}>
       <summary style="cursor:pointer; font-weight:700;">${mon} 尚未月結確認${rows.length?`（${rows.length} 位）`:'（已全部處理 ✅）'}</summary>
       <div style="margin-top:8px;">
-      ${rows.length ? `<table>
-        <thead><tr><th>夥伴</th><th>已完成趟數</th><th>報酬總額</th><th></th></tr></thead>
-        <tbody>${rows.map(r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`).join('')}
-        <tr style="font-weight:700; background:var(--group);"><td>合計</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)}</td><td class="amount">$${money(total)}</td><td></td></tr></tbody>
-      </table>` : '<div style="font-size:13px;">這個月所有有完成任務的夥伴都已月結確認或標為無需月結。</div>'}
+      ${rows.length ? `<p class="note" style="margin-top:0;">總額＝任務報酬＋加減項；代墊＝憑證開公司的代墊款（非所得，不扣稅）；所得額＝總額扣代墊，是扣稅／補充保費起扣門檻（$${money(PAYROLL_WITHHOLD_THRESHOLD)}）的判斷基礎。</p>
+      ${autoRows.length ? `<div class="toolbar" style="margin-bottom:6px;"><h4 style="margin:0;">✅ 可一鍵確認（所得額$${money(PAYROLL_WITHHOLD_THRESHOLD)}以下，共${autoRows.length}位）</h4><button class="btn amber" id="batchConfirmBtn">一鍵確認這${autoRows.length}位（開區間勞報單）</button></div>
+        <table><thead><tr><th>夥伴</th><th>已完成趟數</th><th>總額</th><th>代墊</th><th>所得額</th><th></th><th></th></tr></thead>
+        <tbody>${autoRows.map(rowHtml).join('')}</tbody></table>` : ''}
+      ${manualRows.length ? `<h4 style="margin:${autoRows.length?'14px':'0'} 0 6px;">⚠️ 需個別確認（超過門檻，或這個月已有部分勞報單，共${manualRows.length}位）</h4>
+        <table><thead><tr><th>夥伴</th><th>已完成趟數</th><th>總額</th><th>代墊</th><th>所得額</th><th></th><th></th></tr></thead>
+        <tbody>${manualRows.map(rowHtml).join('')}</tbody></table>` : ''}
+        <table style="margin-top:8px;"><tr style="font-weight:700; background:var(--group);"><td style="width:50%;">合計（${rows.length}位）</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)} 趟</td><td class="amount">$${money(total)}</td></tr></table>`
+      : '<div style="font-size:13px;">這個月所有有完成任務的夥伴都已月結確認或標為無需月結。</div>'}
       ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
         <div style="margin-top:4px;">${skipped.map(d=>`<span style="margin-right:12px; font-size:12.5px;">${escapeHtml(d.name)} <button class="btn ghost" data-settlerestore="${d.id}" style="padding:2px 8px; font-size:11.5px;">恢復</button></span>`).join('')}</div></details>` : ''}
       </div></details>`;
+    const batchBtn = document.getElementById('batchConfirmBtn');
+    if(batchBtn) batchBtn.onclick = async ()=>{
+      const names = autoRows.map(r=>`${r.d.name}（$${money(r.net)}）`).join('、');
+      if(!confirm(`確定要一次開立這 ${autoRows.length} 位的區間勞報單（整個 ${mon} 月、給付日今天）並開放夥伴簽名嗎？凍結後金額不會再變動。\n${names}`)) return;
+      batchBtn.disabled = true; batchBtn.textContent = '處理中…';
+      try{
+        const monthAssignments = await fetchAssignmentsInRange(mon+'-01', monthEndStr(mon));
+        const { succeeded, failed } = await batchConfirmSettlements(mon, autoRows.map(r=>r.d.id), monthAssignments);
+        let msg = `已確認 ${succeeded.length} 位`;
+        if(failed.length) msg += `；${failed.length} 位失敗：${failed.map(f=>`${driverName(f.driverId)}（${f.message}）`).join('、')}`;
+        alert(msg);
+      }catch(err){ alert(err.message); }
+      renderPendingSettlePanel();
+    };
     el.querySelectorAll('[data-settlepick]').forEach(b=>{
       b.onclick = ()=>{
         state._payDriverId = b.dataset.settlepick; state._payrollMonth = mon; state._scrollTo = 'periodResult';

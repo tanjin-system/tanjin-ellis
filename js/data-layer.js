@@ -3131,15 +3131,38 @@ async function removeSettleSkip(driverId, monthStr) {
 }
 
 // 某個月份「還沒被月結／區間勞報單涵蓋、也沒標無需月結」的夥伴與趟數、報酬總額（精簡趟資料＋已載入的調整項）。
+// 2026-11-11：加上代墊/所得額（扣稅門檻基礎）跟clean旗標，給批次月結確認用——clean=true表示這個月
+// 完全沒有任何已開出的勞報單涵蓋到，才能安全地用「整個月」當期間一鍵開單（開單前會做overlap檢查，
+// 這裡clean只是先篩選，實際安全性還是靠confirmPeriodStatement()自己的檢查把關，雙重保險）。
 function unsettledRows(monthStr, liteTrips) {
   return state.data.drivers.map(d => {
     if (settleSkipped(d.id, monthStr)) return null;
-    const trips = liteTrips.filter(t => t.driverId === d.id && !findCoveringStatement(d.id, t.date));
+    const allTripsThisMonth = liteTrips.filter(t => t.driverId === d.id);
+    const trips = allTripsThisMonth.filter(t => !findCoveringStatement(d.id, t.date));
     if (!trips.length) return null;
     const tripTotal = trips.reduce((sum, t) => sum + tripPay(t), 0);
     const adjustments = state.data.adjustments.filter(a => a.driverId === d.id && a.month === monthStr && !findCoveringStatement(d.id, adjustmentEffectiveDate(a)));
-    return { d, trips: trips.length, net: statementNetFromAdjustments(tripTotal, adjustments).net };
+    const { net } = statementNetFromAdjustments(tripTotal, adjustments);
+    const reimbursement = adjustments.filter(a => a.type === 'reimbursement').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
+    const taxable = Math.max(0, net - reimbursement);
+    return { d, trips: trips.length, net, reimbursement, taxable, clean: trips.length === allTripsThisMonth.length };
   }).filter(Boolean);
+}
+// 批次月結確認：把clean=true（這個月完全沒開過勞報單）、所得額在門檻以下的夥伴，整個月一次性
+// 開立區間勞報單（期間＝該月1日～月底，給付日＝今天）。逐一呼叫confirmPeriodStatement()，單筆
+// 失敗不中斷其他筆，回傳成功／失敗清單讓畫面顯示結果。
+async function batchConfirmSettlements(monthStr, driverIds, monthAssignments) {
+  const succeeded = [], failed = [];
+  for (const driverId of driverIds) {
+    try {
+      const live = driverRange(driverId, monthStr + '-01', monthEndStr(monthStr), monthAssignments);
+      await confirmPeriodStatement(driverId, monthStr + '-01', monthEndStr(monthStr), todayStr(), live);
+      succeeded.push(driverId);
+    } catch (err) {
+      failed.push({ driverId, message: err.message });
+    }
+  }
+  return { succeeded, failed };
 }
 // 提示只在每月 1～15 號顯示，且只看上個月；16 號起不論有沒有月結都不顯示。
 function settleReminderMonth() {
