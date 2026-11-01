@@ -157,7 +157,7 @@
   @media (max-width:900px){ .wr-kp{ grid-template-columns:repeat(3,1fr); } .wr-need{ display:block; position:static; } }
 
   h2.section-title{ font-size:16px; font-weight:600; margin:0 0 4px; }
-  p.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
+  p.section-sub, div.section-sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 16px; }
   .panel{ background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:16px; }
   table{ width:100%; border-collapse:collapse; font-size:13px; }
   th,td{ padding:7px 9px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
@@ -6239,7 +6239,11 @@ async function renderPaymentList(c){
   const month = state._paymentListMonth || todayStr().slice(0,7);
   c.innerHTML = `
     <h2 class="section-title">夥伴匯款清單</h2>
-    <p class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額（已扣預支、已扣已付款、已處理掛帳），方便去銀行轉帳前核對。基礎算法跟「報酬結算」頁完全一致；差別是這裡會把「掛帳」處理掉——這個月有掛到下個月才付的部分不算進這個月的匯款金額，上個月掛到這個月付的部分會加進來，確保這裡的數字就是這個月真的要匯出去的錢。本月淨額$0（或以下）不用匯款的夥伴不會列在清單裡。純彙整檢視，不會寫入或異動任何資料。點姓名可以直接跳去那位夥伴的報酬結算明細。</p>
+    <div class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額，方便去銀行轉帳前核對。
+      <details><summary style="cursor:pointer;">說明</summary>
+        <div style="margin-top:4px;">已扣預支、已扣已付款、已處理掛帳。基礎算法跟「報酬結算」頁完全一致；差別是這裡會把「掛帳」處理掉——這個月有掛到下個月才付的部分不算進這個月的匯款金額，上個月掛到這個月付的部分會加進來，確保這裡的數字就是這個月真的要匯出去的錢。本月淨額$0（或以下）不用匯款的夥伴不會列在清單裡。純彙整檢視，不會寫入或異動任何資料。點姓名可以直接跳去那位夥伴的報酬結算明細。</div>
+      </details>
+    </div>
     <div class="panel no-print">
       <div class="grid2">
         <div class="field" style="max-width:200px;"><label>月份</label><select id="plMonth">${monthOptionsHtml(month)}</select></div>
