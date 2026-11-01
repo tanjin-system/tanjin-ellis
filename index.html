@@ -1358,6 +1358,47 @@ function driverRange(driverId, start, end, assignmentsList = state.data.assignme
   const paid = trips.reduce((s,a)=> s+(Number(a.paidAmount)||0), 0);
   return { trips, tripTotal, adjustments, adjTotal, reimbursement, paid, net: tripTotal+adjTotal };
 }
+// 2026-11-01：算出某位夥伴某個月「真正要匯多少錢」，從報酬結算/勞報單頁
+// 的refresh()裡原封不動抽出來（「夥伴匯款清單」要用，邏輯必須跟報酬結算頁
+// 完全一致，不能另外寫一份近似值——這是真的要拿去匯款的金額）。規則：月結
+// 已凍結用凍結金額；沒月結的話看有沒有已經開出的區間勞報單覆蓋，覆蓋到的
+// 部分用各自實際扣稅後金額，沒覆蓋到的部分用原始金額（不假設扣稅，真正會
+// 不會扣稅要等開單那天才知道）。報酬結算頁本身暫不改用這支函式（避免動到
+// 已經在用、已驗證過的畫面），純粹新增一份共用邏輯給新畫面用。
+function computeDriverPayable(driverId, monthStr, monthAssignments){
+  const live = driverMonthly(driverId, monthStr, monthAssignments);
+  const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
+  const isFrozen = !!record;
+  const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+  const r = isFrozen ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount } : { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
+  let ded;
+  if(isFrozen){
+    ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
+  } else {
+    const monthStart = monthStr+'-01', monthEnd = monthEndStr(monthStr);
+    const coveringStatements = state.data.statements.filter(s=>{
+      if(s.driverId!==driverId) return false;
+      const [a,b] = statementRange(s);
+      return a<=monthEnd && b>=monthStart;
+    });
+    const documentedActual = coveringStatements.reduce((s,x)=>s+x.actualNet, 0);
+    const documentedTax = coveringStatements.reduce((s,x)=>s+x.taxAmount, 0);
+    const documentedNhi = coveringStatements.reduce((s,x)=>s+x.nhiAmount, 0);
+    const isCovered = date => coveringStatements.some(s=>{ const [a,b]=statementRange(s); return date>=a && date<=b; });
+    const undocTripTotal = live.trips.filter(a=>!isCovered(a.date)).reduce((s,a)=>s+tripPay(a), 0);
+    const undocAdjustments = live.adjustments.filter(a=>!isCovered(adjustmentEffectiveDate(a)));
+    const undocNet = statementNetFromAdjustments(undocTripTotal, undocAdjustments).net;
+    ded = {
+      incomeType: PAYROLL_INCOME_TYPE, withholdTax: documentedTax>0, taxRate: PAYROLL_TAX_RATE, taxAmount: documentedTax,
+      withholdNhi: documentedNhi>0, nhiRate: PAYROLL_NHI_RATE, nhiAmount: documentedNhi,
+      actualNet: documentedActual + undocNet
+    };
+  }
+  const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+  const paidTotal = r.paid||0;
+  const payable = ded.actualNet - advanceTotal - paidTotal;
+  return { payable, ded, r, advanceTotal, paidTotal, isFrozen };
+}
 // 已月結／區間開單的勞報單：用凍結的金額＋當時的稅務欄位，組出勞報單第1頁＋（有代墊款才有的）
 // 第2頁附件。assignments 要涵蓋該勞報單的整段期間（呼叫端自己用 fetchAssignmentsInRange 取）。
 function buildSlipHtmls(driver, record, assignments){
@@ -1489,6 +1530,7 @@ const ADMIN_TABS = [
   {id:'routes', label:'路線管理', icon:'🛣️', group:'基本資料'},
   {id:'payroll', label:'報酬結算', icon:'💰', group:'帳務'},
   {id:'slips', label:'勞報單', icon:'📝', group:'帳務'},
+  {id:'paymentList', label:'夥伴匯款清單', icon:'🏦', group:'帳務'},
   {id:'billing', label:'請款結算', icon:'🧾', group:'帳務'},
   {id:'export', label:'資料匯出', icon:'📤', group:'系統'},
   {id:'settings', label:'系統設定', icon:'⚙️', group:'系統'}
@@ -1698,7 +1740,7 @@ function renderContent(){
   if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
   if(!inDriverView){
     ({home:renderHomeAdmin, carbon_inbox:renderCarbonInbox, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
-      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayroll, slips:renderSlips, paymentList:renderPaymentList, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
   } else {
     if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
     ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
@@ -6201,6 +6243,66 @@ function renderPayrollPage(c, mode){
     }catch(err){ alert(err.message); }
   };
   refresh();
+}
+
+// ---------- 夥伴匯款清單（2026-11-01） ----------
+// 使用者要求：每個月要去銀行轉帳給大家之前，想要一次看完所有在職夥伴的匯款
+// 資訊＋應付金額，不用一個一個點開報酬結算頁查。純讀取、不寫任何資料；金額
+// 算法呼叫computeDriverPayable()，跟報酬結算頁用同一套規則，確保兩邊金額
+// 一定一致。含銀行帳號、身分證字號這類敏感資料，只有主控看得到（這個分頁
+// 本來就只在ADMIN_TABS，夥伴端完全不會有這個分頁、也查不到別人的這些資料）。
+async function renderPaymentList(c){
+  const month = state._paymentListMonth || todayStr().slice(0,7);
+  c.innerHTML = `
+    <h2 class="section-title">夥伴匯款清單</h2>
+    <p class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額（已扣預支、已扣已付款），方便去銀行轉帳前核對。金額算法跟「報酬結算」頁完全一致；這裡純粹是彙整檢視，不會寫入或異動任何資料。</p>
+    <div class="panel no-print">
+      <div class="grid2">
+        <div class="field" style="max-width:200px;"><label>月份</label><select id="plMonth">${monthOptionsHtml(month)}</select></div>
+        <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="plPrint" style="width:100%;">列印/另存PDF</button></div>
+      </div>
+    </div>
+    <div id="plResult"><div class="empty">載入中…</div></div>`;
+  document.getElementById('plMonth').onchange = ()=>{ state._paymentListMonth = document.getElementById('plMonth').value; refresh(); };
+  document.getElementById('plPrint').onclick = ()=>{
+    const tbl = document.getElementById('plTable');
+    if(!tbl){ alert('請先等清單載入完成'); return; }
+    exportPrintable(`夥伴匯款清單_${document.getElementById('plMonth').value}`, tbl.outerHTML, `夥伴匯款清單・${document.getElementById('plMonth').value}`, { fixedWidth:1200 });
+  };
+  await refresh();
+  async function refresh(){
+    const monthStr = document.getElementById('plMonth').value;
+    state._paymentListMonth = monthStr;
+    const box = document.getElementById('plResult');
+    box.innerHTML = '<div class="empty">載入中…</div>';
+    let monthAssignments;
+    try{
+      monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr));
+      await ensureAdjustmentsRange(monthStr+'-01');
+    }catch(err){ box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; return; }
+    if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能已經切走這一頁或換了月份
+    const drivers = [...state.data.drivers].filter(d=>d.status==='active').sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));
+    const rows = drivers.map(d=>({ driver:d, ...computeDriverPayable(d.id, monthStr, monthAssignments) }));
+    const total = rows.reduce((s,x)=>s+x.payable, 0);
+    const missingBank = rows.filter(x=>!x.driver.bank.account || !x.driver.idNumber);
+    box.innerHTML = `
+      ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;">${escapeHtml(x.driver.name)}</div>`).join('')}</div>` : ''}
+      <div class="panel">
+        <table id="plTable">
+          <thead><tr><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
+          <tbody>${rows.map(({driver:d, payable})=>`<tr ${!d.bank.account||!d.idNumber?'style="background:rgba(214,69,69,.08);"':''}>
+            <td>${escapeHtml(d.name)}</td>
+            <td>${escapeHtml(d.bank.holder||'—')}</td>
+            <td>${escapeHtml(d.bank.bankName||'—')}</td>
+            <td>${escapeHtml(d.bank.branch||'—')}</td>
+            <td class="mono">${escapeHtml(d.bank.account||'—')}</td>
+            <td class="mono">${escapeHtml(d.idNumber||'—')}</td>
+            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}</td>
+          </tr>`).join('') || `<tr><td colspan="7"><div class="empty">沒有在職夥伴</div></td></tr>`}</tbody>
+          <tfoot><tr><td colspan="6" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
+        </table>
+      </div>`;
+  }
 }
 
 // ---------- 請款結算 ----------
