@@ -567,7 +567,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=18"></script>
+<script defer src="js/data-layer.js?v=19"></script>
 <script defer src="js/driver-ui.js?v=2"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
@@ -1410,7 +1410,7 @@ function buildSlipHtmls(driver, record, assignments){
   const monthStr = record.periodStart ? end.slice(0,7) : record.month;
   return {
     slipHtml: payrollSlipHtml(driver, monthStr, merged, ded, {
-      ...periodOpts, v2: slipUsesV2(record), serviceName: record.serviceName,
+      ...periodOpts, v2: slipUsesV2(record), serviceName: record.serviceName, payMethod: record.payMethod,
       signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     }),
     attHtml: payrollAttachmentHtml(driver, monthStr, merged, periodOpts)
@@ -5565,8 +5565,8 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
       <table>
         <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
         <tr><td>所得人姓名</td><td>${escapeHtml(driver.bank.holder||driver.name)}</td><td>身分證／居留證號</td><td>${escapeHtml(driver.idNumber||'（未填寫）')}</td></tr>
-        <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>銀行轉帳</td></tr>
-        <tr><td>銀行／分行</td><td>${escapeHtml(driver.bank.bankName||'—')}／${escapeHtml(driver.bank.branch||'—')}</td><td>帳號</td><td>${escapeHtml(driver.bank.account||'—')}</td></tr>
+        <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>${opts.payMethod==='cash'?'現金':'銀行轉帳'}</td></tr>
+        ${opts.payMethod==='cash' ? '' : `<tr><td>銀行／分行</td><td>${escapeHtml(driver.bank.bankName||'—')}／${escapeHtml(driver.bank.branch||'—')}</td><td>帳號</td><td>${escapeHtml(driver.bank.account||'—')}</td></tr>`}
       </table>
       <h4 style="margin:14px 0 6px;">勞務內容</h4>
       <table>
@@ -5702,8 +5702,9 @@ function renderPayrollPage(c){
       <div class="grid3">
         <div class="field"><label>期間開始</label><input id="perStart" type="date"></div>
         <div class="field"><label>期間結束</label><input id="perEnd" type="date"></div>
-        <div class="field"><label>實際給付日期（轉帳日）</label><input id="perPay" type="date"></div>
+        <div class="field"><label>實際給付日期</label><input id="perPay" type="date"></div>
       </div>
+      <div class="field" style="max-width:200px;"><label>付款方式</label><select id="perMethod"><option value="transfer">銀行轉帳</option><option value="cash">現金</option></select></div>
       <button class="btn amber" id="perPreview">預覽區間勞報單</button>
     </div>
     <div id="periodResult"></div>` : ''}
@@ -5996,7 +5997,8 @@ function renderPayrollPage(c){
     const start = document.getElementById('perStart').value;
     const end = document.getElementById('perEnd').value;
     const payDate = document.getElementById('perPay').value;
-    state._periodSel = { driverId, start, end, payDate };
+    const payMethod = document.getElementById('perMethod').value;
+    state._periodSel = { driverId, start, end, payDate, payMethod };
     const mine = state.data.statements.filter(x=>x.driverId===driverId && x.periodStart).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd));
     const statusText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">等待夥伴簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
     const listHtml = `<div class="panel no-print"><h4 style="margin:0 0 6px;">${escapeHtml(driverName(driverId))} 已開的區間勞報單（${mine.length}）</h4>
@@ -6027,7 +6029,7 @@ function renderPayrollPage(c){
       r = { ...live, adjTotal:calc.adjTotal, net:calc.net };
       ded = computePayrollDeductions(r.net, r.reimbursement);
       const po = { period:{ start, end }, payDate: payDate || null };
-      slipHtml = payrollSlipHtml(driver, end.slice(0,7), r, ded, { ...po, v2:true, serviceName: driver && driver.serviceName });
+      slipHtml = payrollSlipHtml(driver, end.slice(0,7), r, ded, { ...po, v2:true, serviceName: driver && driver.serviceName, payMethod });
       attHtml = payrollAttachmentHtml(driver, end.slice(0,7), r, po);
     }
     const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((sum,a)=>sum+Math.abs(Number(a.amount)||0), 0);
@@ -6073,9 +6075,9 @@ function renderPayrollPage(c){
     });
     const pc = document.getElementById('perConfirm');
     if(pc) pc.onclick = async ()=>{
-      if(!payDate){ alert('請先填寫「實際給付日期（轉帳日）」'); return; }
-      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}。\n凍結後金額不會再變動，並開放夥伴簽名。`)) return;
-      try{ await confirmPeriodStatement(driverId, start, end, payDate, live); renderContent(); }
+      if(!payDate){ alert('請先填寫「實際給付日期」'); return; }
+      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}，付款方式${payMethod==='cash'?'現金':'銀行轉帳'}。\n凍結後金額不會再變動，並開放夥伴簽名。`)) return;
+      try{ await confirmPeriodStatement(driverId, start, end, payDate, live, payMethod); renderContent(); }
       catch(err){ alert(err.message); }
     };
     const pr = document.getElementById('perReject');
@@ -6148,6 +6150,7 @@ function renderPayrollPage(c){
     const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">夥伴已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">夥伴已回簽（未鎖定）</span>' : '<span class="badge progress">等待夥伴回簽</span>';
     const slipHtml = payrollSlipHtml(driver, monthStr, r, ded, {
       v2: slipUsesV2(record), serviceName: record ? record.serviceName : (driver && driver.serviceName),
+      payMethod: record ? record.payMethod : 'transfer',
       signatureDataUrl: record && (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
     });
     const attHtml = payrollAttachmentHtml(driver, monthStr, r);
@@ -6246,8 +6249,9 @@ function renderPayrollPage(c){
       document.getElementById('perStart').value = sel.start || '';
       document.getElementById('perEnd').value = sel.end || '';
       document.getElementById('perPay').value = sel.payDate || todayStr();
+      document.getElementById('perMethod').value = sel.payMethod || 'transfer';
     } else { setPeriodDefaults(); }
-    ['perStart','perEnd','perPay'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
+    ['perStart','perEnd','perPay','perMethod'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
     document.getElementById('perPreview').onclick = periodRefresh;
     periodRefresh();
     wireDeferredForm(); renderDeferredPanel();

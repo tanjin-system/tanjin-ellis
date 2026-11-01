@@ -154,6 +154,7 @@ function mapStatement(row) {
     actualNet: Number(row.actual_net_amount || 0),
     reimbursementAmount: Number(row.reimbursement_amount || 0),
     serviceName: row.service_name || '',
+    payMethod: row.pay_method || 'transfer',
     periodStart: row.period_start || null, periodEnd: row.period_end || null, payDate: row.pay_date || null,
     status: row.status, confirmedAt: row.confirmed_at, signedAt: row.signed_at,
     signatureDataUrl: null, adminAcked: row.admin_acked
@@ -2632,7 +2633,7 @@ function adjustmentEffectiveDate(a) {
   return a.date || (a.month + '-01');
 }
 
-async function confirmPeriodStatement(driverId, start, end, payDate, live) {
+async function confirmPeriodStatement(driverId, start, end, payDate, live, payMethod) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) throw new Error('請選擇正確的起訖日期');
   if (end < start) throw new Error('結束日期不能早於開始日期');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate || '')) throw new Error('請填寫實際給付日期');
@@ -2654,7 +2655,7 @@ async function confirmPeriodStatement(driverId, start, end, payDate, live) {
     withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
     withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
     actual_net_amount: ded.actualNet, reimbursement_amount: ded.reimbursement,
-    service_name: serviceName || null,
+    service_name: serviceName || null, pay_method: payMethod === 'cash' ? 'cash' : 'transfer',
     status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
   }).select().single();
   if (error) throw new Error('區間勞報單建立失敗：' + error.message);

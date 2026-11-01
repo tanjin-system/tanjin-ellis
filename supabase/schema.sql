@@ -1788,3 +1788,9 @@ create policy admin_select on carbon_briefings for select to app_admin using (tr
 alter table assignments add column if not exists pay_due_month text check (pay_due_month is null or pay_due_month ~ '^\d{4}-\d{2}$');
 create index if not exists idx_assignments_pay_due_month on assignments(pay_due_month) where pay_due_month is not null;
 grant select (pay_due_month) on assignments to app_driver;
+
+-- PART 50：勞報單付款方式（轉帳／現金）（2026-11-11）
+-- 使用者要求：現金支付時勞報單不要顯示銀行帳號資訊（現金不需要，列出來沒意義、也多一個
+-- 外流個資的風險）。開區間勞報單時可以選付款方式，選現金的話凍結存檔，之後查看/列印都記得
+-- 不顯示銀行資訊；預設維持轉帳（原本的唯一行為），不影響任何既有勞報單。
+alter table statements add column if not exists pay_method text not null default 'transfer' check (pay_method in ('transfer','cash'));
