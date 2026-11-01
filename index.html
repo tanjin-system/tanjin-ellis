@@ -19,7 +19,7 @@
 <meta name="apple-mobile-web-app-title" content="信興｜碳金 Hub">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap">
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+TC:wght@500;800&display=swap">
 <style>
   /* 字體改用 <link> 載入（原本是 @import）：@import 寫在 <style> 裡面，瀏覽器要先解析完這塊
      <style> 才會發現要去抓字體，等於把字體請求硬生生延後；<link> 一開始掃描 <head> 就會被
@@ -1240,8 +1240,15 @@ async function exportPayrollPortraitPdf(slipHtmls, filename){
         .amount{ font-family:monospace; font-weight:700; }
       </style>${slipHtmls[i]}`;
       document.body.appendChild(wrap);
-      const canvas = await html2canvas(wrap, { scale:2, useCORS:true, scrollX:-scrollX, scrollY:-scrollY, windowWidth:document.documentElement.scrollWidth, windowHeight:document.documentElement.scrollHeight });
-      document.body.removeChild(wrap);
+      let canvas;
+      try{
+        canvas = await Promise.race([
+          html2canvas(wrap, { scale:2, useCORS:true, scrollX:-scrollX, scrollY:-scrollY, windowWidth:document.documentElement.scrollWidth, windowHeight:document.documentElement.scrollHeight }),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('第 '+(i+1)+' 張畫面渲染逾時（超過20秒無反應），請重新整理頁面後再試一次')), 20000))
+        ]);
+      }finally{
+        document.body.removeChild(wrap);
+      }
       // 整張畫布等比縮放塞進一頁（寧可留白，也不允許溢出到第二頁）。
       const ratio = canvas.height / canvas.width;
       let drawWmm = pageWmm, drawHmm = pageWmm*ratio;
