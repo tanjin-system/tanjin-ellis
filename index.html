@@ -5672,7 +5672,7 @@ function payrollSlipHtml(driver, monthStr, r, ded, opts){
     contentRows.push(`<tr><td>${dateLabel}</td><td>減：代墊款（憑證歸公司，非所得）</td><td>共 ${items.length} 筆，明細詳見附件（第2頁）</td><td>${items.length}</td><td>筆</td><td>—</td><td class="amount">-$${money(reimb)}</td><td>—</td></tr>`);
   }
   const sigCell = opts.signatureDataUrl
-    ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;" loading="lazy">`
+    ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
     : '<div style="height:56px;"></div>';
   return `
     <div class="panel payroll-slip" style="max-width:720px;">
