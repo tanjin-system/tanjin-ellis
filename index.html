@@ -1229,7 +1229,9 @@ async function exportPayrollPortraitPdf(slipHtmls, filename){
     const marginMm = 10;
     const pageWmm = pdf.internal.pageSize.getWidth() - marginMm*2;
     const pageHmm = pdf.internal.pageSize.getHeight() - marginMm*2;
+    console.log(`[勞報單PDF] 開始，共 ${slipHtmls.length} 張`);
     for(let i=0;i<slipHtmls.length;i++){
+      console.log(`[勞報單PDF] 第 ${i+1}/${slipHtmls.length} 張開始渲染`);
       const wrap = document.createElement('div');
       wrap.setAttribute('data-force-light','');
       wrap.style.cssText = 'width:700px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
@@ -1249,6 +1251,7 @@ async function exportPayrollPortraitPdf(slipHtmls, filename){
       }finally{
         document.body.removeChild(wrap);
       }
+      console.log(`[勞報單PDF] 第 ${i+1}/${slipHtmls.length} 張渲染完成，尺寸 ${canvas.width}x${canvas.height}`);
       // 整張畫布等比縮放塞進一頁（寧可留白，也不允許溢出到第二頁）。
       const ratio = canvas.height / canvas.width;
       let drawWmm = pageWmm, drawHmm = pageWmm*ratio;
@@ -1256,9 +1259,12 @@ async function exportPayrollPortraitPdf(slipHtmls, filename){
       const xOffset = marginMm + (pageWmm-drawWmm)/2;
       if(i>0) pdf.addPage();
       pdf.addImage(canvas.toDataURL('image/jpeg',0.95), 'JPEG', xOffset, marginMm, drawWmm, drawHmm);
+      console.log(`[勞報單PDF] 第 ${i+1}/${slipHtmls.length} 張已加入PDF`);
     }
+    console.log('[勞報單PDF] 全部完成，開始儲存檔案');
     pdf.save(filename+'.pdf');
   }catch(err){
+    console.error('[勞報單PDF] 失敗：', err);
     alert('產生PDF失敗：' + err.message);
   }
 }
