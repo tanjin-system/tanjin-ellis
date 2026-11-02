@@ -1462,7 +1462,7 @@ function driverRange(driverId, start, end, assignmentsList = state.data.assignme
   const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date>=start && a.date<=end && a.status==='completed');
   const tripTotal = trips.reduce((s,a)=> s+tripPay(a), 0);
   const adjustments = state.data.adjustments.filter(a=> { if(a.driverId!==driverId) return false; const d = adjustmentEffectiveDate(a); return d>=start && d<=end; });
-  const adjTotal = adjustments.reduce((s,a)=> a.type==='reimbursement' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  const adjTotal = adjustments.reduce((s,a)=> (a.type==='advance' || a.type==='reimbursement') ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
   const reimbursement = adjustments.filter(a=>a.type==='reimbursement').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
   const paid = trips.reduce((s,a)=> s+(Number(a.paidAmount)||0), 0);
   return { trips, tripTotal, adjustments, adjTotal, reimbursement, paid, net: tripTotal+adjTotal };
