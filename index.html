@@ -6481,14 +6481,25 @@ async function renderPaymentList(c){
       const defSplit = deferredSplit(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
       // 這個月做的事有一部分約好晚點付（inRange），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來。
       const payable = base.payable - defSplit.inRange.total + defSplit.other.total;
-      return { driver:d, payable, defSplit };
+      return { driver:d, payable, defSplit, advanceTotal: base.advanceTotal };
     });
     // 本月淨額為0（或負）的不用匯款，清單裡不列出，去銀行轉帳時不用看到一堆$0的人。
     const rows = allRows.filter(x=>Math.round(x.payable)>0);
     const skipped = allRows.length - rows.length;
     const total = rows.reduce((s,x)=>s+x.payable, 0);
     const missingBank = rows.filter(x=>!x.driver.bank.account || !x.driver.idNumber);
+    // 已預支總額：本月（不論該夥伴這個月淨額最後是正是負、有沒有在下面匯款清單裡）已經先行
+    // 撥付出去的預支加總，讓主控一眼看到「15日正式匯款前已經先付出去多少」，不用逐一點開每位夥伴核對。
+    const advanceRows = allRows.filter(x=>x.advanceTotal>0).sort((a,b)=>b.advanceTotal-a.advanceTotal);
+    const advanceGrandTotal = advanceRows.reduce((s,x)=>s+x.advanceTotal, 0);
     box.innerHTML = `
+      ${advanceGrandTotal ? `<div class="panel">
+        <h3 style="margin-top:0;">📌 ${monthStr} 已預支總額：<span class="amount">$${money(advanceGrandTotal)}</span>（共${advanceRows.length}位）</h3>
+        <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:6px;">正式月結／匯款前已經先付給下列夥伴的薪資，會在月結或區間勞報單結算時自動從應付金額扣除，不會重複付款。</div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          ${advanceRows.map(x=>`<button class="btn ghost" data-plgopayroll="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} $${money(x.advanceTotal)}</button>`).join('')}
+        </div>
+      </div>` : ''}
       ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;"><button class="btn ghost" data-plfixdriver="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} → 前往夥伴資料補齊</button></div>`).join('')}</div>` : ''}
       <div class="panel">
         ${skipped ? `<p class="note" style="margin-top:0;">另有 ${skipped} 位在職夥伴本月淨額為 $0（或以下），免匯款，未列在下面清單。</p>` : ''}
