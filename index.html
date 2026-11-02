@@ -6488,16 +6488,24 @@ async function renderPaymentList(c){
     const skipped = allRows.length - rows.length;
     const total = rows.reduce((s,x)=>s+x.payable, 0);
     const missingBank = rows.filter(x=>!x.driver.bank.account || !x.driver.idNumber);
-    // 已預支總額：本月（不論該夥伴這個月淨額最後是正是負、有沒有在下面匯款清單裡）已經先行
-    // 撥付出去的預支加總，讓主控一眼看到「15日正式匯款前已經先付出去多少」，不用逐一點開每位夥伴核對。
-    const advanceRows = allRows.filter(x=>x.advanceTotal>0).sort((a,b)=>b.advanceTotal-a.advanceTotal);
-    const advanceGrandTotal = advanceRows.reduce((s,x)=>s+x.advanceTotal, 0);
+    // 已先行付出總額：對公司來說，不管是「預支」調整項，還是透過區間勞報單（週間任務清單那邊）
+    // 提早開單、選了這個月給付日期的錢，本質上都是「15日大批匯款之外，這個月已經先付出去的
+    // 現金」——兩種管道都要算進同一個總額，不能只看預支調整項，漏掉區間勞報單已經付掉的部分。
+    const periodPaidByDriver = new Map();
+    state.data.statements.filter(s=> s.periodStart && s.payDate && s.payDate.slice(0,7)===monthStr).forEach(s=>{
+      periodPaidByDriver.set(s.driverId, (periodPaidByDriver.get(s.driverId)||0) + s.actualNet);
+    });
+    const prepaidRows = allRows.map(x=>({ driver:x.driver, advanceTotal:x.advanceTotal, periodTotal: periodPaidByDriver.get(x.driver.id)||0 }))
+      .filter(x=> x.advanceTotal>0 || x.periodTotal>0)
+      .map(x=> ({ ...x, grand: x.advanceTotal + x.periodTotal }))
+      .sort((a,b)=>b.grand-a.grand);
+    const prepaidGrandTotal = prepaidRows.reduce((s,x)=>s+x.grand, 0);
     box.innerHTML = `
-      ${advanceGrandTotal ? `<div class="panel">
-        <h3 style="margin-top:0;">📌 ${monthStr} 已預支總額：<span class="amount">$${money(advanceGrandTotal)}</span>（共${advanceRows.length}位）</h3>
-        <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:6px;">正式月結／匯款前已經先付給下列夥伴的薪資，會在月結或區間勞報單結算時自動從應付金額扣除，不會重複付款。</div>
+      ${prepaidGrandTotal ? `<div class="panel">
+        <h3 style="margin-top:0;">📌 ${monthStr} 已先行付出總額：<span class="amount">$${money(prepaidGrandTotal)}</span>（共${prepaidRows.length}位）</h3>
+        <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:6px;">15日大批匯款之外，這個月已經先付給下列夥伴的錢，包含「預支」調整項，以及區間勞報單（週間任務清單）已經開單並選定這個月給付日期的金額。月結或區間勞報單結算時會自動扣除，不會重複付款。</div>
         <div style="display:flex; flex-wrap:wrap; gap:6px;">
-          ${advanceRows.map(x=>`<button class="btn ghost" data-plgopayroll="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} $${money(x.advanceTotal)}</button>`).join('')}
+          ${prepaidRows.map(x=>`<button class="btn ghost" data-plgopayroll="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} $${money(x.grand)}${x.advanceTotal&&x.periodTotal?`（預支$${money(x.advanceTotal)}＋區間$${money(x.periodTotal)}）`:x.periodTotal?'（區間勞報單）':''}</button>`).join('')}
         </div>
       </div>` : ''}
       ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;"><button class="btn ghost" data-plfixdriver="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} → 前往夥伴資料補齊</button></div>`).join('')}</div>` : ''}
