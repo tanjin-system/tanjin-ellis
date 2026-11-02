@@ -109,6 +109,105 @@ const VOICE_FN_BROWSE_INFO_ADMIN = {
     date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/store_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
   }, required: ['topic'] }
 };
+// 2026-11-02使用者要求：store_driver只能查「單一天」，問「太原醫門市最近5天都
+// 幾點抵達」這種跨天、查時間點的問題答不出來——store_driver/route_driver這種
+// 「每種問法各寫一支函式」的題庫式架構，不可能追上使用者會怎麼問，使用者要求
+// 開放成真正通用的查詢：日期區間＋店點/路線/夥伴關鍵字＋狀態篩選自由組合，底層
+// 還是fetchAssignmentsInRange()這份既有資料（夥伴帳號透過Supabase RLS本來就只
+// 查得到自己的任務，跟現有所有查詢一樣，不是另外加規則擋——哪個身份能查到什麼，
+// 是資料庫那一層決定的，不是這裡的程式碼決定的）。
+// 店點/路線/夥伴的完成時間（completed_at）本來就有存（拍照送達那一刻寫入），不是
+// 新資料，只是之前沒有工具把它組進回答。
+const VOICE_QUERY_TRIPS_MAX_DAYS = 90;
+function voiceFormatHm(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+const VOICE_FN_QUERY_TRIPS_ADMIN = {
+  name: 'query_trips',
+  description: '通用任務/配送紀錄查詢，給上面幾個固定題目之外、臨時想問的問題用，例如「太原醫門市最近5天都幾點送達」「小安這幾天跑了哪些任務」「這條路線這週有沒有異常」。可以只填部分條件自由組合：日期區間＋店點/路線/夥伴關鍵字＋狀態篩選。不確定關鍵字對應哪個店點/路線/夥伴時，我會列候選請你確認，不會自己亂猜。查詢區間最長90天，問更久的話請先跟對方說要縮小範圍。',
+  parameters: { type: 'OBJECT', properties: {
+    dateStart: { type: 'STRING', description: 'YYYY-MM-DD，查詢起始日，沒填預設7天前；把「最近5天」「這週」這種說法換算成確切日期' },
+    dateEnd: { type: 'STRING', description: 'YYYY-MM-DD，查詢結束日，沒填預設今天' },
+    dropPointKeyword: { type: 'STRING', description: '店點名稱或代號關鍵字，選填' },
+    routeKeyword: { type: 'STRING', description: '路線名稱關鍵字，選填' },
+    driverKeyword: { type: 'STRING', description: '夥伴姓名關鍵字，選填，查特定夥伴的任務時用' },
+    statusFilter: { type: 'STRING', description: 'completed（已送達／已完成）、issue（有異常回報）、undelivered（尚未送達），選填，沒填就全部都算' }
+  } }
+};
+const VOICE_FN_QUERY_TRIPS_DRIVER = {
+  name: 'query_trips',
+  description: '通用任務查詢，查自己本人的任務紀錄（不是查別人的），給get_my_tasks之外、臨時想問的問題用，例如「我這幾天去太原醫門市都幾點到」「這個月有沒有送貨異常」。可以只填部分條件自由組合：日期區間＋店點/路線關鍵字＋狀態篩選。不確定關鍵字對應哪個店點/路線時，我會列候選請你確認。查詢區間最長90天。',
+  parameters: { type: 'OBJECT', properties: {
+    dateStart: { type: 'STRING', description: 'YYYY-MM-DD，查詢起始日，沒填預設7天前' },
+    dateEnd: { type: 'STRING', description: 'YYYY-MM-DD，查詢結束日，沒填預設今天' },
+    dropPointKeyword: { type: 'STRING', description: '店點名稱或代號關鍵字，選填' },
+    routeKeyword: { type: 'STRING', description: '路線名稱關鍵字，選填' },
+    statusFilter: { type: 'STRING', description: 'completed（已送達／已完成）、issue（有異常回報）、undelivered（尚未送達），選填' }
+  } }
+};
+async function voiceToolQueryTrips(args, isAdmin) {
+  args = args || {};
+  let dateEnd = /^\d{4}-\d{2}-\d{2}$/.test(args.dateEnd || '') ? args.dateEnd : todayStr();
+  let dateStart = /^\d{4}-\d{2}-\d{2}$/.test(args.dateStart || '') ? args.dateStart : ymd(addDays(dateEnd, -7));
+  if (dateStart > dateEnd) { const t = dateStart; dateStart = dateEnd; dateEnd = t; }
+  if ((new Date(dateEnd) - new Date(dateStart)) / 86400000 > VOICE_QUERY_TRIPS_MAX_DAYS) return `查詢區間最長${VOICE_QUERY_TRIPS_MAX_DAYS}天，請縮小日期範圍再問一次。`;
+
+  let dp = null, route = null, driver = null;
+  if (args.dropPointKeyword) { const f = voiceFindSingleDropPoint(args.dropPointKeyword); if (f.error) return f.error; dp = f.entity; }
+  if (args.routeKeyword) { const f = voiceFindSingleRoute(args.routeKeyword); if (f.error) return f.error; route = f.entity; }
+  if (isAdmin && args.driverKeyword) { const f = voiceFindDriverByName(args.driverKeyword); if (f.error) return f.error; driver = f.driver; }
+
+  let assignments;
+  try { assignments = await fetchAssignmentsInRange(dateStart, dateEnd); } catch (e) { return '查詢時發生錯誤，請稍後再試。'; }
+  // 夥伴帳號這裡拿到的assignments，Supabase RLS已經只會回傳這個登入身份自己的任務
+  // （跟get_my_tasks/我的報酬那些既有查詢完全同一條資料路徑），不用另外再篩一次「是
+  // 不是自己的」——篩了反而是自己多此一舉假裝在做資料庫已經做掉的事。
+  let rows = assignments.filter(a => !a.isSupport && a.published !== false && a.status !== 'cancelled');
+  if (route) rows = rows.filter(a => a.routeId === route.id);
+  if (driver) rows = rows.filter(a => a.driverId === driver.id);
+
+  // dropPointKeyword篩的是「店」這個維度，要展開到每個下貨點（同一趟任務可能有
+  // 很多店，只留符合這間店的那幾筆配送紀錄），其他篩選維度（路線/夥伴/狀態）維持
+  // 在「趟」這個維度，兩種粒度混在一起用，依有沒有填dropPointKeyword自動切換。
+  let records = [];
+  rows.forEach(a => {
+    const dps = dp ? (a.dropPoints || []).filter(d => d.sourceDpId === dp.id) : (a.dropPoints || []);
+    dps.forEach(d => records.push({ a, d }));
+  });
+  if (args.statusFilter === 'completed') records = records.filter(r => r.d.status === 'completed');
+  else if (args.statusFilter === 'issue') records = records.filter(r => !!r.d.issueReason);
+  else if (args.statusFilter === 'undelivered') records = records.filter(r => r.d.status !== 'completed');
+
+  const scopeLabel = [dp ? dpLabel(dp) : '', route ? routeDisplayName(route.name) : '', driver ? driver.name : ''].filter(Boolean).join('・') || '全部';
+  if (!records.length) return `${dateStart}～${dateEnd}，${scopeLabel}，查不到符合條件的紀錄。`;
+  records.sort((a, b) => a.a.date.localeCompare(b.a.date) || (a.d.completedAt || '').localeCompare(b.d.completedAt || ''));
+
+  // 查特定一間店、且是問「完成狀態」（沒刻意篩issue/undelivered）時，使用者十之八九
+  // 是想知道「幾點到」，摘要成時間範圍／平均，不要把每一筆原始資料整段唸出來。
+  if (dp && !route && !driver) {
+    const timed = records.filter(r => r.d.status === 'completed' && r.d.completedAt);
+    if (timed.length) {
+      const mins = timed.map(r => { const d = new Date(r.d.completedAt); return d.getHours() * 60 + d.getMinutes(); });
+      const avg = Math.round(mins.reduce((s, x) => s + x, 0) / mins.length);
+      const avgLabel = pad(Math.floor(avg / 60)) + ':' + pad(avg % 60);
+      const sortedByTime = [...timed].sort((a, b) => mins[timed.indexOf(a)] - mins[timed.indexOf(b)]);
+      const examples = records.slice(-8).map(r => `${r.a.date} ${voiceFormatHm(r.d.completedAt) || (r.d.status === 'completed' ? '（無時間紀錄）' : r.d.issueReason ? '異常：' + r.d.issueReason : '尚未送達')}`).join('、');
+      return `${dateStart}～${dateEnd}，${dpLabel(dp)}共${records.length}筆配送紀錄，其中${timed.length}筆已送達且有時間紀錄：最早${voiceFormatHm(sortedByTime[0].d.completedAt)}，最晚${voiceFormatHm(sortedByTime[sortedByTime.length - 1].d.completedAt)}，平均約${avgLabel}。明細：${examples}${records.length > 8 ? '…（只列最近幾筆，問更短的區間可以看到更完整）' : ''}。`;
+    }
+  }
+
+  const lines = records.slice(0, 15).map(({ a, d }) => {
+    const statusText = d.status === 'completed' ? (voiceFormatHm(d.completedAt) ? `${voiceFormatHm(d.completedAt)}送達` : '已送達') : d.issueReason ? `異常：${d.issueReason}` : '尚未送達';
+    const parts = [a.date, voiceShiftLabel(a.shift), routeName(a.routeId)];
+    if (isAdmin) parts.push(driverName(a.driverId));
+    const storeLabel = dpLabel({ code: d.code, address: d.address });
+    if (storeLabel) parts.push(storeLabel);
+    return parts.join('・') + statusText;
+  });
+  return `${dateStart}～${dateEnd}，${scopeLabel}，共${records.length}筆：` + lines.join('；') + (records.length > 15 ? `…（共${records.length}筆，只列前15筆，問更短的區間可以看到更完整）` : '') + '。';
+}
 
 // 2026-10-29使用者要求：說出想查的夥伴/店點/路線，小金要能直接把畫面切過去，
 // 不是只用唸的。這是純畫面導覽（不寫資料庫、不改任何東西），所以不用像
@@ -117,29 +216,46 @@ const VOICE_FN_BROWSE_INFO_ADMIN = {
 // 不要另外發明一套導覽邏輯。姓名/名稱比對沿用「完全相符才直接動作、模糊相符
 // 要先確認」的同一套安全原則（跟查薪水那次事故修法一致）——切錯畫面雖然不會
 // 造成資料損失，但一樣是「講得很篤定其實搞錯對象」的同一種失誤，不要輕視。
-function voiceFindSingleRoute(rawQuery) {
+// 2026-11-02使用者要求「舉一反三」：原本店點/路線只有「完全相符」「子字串互相
+// 包含」兩層，講「太原一」查「7-11太原醫門市」這種非子字串、但明顯是同一間店的
+// 口語講法完全抓不到，只能回「查不到」。夥伴姓名那邊（voiceFindDriverByName）
+// 本來就多一層「字元重疊」粗略比對撈出候選名單，抽成共用函式，統一套用到路線/
+// 店點/通路——注意「抓到候選」永遠只是列出來讓Gemini自己選或反問確認，不會因為
+// 模糊比對就直接當成找到了，跟完全相符時「直接用」是兩種不同等級的確定性。
+function voiceFuzzyFind(list, rawQuery, labelFn, opts) {
+  opts = opts || {};
   const raw = (rawQuery || '').trim();
-  if (!raw) return { error: '沒有聽清楚要找哪條路線，請再說一次。' };
-  const routes = (state.data.routes || []).filter(r => r.status !== 'inactive');
-  const exact = routes.filter(r => routeDisplayName(r.name) === raw || r.name === raw);
+  if (!raw) return { error: opts.emptyMsg || '沒有聽清楚要找什麼，請再說一次。' };
+  const exact = list.filter(x => labelFn(x) === raw);
   if (exact.length === 1) return { entity: exact[0] };
-  if (exact.length > 1) return { error: `有${exact.length}條路線都叫「${raw}」，請提供更多資訊確認是哪一條。` };
-  const fuzzy = routes.filter(r => { const n = routeDisplayName(r.name); return n.includes(raw) || raw.includes(n); });
-  if (fuzzy.length === 1) return { error: `沒有完全符合「${raw}」的路線，最接近的是「${routeDisplayName(fuzzy[0].name)}」，要切到這條的話請講出完整正確的名稱確認一次。` };
-  if (fuzzy.length > 1) return { error: `有${fuzzy.length}條路線名稱接近「${raw}」（${fuzzy.map(r => routeDisplayName(r.name)).join('、')}），請講出完整正確的名稱。` };
-  return { error: `查不到名稱包含「${raw}」的路線。` };
+  if (exact.length > 1) return { error: `有${exact.length}筆都叫「${raw}」，請提供更多資訊確認是哪一個。` };
+  const sub = list.filter(x => { const n = labelFn(x) || ''; return (n && (n.includes(raw) || raw.includes(n))); });
+  if (sub.length === 1) return { error: `沒有完全符合「${raw}」的，最接近的是「${labelFn(sub[0])}」，要用這個的話請講出完整正確的名稱確認一次。` };
+  if (sub.length > 1) return { error: `有${sub.length}筆名稱接近「${raw}」（${sub.slice(0, 8).map(labelFn).join('、')}），請講出更完整的名稱。` };
+  // 最後一層：字元重疊（不要求連續、不要求子字串），抓「太原一」vs「太原醫門市」
+  // 這種講法上有落差但明顯相關的候選，交給Gemini自己從候選清單判斷最可能是哪個，
+  // 或反問使用者確認——這裡只負責篩出一份不會太長的候選名單，不負責下最終判斷。
+  const candidates = list.map(x => {
+    const n = labelFn(x) || ''; let shared = 0;
+    for (const ch of raw) if (n.includes(ch)) shared++;
+    return { x, shared };
+  }).filter(r => r.shared >= Math.min(2, raw.length)).sort((a, b) => b.shared - a.shared).slice(0, 8).map(r => r.x);
+  if (candidates.length) return { error: `查不到「${raw}」，你是不是要找：${candidates.map(labelFn).join('、')}？請講出完整正確的名稱，或換個講法再試一次。` };
+  return { error: opts.notFoundMsg ? opts.notFoundMsg(raw) : `查不到「${raw}」。` };
+}
+function voiceFindSingleRoute(rawQuery) {
+  const routes = (state.data.routes || []).filter(r => r.status !== 'inactive');
+  return voiceFuzzyFind(routes, rawQuery, r => routeDisplayName(r.name), { emptyMsg: '沒有聽清楚要找哪條路線，請再說一次。', notFoundMsg: q => `查不到名稱接近「${q}」的路線。` });
 }
 function voiceFindSingleDropPoint(rawQuery) {
-  const raw = (rawQuery || '').trim();
-  if (!raw) return { error: '沒有聽清楚要找哪個店點，請再說一次。' };
   const points = state.data.dropPoints || [];
-  const exact = points.filter(p => (p.code || '') === raw || (p.address || '') === raw);
-  if (exact.length === 1) return { entity: exact[0] };
-  if (exact.length > 1) return { error: `有${exact.length}個店點都叫「${raw}」，請提供更多資訊確認是哪一個。` };
-  const fuzzy = points.filter(p => (p.code || '').includes(raw) || (p.address || '').includes(raw));
-  if (fuzzy.length === 1) return { error: `沒有完全符合「${raw}」的店點，最接近的是「${dpLabel(fuzzy[0])}」，要切到這個的話請講出完整正確的名稱確認一次。` };
-  if (fuzzy.length > 1) return { error: `有${fuzzy.length}個店點名稱接近「${raw}」（${fuzzy.slice(0, 8).map(p => dpLabel(p)).join('、')}），請講出更完整的名稱。` };
-  return { error: `查不到代號或地址包含「${raw}」的店點。` };
+  return voiceFuzzyFind(points, rawQuery, p => dpLabel(p), { emptyMsg: '沒有聽清楚要找哪個店點，請再說一次。', notFoundMsg: q => `查不到名稱接近「${q}」的店點。` });
+}
+function voiceFindSingleChannel(rawQuery) {
+  // 不先篩掉已停用的通路——channel_info這類查詳情的用途本來就包含「這個通路是不是
+  // 已經停用了」，跟goto_screen/query_trips那種只找「現在還在用的」目的不一樣。
+  const channels = state.data.channels || [];
+  return voiceFuzzyFind(channels, rawQuery, c => c.name, { emptyMsg: '沒有聽清楚要找哪個通路，請再說一次。', notFoundMsg: q => `查不到名稱接近「${q}」的通路。` });
 }
 
 const VOICE_FN_GOTO_SCREEN_ADMIN = {
@@ -319,10 +435,9 @@ function voiceFindDropPoint(keyword) {
 function voiceFindChannel(keyword, admin) {
   const channels = state.data.channels || [];
   if (!keyword) return `系統裡共有${channels.filter(c => c.status !== 'inactive').length}個使用中的通路：` + channels.filter(c => c.status !== 'inactive').map(c => c.name).join('、') + '。';
-  const matches = channels.filter(c => (c.name || '').includes(keyword));
-  if (!matches.length) return `查不到名稱包含「${keyword}」的通路。`;
-  if (matches.length > 1) return `有${matches.length}個通路名稱包含「${keyword}」（${matches.map(c => c.name).join('、')}），請講更完整的名稱。`;
-  const c = matches[0];
+  const found = voiceFindSingleChannel(keyword);
+  if (found.error) return found.error;
+  const c = found.entity;
   let text = `${c.name}：${c.status === 'inactive' ? '已停用' : '使用中'}`;
   if (admin) {
     if (c.formulaType) text += `，計費方式${c.formulaType}`;
@@ -412,10 +527,9 @@ const VOICE_TOPICS_ADMIN = {
   channel_revenue: async args => {
     const keyword = (args && args.keyword) || '';
     if (!keyword) return '請講要查哪個通路的營收。';
-    const matches = (state.data.channels || []).filter(c => (c.name || '').includes(keyword));
-    if (!matches.length) return `查不到名稱包含「${keyword}」的通路。`;
-    if (matches.length > 1) return `有${matches.length}個通路名稱包含「${keyword}」，請講更完整的名稱。`;
-    const c = matches[0];
+    const found = voiceFindSingleChannel(keyword);
+    if (found.error) return found.error;
+    const c = found.entity;
     const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : todayStr().slice(0, 7);
     const start = month + '-01', end = monthEndStr(month);
     let assignments;
@@ -582,13 +696,18 @@ request填Ellis完整講的那句話，不要自己先猜小碳會怎麼回答�
   自己亂編topic名稱。查到
   銀行帳號的時候，數字要一個一個唸清楚（例如「0、2、1、0、1、8」），不要唸成
   一長串數字含糊帶過。
+- query_trips：上面幾個工具都沒涵蓋到的任務/配送紀錄查詢，用在臨時想問、沒有
+  固定題目的問題，例如「太原醫門市最近5天都幾點送達」「小安這幾天跑了哪些
+  任務」「這條路線這週有沒有異常」——可以自由組合日期區間＋店點/路線/夥伴
+  關鍵字＋狀態篩選，不用糾結該用哪個固定topic，直接呼叫這個就對了。
 這幾個工具以外（例如詳細勞報單/請款單明細、系統設定），你看不到，被問到就老實
 說看不到、建議Ellis自己到對應頁面查，不要瞎編；工具查詢失敗或查不到的時候，也
 照實說查詢失敗，不要自己編一個答案出來。
 
 ⚠️極重要（真實發生過的事故）：get_driver_lookup、browse_info的
-driver_bank_info這兩個工具，如果聽到的姓名在系統裡沒有完全一樣的，工具會
-回傳「最接近的是『OOO』，要查這位嗎」這種確認用的句子，不是正式查詢結果。
+driver_bank_info、query_trips這幾個工具，如果聽到的姓名/店名/路線名在系統裡
+沒有完全一樣的，工具會回傳「最接近的是『OOO』，要查這位/這個嗎」或「你是不是
+要找：A、B、C」這種確認用的句子，不是正式查詢結果。
 遇到這種回覆，你一定要把這句確認問題完整照唸給Ellis聽、等Ellis明確回答（例如
 「對」或講出完整正確的姓名）之後，才能再呼叫一次工具去真的查數字——絕對
 不能自己猜Ellis說的就是工具建議的那個人，直接把數字報出來。之前發生過真實
@@ -650,6 +769,10 @@ function voiceSystemInstructionDriver() {
   某個店點的需求，就呼叫這個，keyword填店名或代號——會直接幫忙開啟Google地圖
   導航，講完這句確認之後畫面很快就會跳走（這是正常的，不用特別解釋），不用再
   另外唸地址給使用者聽。
+- query_trips：上面幾個工具都沒涵蓋到、使用者臨時想問自己任務紀錄的問題，例如
+  「我這幾天去太原醫門市都幾點到」「這個月有沒有送貨異常」——可以自由組合
+  日期區間＋店點/路線關鍵字＋狀態篩選，不用糾結該用哪個固定topic。這個工具
+  只會查到使用者自己本人的紀錄，不是別人的。
 這幾個工具以外，你看不到系統裡其他資料（例如別的夥伴的狀況、確切的公司財務數字），
 被問到就老實說看不到、不要瞎編；工具查詢失敗或查不到的時候，也照實跟使用者說查詢
 失敗，不要自己編一個答案出來。
@@ -819,22 +942,12 @@ async function voiceToolGetFleetStatus(args) {
 function voiceFindDriverByName(rawQuery) {
   const raw = (rawQuery || '').trim();
   const q = raw.replace(/[的嗎呢吧啊喔]+$/g, '') || raw; // 去掉語音常見的結尾贅字，去完變空字串就還用原字
-  if (!q) return { error: '沒有聽清楚要查哪位夥伴，請再說一次姓名。' };
   const drivers = state.data.drivers || [];
-  const exact = drivers.filter(d => (d.name || '') === q);
-  if (exact.length === 1) return { driver: exact[0] };
-  if (exact.length > 1) return { error: `系統裡有${exact.length}位夥伴都叫「${q}」，請提供其他資訊（例如電話末三碼）才能確認是哪一位。` };
-  const fuzzy = drivers.filter(d => { const name = d.name || ''; return name.includes(q) || q.includes(name); });
-  if (fuzzy.length === 1) return { error: `沒有完全符合「${q}」的夥伴，最接近的是「${fuzzy[0].name}」，要查這位的話，請講「對，查${fuzzy[0].name}」確認一次，講完整正確的姓名我才會真的查。` };
-  if (fuzzy.length > 1) return { error: `有${fuzzy.length}位夥伴的名字接近「${q}」（${fuzzy.map(d => d.name).join('、')}），請講出完整正確的姓名。` };
-  const candidates = drivers.filter(d => {
-    const name = d.name || '';
-    let shared = 0;
-    for (const ch of q) if (name.includes(ch)) shared++;
-    return shared >= 2;
+  const found = voiceFuzzyFind(drivers, q, d => d.name || '', {
+    emptyMsg: '沒有聽清楚要查哪位夥伴，請再說一次姓名。',
+    notFoundMsg: name => `查不到叫「${name}」的夥伴，請確認姓名（語音辨識中文姓名有時候會聽錯字，可以試著講更完整或換個講法）。`
   });
-  if (candidates.length) return { error: `查不到「${q}」，你是不是要找：${candidates.slice(0, 5).map(d => d.name).join('、')}？請講出完整正確的姓名。` };
-  return { error: `查不到叫「${q}」的夥伴，請確認姓名（語音辨識中文姓名有時候會聽錯字，可以試著講更完整或換個講法）。` };
+  return found.entity ? { driver: found.entity } : found;
 }
 async function voiceToolGetDriverLookup(args) {
   const found = voiceFindDriverByName((args && args.driverName) || '');
@@ -1233,8 +1346,8 @@ async function voiceStart() {
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: voiceSystemInstruction(briefingText) }] },
           tools: [{ functionDeclarations: voiceIsAdminMode()
-            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN, VOICE_FN_ASK_CARBON]
-            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER, VOICE_FN_NAVIGATE_DRIVER] }]
+            ? [VOICE_FN_GET_FLEET_STATUS, VOICE_FN_GET_DRIVER_LOOKUP, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_ADMIN, VOICE_FN_QUERY_TRIPS_ADMIN, VOICE_FN_GOTO_SCREEN_ADMIN, VOICE_FN_ASK_CARBON]
+            : [VOICE_FN_REPORT_UNAVAILABLE, VOICE_FN_GET_MY_TASKS, VOICE_FN_GET_MY_EARNINGS, VOICE_FN_GET_WEATHER, VOICE_FN_BROWSE_INFO_DRIVER, VOICE_FN_QUERY_TRIPS_DRIVER, VOICE_FN_GOTO_SCREEN_DRIVER, VOICE_FN_NAVIGATE_DRIVER] }]
         }
       }));
     };
@@ -1260,6 +1373,7 @@ async function voiceStart() {
             else if (fc.name === 'get_fleet_status') resultText = await voiceToolGetFleetStatus(fc.args || {});
             else if (fc.name === 'get_driver_lookup') resultText = await voiceToolGetDriverLookup(fc.args || {});
             else if (fc.name === 'browse_info') resultText = await voiceToolBrowseInfo(fc.args || {});
+            else if (fc.name === 'query_trips') resultText = await voiceToolQueryTrips(fc.args || {}, voiceIsAdminMode());
             else if (fc.name === 'goto_screen') resultText = await (voiceIsAdminMode() ? voiceToolGotoScreenAdmin(fc.args || {}) : voiceToolGotoScreenDriver(fc.args || {}));
             else if (fc.name === 'ask_carbon') resultText = await voiceToolAskCarbon(fc.args || {});
             else if (fc.name === 'navigate_to_stop') resultText = await voiceToolNavigateDriver(fc.args || {});
