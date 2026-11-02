@@ -95,19 +95,20 @@ const VOICE_FN_GET_DRIVER_LOOKUP = {
 // 另外加了什麼過濾規則——這個系統從一開始的設計就不允許前端程式碼拿到這些東西。
 const VOICE_FN_BROWSE_INFO_DRIVER = {
   name: 'browse_info',
-  description: '查詢系統裡的其他資料（不是本人任務/報酬/請假，是路線、店點、通路、公告這類目錄資料）。topic固定用下面其中一個：announcements（公告）、my_leave_records（我登記過的請假）、route_info（查某條路線，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路，keyword填通路名稱）。',
+  description: '查詢系統裡的其他資料（不是本人任務/報酬，是路線、店點、通路、公告這類目錄資料，或自己的請假/勞報單/加油申報紀錄）。topic固定用下面其中一個：announcements（公告）、my_leave_records（我登記過的請假）、my_statements（我所有的勞報單，含狀態與實領金額）、my_fuel_claims（我的加油/保養申報紀錄，month選填）、route_info（查某條路線，keyword填路線名稱）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路，keyword填通路名稱）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'announcements, my_leave_records, route_info, drop_point_info, 或 channel_info' },
-    keyword: { type: 'STRING', description: '查詢關鍵字（路線/店點/通路名稱），依topic決定要不要填' }
+    topic: { type: 'STRING', description: 'announcements, my_leave_records, my_statements, my_fuel_claims, route_info, drop_point_info, 或 channel_info' },
+    keyword: { type: 'STRING', description: '查詢關鍵字（路線/店點/通路名稱），依topic決定要不要填' },
+    month: { type: 'STRING', description: 'YYYY-MM，my_fuel_claims可以用，選填' }
   }, required: ['topic'] }
 };
 const VOICE_FN_BROWSE_INFO_ADMIN = {
   name: 'browse_info',
-  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、store_driver（查某間店某一天是哪位夥伴配送的，例如「萬家福南港店今天下午是誰送的」，keyword填店名或代號，date選填）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（有哪些加油/保養申報還沒審核）、payment_summary（某個月全公司預支總額/已付款總額/還需要匯款的總額，例如「這個月匯款總額多少」「10月預支了多少」，month選填，沒講就用這個月）。',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、store_driver（查某間店某一天是哪位夥伴配送的，例如「萬家福南港店今天下午是誰送的」，keyword填店名或代號，date選填）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某期的正式請款金額，依通路自己的請款週期算，不是自然月估算，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（加油/保養申報查詢，不填keyword/month時預設只列待審核；填keyword查某位夥伴、填month查某個月，可以查到已確認/已駁回的）、payment_summary（某個月全公司預支總額/已付款總額/還需要匯款的總額，例如「這個月匯款總額多少」「10月預支了多少」，month選填，沒講就用這個月）、home_reminders（首頁待辦提醒摘要：有沒有異常任務、勞報單待簽、備份提醒、請款週期快到之類的，例如「有什麼要處理的」）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, store_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, pending_fuel_claims, 或 payment_summary' },
-    keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info/driver_profile的夥伴姓名），依topic決定要不要填' },
-    month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings/payment_summary可以用，沒講就用這個月' },
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, store_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, pending_fuel_claims, payment_summary, 或 home_reminders' },
+    keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info/driver_profile/pending_fuel_claims的夥伴姓名），依topic決定要不要填' },
+    month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings/payment_summary/pending_fuel_claims可以用，沒講就用這個月（pending_fuel_claims不填則不限月份，只看待審核）' },
     minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' },
     date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/store_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
   }, required: ['topic'] }
@@ -469,7 +470,32 @@ const VOICE_TOPICS_DRIVER = {
   },
   route_info: async args => voiceFindRoute((args && args.keyword) || '', false),
   drop_point_info: async args => voiceFindDropPoint((args && args.keyword) || ''),
-  channel_info: async args => voiceFindChannel((args && args.keyword) || '', false)
+  channel_info: async args => voiceFindChannel((args && args.keyword) || '', false),
+  // 2026-11-02使用者要求補上「對帳單/勞報單」畫面的內容：自己所有的勞報單（月結＋
+  // 區間），不是只有get_my_earnings那個「這個月預估淨額」的即時參考數字。
+  my_statements: async () => {
+    const dId = state.activeDriverId;
+    const list = (state.data.statements || []).filter(s => s.driverId === dId)
+      .sort((a, b) => (b.periodEnd || b.month + '-28').localeCompare(a.periodEnd || a.month + '-28'));
+    if (!list.length) return '目前還沒有任何已開立的勞報單。';
+    const statusLabel = { awaiting_signature: '待簽名', signed: '已簽（未鎖定）', confirmed: '已鎖定' };
+    const shown = list.slice(0, 8);
+    const text = shown.map(s => `${statementLabel(s)}，實領${voiceMoney(s.actualNet)}，${statusLabel[s.status] || s.status}`).join('；');
+    return `共${list.length}張勞報單：` + text + (list.length > shown.length ? `，還有${list.length - shown.length}張沒列出` : '') + '。';
+  },
+  // 2026-11-02使用者要求補上自己加油/保養申報的查詢，之前只能在畫面上看。
+  my_fuel_claims: async args => {
+    const dId = state.activeDriverId;
+    try { await refreshFuelClaims(); } catch (e) { return '查詢加油/保養申報時發生錯誤，請稍後再試。'; }
+    let list = (state.data.fuelClaims || []).filter(c => c.driverId === dId);
+    if (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) list = list.filter(c => (c.date || '').slice(0, 7) === args.month);
+    if (!list.length) return '查不到符合條件的加油/保養申報紀錄。';
+    const total = list.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    const statusLabel = { pending: '待審核', confirmed: '已確認', rejected: '已駁回' };
+    const shown = list.slice(0, 10);
+    const text = shown.map(c => `${CLAIM_CATEGORY_LABEL[c.category] || c.category} ${voiceMoney(c.amount)}（${c.date}・${statusLabel[c.status] || c.status}）`).join('、');
+    return `共${list.length}筆，合計${voiceMoney(total)}：` + text + (list.length > shown.length ? `，還有${list.length - shown.length}筆沒列出` : '') + '。';
+  }
 };
 const VOICE_TOPICS_ADMIN = {
   company_overview: async () => {
@@ -527,6 +553,10 @@ const VOICE_TOPICS_ADMIN = {
   },
   drop_point_info: async args => voiceFindDropPoint((args && args.keyword) || ''),
   channel_info: async args => voiceFindChannel((args && args.keyword) || '', true),
+  // 2026-11-02使用者要求補「請款結算」明細：原本這裡只用自然月粗估（跟「請款結算」
+  // 頁面自己的週期可能有落差，首頁即時利潤那個估算數字footnote也特別註明這點）。
+  // 改用跟「請款結算」頁面完全同一套computeChannelBillingReport()＋通路自己的週期
+  // （defaultPeriod()，例如7-11是每月27日到次月26日，不是自然月），算出來的是正式數字。
   channel_revenue: async args => {
     const keyword = (args && args.keyword) || '';
     if (!keyword) return '請講要查哪個通路的營收。';
@@ -534,11 +564,13 @@ const VOICE_TOPICS_ADMIN = {
     if (found.error) return found.error;
     const c = found.entity;
     const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : todayStr().slice(0, 7);
-    const start = month + '-01', end = monthEndStr(month);
+    const period = defaultPeriod(c, month);
     let assignments;
-    try { assignments = await fetchAssignmentsInRange(start, end); } catch (e) { return '查詢營收時發生錯誤，請稍後再試。'; }
-    const r = channelBillingTotal(c.id, start, end, assignments);
-    return `${c.name} ${month}營收合計約${voiceMoney(r.total)}（${r.contributing.length}趟已完成任務）。`;
+    try { assignments = await fetchAssignmentsInRange(period.start, period.end); } catch (e) { return '查詢營收時發生錯誤，請稍後再試。'; }
+    const report = computeChannelBillingReport(c.id, period.start, period.end, assignments);
+    if (!report) return `查不到「${c.name}」的請款資料。`;
+    const adjNote = report.adjTotal ? `，含例外調整${report.adjTotal >= 0 ? '+' : ''}${voiceMoney(report.adjTotal)}` : '';
+    return `${c.name} ${period.start}～${period.end}這期請款：未稅${voiceMoney(report.grand.untaxed)}，含稅${voiceMoney(report.grand.withTax)}${adjNote}。這是依通路自己的請款週期算出來的正式數字，跟「請款結算」頁面一致。`;
   },
   announcements: async () => {
     const list = (state.data.announcements || []).filter(a => a.active).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -610,14 +642,23 @@ const VOICE_TOPICS_ADMIN = {
     if (!list.length) return '目前沒有尚未簽名的勞報單。';
     return `目前有${list.length}張勞報單還沒簽名：` + list.map(s => `${driverName(s.driverId)}（${s.month}）`).join('、') + '。';
   },
-  pending_fuel_claims: async () => {
+  // 2026-11-02使用者要求補細節：原本只能查「待審核」，問「小安這個月加油申報多少」
+  // 這種查不到。加上driverKeyword/month/statusFilter都選填，沒填就維持原本「列出
+  // 全部待審核」的行為（向下相容），填了才篩範圍更小更明確的結果。
+  pending_fuel_claims: async args => {
     try { await refreshFuelClaims(); } catch (e) { return '查詢加油/保養申報時發生錯誤，請稍後再試。'; }
-    const list = (state.data.fuelClaims || []).filter(c => c.status === 'pending');
-    if (!list.length) return '目前沒有待審核的加油/保養申報。';
+    let list = state.data.fuelClaims || [];
+    let driver = null;
+    if (args && args.keyword) { const f = voiceFindDriverByName(args.keyword); if (f.error) return f.error; driver = f.driver; list = list.filter(c => c.driverId === driver.id); }
+    if (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) list = list.filter(c => (c.date || '').slice(0, 7) === args.month);
+    const statusFilter = (args && args.statusFilter) || (driver || (args && args.month) ? null : 'pending'); // 沒指定夥伴/月份時，維持原本只看待審核的預設行為
+    if (statusFilter) list = list.filter(c => c.status === statusFilter);
+    if (!list.length) return '查不到符合條件的加油/保養申報。';
     const total = list.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    const statusLabel = { pending: '待審核', confirmed: '已確認', rejected: '已駁回' };
     const shown = list.slice(0, 10);
-    const text = shown.map(c => `${driverName(c.driverId)} ${CLAIM_CATEGORY_LABEL[c.category] || c.category} ${voiceMoney(c.amount)}（${c.date}）`).join('、');
-    return `目前有${list.length}筆待審核的加油/保養申報，合計${voiceMoney(total)}：` + text + (list.length > shown.length ? `，還有${list.length - shown.length}筆沒列出` : '') + '。';
+    const text = shown.map(c => `${driverName(c.driverId)} ${CLAIM_CATEGORY_LABEL[c.category] || c.category} ${voiceMoney(c.amount)}（${c.date}・${statusLabel[c.status] || c.status}）`).join('、');
+    return `共${list.length}筆加油/保養申報，合計${voiceMoney(total)}：` + text + (list.length > shown.length ? `，還有${list.length - shown.length}筆沒列出` : '') + '。';
   },
   // 2026-11-02使用者要求補上財務類查詢：預支/已付款/需匯款總額，跟「夥伴匯款清單」
   // 頁面上那兩張卡片＋主表合計是同一套算法（computeDriverPayable/computeCarryInMap/
@@ -645,6 +686,50 @@ const VOICE_TOPICS_ADMIN = {
       if (Math.round(payable) > 0) { wireTotal += payable; wireCount++; }
     });
     return `${month}付款摘要：預支總額${voiceMoney(advanceTotal)}（${advanceCount}位），已付款總額${voiceMoney(paidTotal)}（${paidCount}位），這個月還需要匯款的總額約${voiceMoney(wireTotal)}（${wireCount}位）。詳細名單請到「夥伴匯款清單」頁面看。`;
+  },
+  // 2026-11-02使用者要求補上首頁「⏰待辦提醒」那個區塊：跟renderHomeAdmin()同一套
+  // 判斷邏輯/同一批函式（computeCoverage/getDeferredCached/unsettledRows...），只是
+  // 把HTML換成一句話的摘要。項目多的時候只講「有幾項」＋最前面幾個例子，不會把
+  // 畫面上那一長串全部逐字唸完。
+  home_reminders: async () => {
+    const today = todayStr();
+    const parts = [];
+    const emptyTrips = state.data.assignments.filter(a => a.date >= today && a.status !== 'cancelled' && !a.isSupport && !(a.dropPoints || []).length);
+    if (emptyTrips.length) parts.push(`${emptyTrips.length}趟任務沒有店點`);
+    let covBad = 0;
+    try { const cov = computeCoverage(today); covBad = cov.missing.length + cov.dups.length + cov.inactiveIn.length + cov.imprecise.length; } catch (e) {}
+    if (covBad) parts.push(`店點涵蓋檢查有${covBad}項問題`);
+    const unsignedStmts = state.data.statements.filter(x => x.status === 'awaiting_signature');
+    if (unsignedStmts.length) parts.push(`${unsignedStmts.length}份勞報單還沒回簽`);
+    const stuckTasks = state.data.assignments.filter(a => a.status === 'in_progress' && a.date < today && a.published !== false);
+    if (stuckTasks.length) parts.push(`${stuckTasks.length}個任務卡在執行中沒按完成`);
+    const draftWeekCount = state.data.assignments.filter(a => a.published === false && a.date >= getWeekDates(0)[0]).length;
+    if (draftWeekCount) parts.push(`${draftWeekCount}趟任務還沒發佈`);
+    let deferredDue = [];
+    try { deferredDue = (await getDeferredCached()).filter(g => deferredStatus(g.due) !== 'later'); } catch (e) {}
+    if (deferredDue.length) parts.push(`${deferredDue.length}筆待付款到期或快到期`);
+    let unsettledCount = 0;
+    const prevMonthStr = settleReminderMonth();
+    if (prevMonthStr) {
+      try { await ensureSettleSkips(); const lite = await getSettleTrips(prevMonthStr); unsettledCount = unsettledRows(prevMonthStr, lite).length; } catch (e) {}
+    }
+    if (unsettledCount) parts.push(`${prevMonthStr}還有${unsettledCount}位夥伴沒月結確認`);
+    let pendingFuelCount = 0;
+    try { await refreshFuelClaims(); pendingFuelCount = (state.data.fuelClaims || []).filter(f => f.status === 'pending').length; } catch (e) {}
+    if (pendingFuelCount) parts.push(`${pendingFuelCount}筆加油/保養申報待審核`);
+    const lastBackupAt = state.data.settings && state.data.settings.lastBackupAt;
+    const daysSinceBackup = lastBackupAt ? Math.floor((Date.now() - new Date(lastBackupAt).getTime()) / 86400000) : null;
+    if (daysSinceBackup === null || daysSinceBackup >= 7) parts.push(lastBackupAt ? `已經${daysSinceBackup}天沒備份` : '系統上線以來還沒備份過');
+    const periodReminders = state.data.channels.filter(ch => ch.status !== 'inactive').map(ch => {
+      const end = currentChannelPeriodEnd(ch, today);
+      if (!end) return null;
+      const daysLeft = Math.round((new Date(end) - new Date(today)) / 86400000);
+      if (daysLeft > 3 || daysLeft < -1) return null;
+      return `${ch.name}（${daysLeft < 0 ? '已結束' : daysLeft === 0 ? '今天結束' : daysLeft + '天後結束'}）`;
+    }).filter(Boolean);
+    if (periodReminders.length) parts.push(`${periodReminders.join('、')}請款週期快到了`);
+    if (!parts.length) return '目前沒有待辦提醒，一切正常。';
+    return `目前有${parts.length}項待辦提醒：` + parts.join('；') + '。詳細內容請到首頁看。';
   }
 };
 async function voiceToolBrowseInfo(args) {
