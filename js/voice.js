@@ -760,8 +760,11 @@ async function voiceToolGetMyEarnings(args) {
     await ensureAdjustmentsRange(start); // 調整項（加減項）也要補到這個月，不然net會漏算
   } catch (e) { return '查詢報酬時發生錯誤，請稍後再試。'; }
   const r = driverMonthly(dId, month, monthAssignments);
-  const netNow = r.net - (r.paid || 0);
-  return `${month}已完成${r.trips.length}趟任務，報酬合計${voiceMoney(r.tripTotal)}，目前預估淨額約${voiceMoney(netNow)}（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
+  let carryIn = 0;
+  try { carryIn = (await computeCarryInMap(month, [dId])).get(dId) || 0; } catch (e) {}
+  const netNow = r.net - (r.paid || 0) + carryIn;
+  const carryNote = carryIn ? `（其中承接前期超支餘額${voiceMoney(Math.abs(carryIn))}已經先扣掉）` : '';
+  return `${month}已完成${r.trips.length}趟任務，報酬合計${voiceMoney(r.tripTotal)}，目前預估淨額約${voiceMoney(netNow)}${carryNote}（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
 }
 async function voiceToolGetWeather(args) {
   try {

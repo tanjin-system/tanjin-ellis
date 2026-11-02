@@ -1100,8 +1100,13 @@ async function renderMyEarnings(c){
     let defTrips = [];
     try{ defTrips = await fetchDeferredTrips(dId); }catch(e){}
     const defSplit = deferredSplit(defTrips, m+'-01', monthEndStr(m));
+    // 承接前幾個月還沒扣完的超支餘額（預支/區間勞報單先付超過當月賺的部分），不會自動消失，
+    // 要繼續從這裡扣——見 index.html 的 computeCarryInMap() 旁的說明。
+    let carryIn = 0;
+    try{ carryIn = (await computeCarryInMap(m, [dId])).get(dId) || 0; }catch(e){}
+    if(state.tab!=='my-earnings' || (state._myEarningsMonth||monthStr)!==m) return; // 使用者可能已經切走這一頁或換了月份
     const isCurrent = m===todayStr().slice(0,7);
-    const netNow = r.net-(r.paid||0);
+    const netNow = r.net-(r.paid||0)+carryIn;
     const byDay = new Map(); r.trips.forEach(a=>byDay.set(a.date,(byDay.get(a.date)||0)+tripPay(a)));
     const dim = Number(monthEndStr(m).slice(8));
     const dayVals = Array.from({length:dim}, (_,i)=>[i+1, byDay.get(m+'-'+String(i+1).padStart(2,'0'))||0]);
@@ -1131,10 +1136,11 @@ async function renderMyEarnings(c){
           <tr><td>${m}調整項</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
           ${r.reimbursement ? `<tr><td>　其中含代墊款（憑證開公司）</td><td class="amount">$${money(r.reimbursement)}</td></tr>` : ''}
           ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
-          <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(r.net-(r.paid||0))}</strong></td></tr>
+          ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
+          <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(netNow)}</strong></td></tr>
           ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
           ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待領（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
-          <tr><td><strong>應領合計（含掛帳）</strong></td><td class="amount"><strong>$${money(r.net-(r.paid||0)+defSplit.other.total)}</strong></td></tr>` : ''}
+          <tr><td><strong>應領合計（含掛帳）</strong></td><td class="amount"><strong>$${money(netNow+defSplit.other.total)}</strong></td></tr>` : ''}
         </table>
         ${(()=>{
           const groups = new Map();
