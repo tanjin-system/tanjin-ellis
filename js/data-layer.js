@@ -2133,6 +2133,7 @@ async function createAdjustment(input) {
   if (error) throw new Error('新增調整項失敗：' + error.message);
   const adj = mapAdjustment(data);
   state.data.adjustments.push(adj);
+  state._carryInCache = null;
   return adj;
 }
 
@@ -2153,6 +2154,7 @@ async function deleteAdjustment(adjustmentId) {
   const { error } = await supabase.from('adjustments').delete().eq('id', adjustmentId);
   if (error) throw new Error('刪除調整項失敗：' + error.message);
   state.data.adjustments = state.data.adjustments.filter(a => a.id !== adjustmentId);
+  state._carryInCache = null;
 }
 
 async function bulkDeleteAdjustments(ids) {
@@ -2162,6 +2164,7 @@ async function bulkDeleteAdjustments(ids) {
   if (error) throw new Error('刪除資料失敗：' + error.message);
   const idSet = new Set(ids);
   state.data.adjustments = state.data.adjustments.filter(a => !idSet.has(a.id));
+  state._carryInCache = null;
 }
 
 // ---------------- 趟報酬：額外金額（臨時加錢／拆店調撥）與已付款 ----------------
@@ -2330,6 +2333,7 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
     if (a) Object.assign(a, { paidAmount: p.part, paidDate: payDate, paidMethod: method, paidGroup: group, paidPeriodStart: start, paidPeriodEnd: end });
   });
   state._pendingPayCache = null;
+  state._carryInCache = null;
   return { count: list.length, total: paying, skipped: trips.filter(t => t.status === 'completed').length - list.length };
 }
 
@@ -2344,6 +2348,7 @@ async function cancelPaymentGroup(groupId) {
     if (a.paidGroup === groupId) Object.assign(a, { paidAmount: 0, paidDate: null, paidMethod: null, paidGroup: null, paidPeriodStart: null, paidPeriodEnd: null });
   });
   state._pendingPayCache = null;
+  state._carryInCache = null;
 }
 
 // ---------------- 延後付款（掛帳）與待付款清單 ----------------
@@ -2608,6 +2613,7 @@ async function confirmMonthlyStatement(driverId, month, live) {
   if (error) throw new Error('月結確認失敗：' + error.message);
   const st = mapStatement(data);
   state.data.statements.push(st);
+  state._carryInCache = null;
   return st;
 }
 
@@ -2665,6 +2671,7 @@ async function confirmPeriodStatement(driverId, start, end, payDate, live, payMe
   if (error) throw new Error('區間勞報單建立失敗：' + error.message);
   const st = mapStatement(data);
   state.data.statements.push(st);
+  state._carryInCache = null;
   return st;
 }
 
@@ -2718,6 +2725,7 @@ async function revokeStatements(ids) {
   if (error) throw new Error('收回月結失敗：' + error.message);
   const idSet = new Set(ids);
   state.data.statements = state.data.statements.filter(x => !idSet.has(x.id));
+  state._carryInCache = null;
 }
 
 // 夥伴首頁「同任務起點今日出發狀況」：呼叫 schema.sql 裡的
