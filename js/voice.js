@@ -74,8 +74,11 @@ const VOICE_FN_GET_FLEET_STATUS = {
 };
 const VOICE_FN_GET_DRIVER_LOOKUP = {
   name: 'get_driver_lookup',
-  description: '查詢某一位夥伴的狀況：今天跑哪些任務、這個月跑幾趟、報酬大約多少。driverName填聽到的姓名，可以只有部分（例如「小沈」）。',
-  parameters: { type: 'OBJECT', properties: { driverName: { type: 'STRING', description: '夥伴姓名或部分姓名' } }, required: ['driverName'] }
+  description: '查詢某一位夥伴的狀況：今天跑哪些任務、某個月跑幾趟、報酬大約多少、有沒有預支/已付款、還欠公司多少或還可以領多少。driverName填聽到的姓名，可以只有部分（例如「小沈」）。',
+  parameters: { type: 'OBJECT', properties: {
+    driverName: { type: 'STRING', description: '夥伴姓名或部分姓名' },
+    month: { type: 'STRING', description: 'YYYY-MM格式，選填，沒講就查這個月' }
+  }, required: ['driverName'] }
 };
 // 2026-10-29使用者要求：不要只開放幾個事先想好的問題，應該要能瀏覽系統裡「這個
 // 帳號看得到的」幾乎任何目錄/營運資料（路線、店點、通路、公告...），依帳號不同
@@ -100,11 +103,11 @@ const VOICE_FN_BROWSE_INFO_DRIVER = {
 };
 const VOICE_FN_BROWSE_INFO_ADMIN = {
   name: 'browse_info',
-  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、store_driver（查某間店某一天是哪位夥伴配送的，例如「萬家福南港店今天下午是誰送的」，keyword填店名或代號，date選填）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（有哪些加油/保養申報還沒審核）。',
+  description: '查詢系統裡的目錄/營運資料。topic固定用下面其中一個：company_overview（公司整體概況：幾位夥伴、幾條路線等）、routes_list（列出路線，keyword可選填出發點名稱縮小範圍）、route_info（查某條路線詳細資料含金額，keyword填路線名稱）、route_driver（查某條路線某一天是哪位夥伴在跑，例如「明天陳泰成R5早上是誰在跑」，keyword填路線名稱，date選填YYYY-MM-DD，沒填查今天）、store_driver（查某間店某一天是哪位夥伴配送的，例如「萬家福南港店今天下午是誰送的」，keyword填店名或代號，date選填）、drop_point_info（查某個店點，keyword填店名或代號）、channel_info（查某個通路含費率，keyword填通路名稱）、channel_revenue（查某個通路某個月的營收，keyword填通路名稱，month選填YYYY-MM）、announcements（目前上架中的公告）、drivers_by_earnings（找出某個月報酬合計達到某個金額以上的夥伴，例如「有哪些人報酬超過20000」，minAmount填那個金額，month選填）、driver_bank_info（查某位夥伴的匯款銀行資訊，要匯款時用，keyword填夥伴姓名）、driver_profile（查某位夥伴的基本資料：電話、車輛、在職狀態，keyword填姓名）、undelivered_stops（查某一天還沒送完的店點，date選填YYYY-MM-DD，沒填查今天）、unsigned_statements（有哪些勞報單還沒簽名）、pending_fuel_claims（有哪些加油/保養申報還沒審核）、payment_summary（某個月全公司預支總額/已付款總額/還需要匯款的總額，例如「這個月匯款總額多少」「10月預支了多少」，month選填，沒講就用這個月）。',
   parameters: { type: 'OBJECT', properties: {
-    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, store_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, 或 pending_fuel_claims' },
+    topic: { type: 'STRING', description: 'company_overview, routes_list, route_info, route_driver, store_driver, drop_point_info, channel_info, channel_revenue, announcements, drivers_by_earnings, driver_bank_info, driver_profile, undelivered_stops, unsigned_statements, pending_fuel_claims, 或 payment_summary' },
     keyword: { type: 'STRING', description: '查詢關鍵字（店點/通路/路線名稱，或driver_bank_info/driver_profile的夥伴姓名），依topic決定要不要填' },
-    month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings可以用，沒講就用這個月' },
+    month: { type: 'STRING', description: 'YYYY-MM，channel_revenue/drivers_by_earnings/payment_summary可以用，沒講就用這個月' },
     minAmount: { type: 'NUMBER', description: '金額門檻，只有drivers_by_earnings需要，例如20000' },
     date: { type: 'STRING', description: 'YYYY-MM-DD，route_driver/store_driver/undelivered_stops會用，沒填就查今天；問「明天」「下週三」這種要先換算成確切日期再填' }
   }, required: ['topic'] }
@@ -615,6 +618,33 @@ const VOICE_TOPICS_ADMIN = {
     const shown = list.slice(0, 10);
     const text = shown.map(c => `${driverName(c.driverId)} ${CLAIM_CATEGORY_LABEL[c.category] || c.category} ${voiceMoney(c.amount)}（${c.date}）`).join('、');
     return `目前有${list.length}筆待審核的加油/保養申報，合計${voiceMoney(total)}：` + text + (list.length > shown.length ? `，還有${list.length - shown.length}筆沒列出` : '') + '。';
+  },
+  // 2026-11-02使用者要求補上財務類查詢：預支/已付款/需匯款總額，跟「夥伴匯款清單」
+  // 頁面上那兩張卡片＋主表合計是同一套算法（computeDriverPayable/computeCarryInMap/
+  // deferredSplit），不是另外寫一份近似值。只給全公司彙總數字，不逐一念出每位夥伴
+  // 金額（人數多的話念出來反而沒意義），真的要看名單請到畫面上看。
+  payment_summary: async args => {
+    const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : todayStr().slice(0, 7);
+    const monthStart = month + '-01', monthEnd = monthEndStr(month);
+    let monthAssignments, allDeferred;
+    try {
+      monthAssignments = await fetchAssignmentsInRange(monthStart, monthEnd);
+      await ensureAdjustmentsRange(monthStart);
+      allDeferred = await fetchDeferredTrips();
+    } catch (e) { return '查詢付款摘要時發生錯誤，請稍後再試。'; }
+    const drivers = (state.data.drivers || []).filter(d => d.status === 'active');
+    const carryMap = await computeCarryInMap(month, drivers.map(d => d.id));
+    let advanceTotal = 0, paidTotal = 0, wireTotal = 0, advanceCount = 0, paidCount = 0, wireCount = 0;
+    drivers.forEach(d => {
+      const base = computeDriverPayable(d.id, month, monthAssignments);
+      const carryIn = carryMap.get(d.id) || 0;
+      const defSplit = deferredSplit(allDeferred.filter(t => t.driverId === d.id), monthStart, monthEnd);
+      const payable = base.payable + carryIn - defSplit.inRange.total + defSplit.other.total;
+      if (base.advanceTotal > 0) { advanceTotal += base.advanceTotal; advanceCount++; }
+      if (base.paidTotal > 0) { paidTotal += base.paidTotal; paidCount++; }
+      if (Math.round(payable) > 0) { wireTotal += payable; wireCount++; }
+    });
+    return `${month}付款摘要：預支總額${voiceMoney(advanceTotal)}（${advanceCount}位），已付款總額${voiceMoney(paidTotal)}（${paidCount}位），這個月還需要匯款的總額約${voiceMoney(wireTotal)}（${wireCount}位）。詳細名單請到「夥伴匯款清單」頁面看。`;
   }
 };
 async function voiceToolBrowseInfo(args) {
@@ -886,8 +916,14 @@ async function voiceToolGetMyEarnings(args) {
   let carryIn = 0;
   try { carryIn = (await computeCarryInMap(month, [dId])).get(dId) || 0; } catch (e) {}
   const netNow = r.net - (r.paid || 0) + carryIn;
-  const carryNote = carryIn ? `（其中承接前期超支餘額${voiceMoney(Math.abs(carryIn))}已經先扣掉）` : '';
-  return `${month}已完成${r.trips.length}趟任務，報酬合計${voiceMoney(r.tripTotal)}，目前預估淨額約${voiceMoney(netNow)}${carryNote}（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
+  // 2026-11-02使用者要求：不要只給一個籠統的「淨額」，要能明確問出「我被預支/已付款
+  // 多少」——跟報酬結算畫面上看到的是同一批調整項資料，只是這裡額外拆出來講。
+  const advanceTotal = r.adjustments.filter(a => a.type === 'advance').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
+  let detail = '';
+  if (advanceTotal) detail += `，已預支${voiceMoney(advanceTotal)}`;
+  if (r.paid) detail += `，已付款（已標記）${voiceMoney(r.paid)}`;
+  if (carryIn) detail += `，承接前期超支餘額${voiceMoney(Math.abs(carryIn))}已經先扣掉`;
+  return `${month}已完成${r.trips.length}趟任務，報酬合計${voiceMoney(r.tripTotal)}${detail}，目前預估淨額約${voiceMoney(netNow)}（實際領到的金額以月結單正式結算、扣稅扣款後為準，可能會有些微差異）。`;
 }
 async function voiceToolGetWeather(args) {
   try {
@@ -953,7 +989,8 @@ async function voiceToolGetDriverLookup(args) {
   const found = voiceFindDriverByName((args && args.driverName) || '');
   if (found.error) return found.error;
   const d = found.driver;
-  const today = todayStr(), month = today.slice(0, 7);
+  const today = todayStr();
+  const month = (args && args.month && /^\d{4}-\d{2}$/.test(args.month)) ? args.month : today.slice(0, 7);
   let todays, monthAssignments;
   try {
     todays = await fetchAssignmentsInRange(today, today);
@@ -963,7 +1000,18 @@ async function voiceToolGetDriverLookup(args) {
   const myToday = todays.filter(a => a.driverId === d.id && !a.isSupport && a.published !== false && a.status !== 'cancelled');
   const r = driverMonthly(d.id, month, monthAssignments);
   const todayText = myToday.length ? myToday.map(a => `${voiceShiftLabel(a.shift)} ${routeName(a.routeId)}`).join('、') : '沒有排定任務';
-  return `${d.name}今天：${todayText}。${month}已完成${r.trips.length}趟，報酬合計約${voiceMoney(r.tripTotal)}。`;
+  // 2026-11-02使用者要求：問某位夥伴狀況時，要能順便問出「還欠多少」「已經預支/已付款
+  // 多少」，不是只有趟數/報酬——這些數字跟報酬結算、匯款清單畫面上看到的是同一套
+  // computeDriverPayable()/computeCarryInMap()算出來的，不是另外寫一份。
+  const base = computeDriverPayable(d.id, month, monthAssignments);
+  const carryIn = (await computeCarryInMap(month, [d.id])).get(d.id) || 0;
+  const payable = base.payable + carryIn;
+  let moneyText = `${month}已完成${r.trips.length}趟，報酬合計約${voiceMoney(r.tripTotal)}`;
+  if (base.advanceTotal) moneyText += `，已預支${voiceMoney(base.advanceTotal)}`;
+  if (base.paidTotal) moneyText += `，已付款（已標記）${voiceMoney(base.paidTotal)}`;
+  if (carryIn) moneyText += `，承接前期超支餘額${voiceMoney(Math.abs(carryIn))}`;
+  moneyText += `，${payable < 0 ? '目前超支（已經多拿）約' + voiceMoney(Math.abs(payable)) : '目前可領淨額約' + voiceMoney(payable)}。`;
+  return `${d.name}今天：${todayText}。${moneyText}`;
 }
 
 function voiceSupported() {
