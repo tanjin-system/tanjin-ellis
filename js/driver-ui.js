@@ -1185,6 +1185,22 @@ async function renderMyEarnings(c){
   await refresh();
 }
 // ---------- 夥伴端：我的資料 ----------
+// 2026-11-02使用者要求：夥伴填個資習慣不一，身分證有大小寫、銀行/分行有人填全名
+// 有人漏打「銀行」「分行」兩字、帳號有人會加空格或「-」分隔——系統自動幫忙整理，
+// 不用主控事後一個個手動改。銀行／分行自動補字排除「已知例外」（使用者確認：
+// 「郵局」不是銀行，「營業部」不是分行，不能把這兩種硬補成「郵局銀行」「營業部分行」）。
+function normalizeIdNumber(v){ return (v||'').trim().toUpperCase(); }
+function normalizeBankName(v){
+  v = (v||'').trim();
+  if(!v || v.includes('銀行') || v.includes('郵局') || v.includes('農會') || v.includes('漁會') || v.includes('合作社')) return v;
+  return v + '銀行';
+}
+function normalizeBranchName(v){
+  v = (v||'').trim();
+  if(!v || v.includes('分行') || v.includes('郵局') || v.endsWith('部')) return v;
+  return v + '分行';
+}
+function normalizeAccountNumber(v){ return (v||'').trim().replace(/[\s-]/g, ''); }
 function renderMyProfile(c){
   const dId = state.activeDriverId;
   const d = state.data.drivers.find(x=>x.id===dId);
@@ -1212,16 +1228,24 @@ function renderMyProfile(c){
     <div class="panel"><h3 style="margin-top:0;">通知設定</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
   `;
   pushRenderBox(document.getElementById('pushBox'));
+  // 身分證字號：邊打邊轉大寫（單純轉大小寫不會打斷輸入）。銀行/分行/帳號：等離開
+  // 欄位（blur）才整理——補字這種操作如果邊打邊做，打第一個字就會被硬插「銀行」
+  // 兩字，反而讓人打不下去；存檔時也會再整理一次，防呆不漏掉用Enter送出的情況。
+  const idEl = document.getElementById('mpIdNumber');
+  idEl.oninput = ()=>{ const pos = idEl.selectionStart; idEl.value = normalizeIdNumber(idEl.value); try{ idEl.setSelectionRange(pos, pos); }catch(e){} };
+  document.getElementById('mpBankName').onblur = e=>{ e.target.value = normalizeBankName(e.target.value); };
+  document.getElementById('mpBranch').onblur = e=>{ e.target.value = normalizeBranchName(e.target.value); };
+  document.getElementById('mpAccount').onblur = e=>{ e.target.value = normalizeAccountNumber(e.target.value); };
   document.getElementById('mpSave').onclick = async ()=>{
     const changes = [];
     const checks = [
       ['phone', d.phone, document.getElementById('mpPhone').value.trim(), '電話'],
-      ['idNumber', d.idNumber, document.getElementById('mpIdNumber').value.trim(), '身分證字號'],
+      ['idNumber', d.idNumber, normalizeIdNumber(document.getElementById('mpIdNumber').value), '身分證字號'],
       ['vehicle.plate', d.vehicle.plate, document.getElementById('mpPlate').value.trim(), '車牌'],
       ['vehicle.type', d.vehicle.type, document.getElementById('mpVType').value.trim(), '車型'],
-      ['bank.bankName', d.bank.bankName, document.getElementById('mpBankName').value.trim(), '銀行'],
-      ['bank.branch', d.bank.branch, document.getElementById('mpBranch').value.trim(), '分行'],
-      ['bank.account', d.bank.account, document.getElementById('mpAccount').value.trim(), '帳號'],
+      ['bank.bankName', d.bank.bankName, normalizeBankName(document.getElementById('mpBankName').value), '銀行'],
+      ['bank.branch', d.bank.branch, normalizeBranchName(document.getElementById('mpBranch').value), '分行'],
+      ['bank.account', d.bank.account, normalizeAccountNumber(document.getElementById('mpAccount').value), '帳號'],
       ['bank.holder', d.bank.holder, document.getElementById('mpHolder').value.trim(), '戶名']
     ];
     checks.forEach(([field, oldVal, newVal, label])=>{ if((oldVal||'')!==newVal) changes.push(label); });
@@ -1229,12 +1253,12 @@ function renderMyProfile(c){
     try{
       await updateDriverProfile(dId, {
         phone: document.getElementById('mpPhone').value.trim(),
-        idNumber: document.getElementById('mpIdNumber').value.trim(),
+        idNumber: normalizeIdNumber(document.getElementById('mpIdNumber').value),
         plate: document.getElementById('mpPlate').value.trim(),
         vtype: document.getElementById('mpVType').value.trim(),
-        bankName: document.getElementById('mpBankName').value.trim(),
-        branch: document.getElementById('mpBranch').value.trim(),
-        account: document.getElementById('mpAccount').value.trim(),
+        bankName: normalizeBankName(document.getElementById('mpBankName').value),
+        branch: normalizeBranchName(document.getElementById('mpBranch').value),
+        account: normalizeAccountNumber(document.getElementById('mpAccount').value),
         holder: document.getElementById('mpHolder').value.trim()
       });
       alert('已儲存。');
