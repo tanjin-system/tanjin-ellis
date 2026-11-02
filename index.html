@@ -1342,11 +1342,19 @@ function defaultPeriod(channel, monthStr){
 // 去算不一定準（例如每月26日~次月25日這種，今天是9/20時，應該對到
 // 「9/26結束」那一期，不是「8/26~9/25」已經過去的那一期）。
 function currentChannelPeriodEnd(channel, todayStr){
-  const [y,m] = todayStr.split('-').map(Number);
+  const p = channelPeriodForDate(channel, todayStr);
+  return p ? p.end : null;
+}
+// 給任意一天（不是只有「今天」）找出這個通路的請款週期會把這天算在哪一期——
+// 「例外調整」要用這個依「發生日期」自動歸期，不能用使用者畫面上剛好停在哪個
+// 月份去猜（那會算錯，見2026-11-02的事故：10/30發生的調整項，因為畫面停在
+// 10月，被誤歸進9/27~10/26那期，使用者預期的其實是10/27~11/26那期）。
+function channelPeriodForDate(channel, dateStr){
+  const [y,m] = dateStr.split('-').map(Number);
   for(let delta=0; delta<=1; delta++){
     let mm=m+delta, yy=y; if(mm>12){ mm=1; yy++; }
     const period = defaultPeriod(channel, `${yy}-${pad(mm)}`);
-    if(todayStr>=period.start && todayStr<=period.end) return period.end;
+    if(dateStr>=period.start && dateStr<=period.end) return period;
   }
   return null;
 }
@@ -7157,26 +7165,43 @@ function renderBilling(c){
         <div class="field"><label>金額（可為負數）</label><input id="baAmount" type="number"></div>
       </div>
       <div class="field"><label>備註</label><input id="baNote" placeholder="例如：久陽一車未出車"></div>
+      <div id="baDatePeriodHint" class="section-sub" style="margin:2px 0 8px;"></div>
       <button class="btn ghost" id="addBillingAdj">新增調整項</button>
       <div id="billingAdjList" style="margin-top:8px;"></div>
     </div>
     <div id="billingResult"></div>`;
   function checkedChannelIds(){ return Array.from(document.querySelectorAll('.bChCheck:checked')).map(cb=>cb.value); }
-  // 例外調整永遠自動歸入「調整項通路」自己在通路管理設定的請款週期（不是
-  // 畫面上方那組給合併明細用的抓取範圍），使用者只需要填「發生日期」（單一
-  // 天，不是區間）方便日後查看，實際存檔的 periodStart/periodEnd 是自動算的。
-  function adjChannelPeriod(){
+  // 2026-11-02修正：例外調整以前是用畫面上「對應月份」選單當下停在哪個月去算週期，
+  // 跟使用者實際填的「發生日期」完全無關——10/30新增、畫面剛好還停在10月的調整項，
+  // 會被誤歸進9/27~10/26那期，但10/30早就超過10/26，照週期本來就該落在10/27~11/26
+  // 那期。改成用「發生日期」實際落在哪個週期去自動歸期（channelPeriodForDate()），
+  // 不管畫面上的「對應月份」選單停在哪裡都一樣準。「對應月份」選單只留給下面瀏覽
+  // 清單用，不再用來決定新增的這筆要歸進哪一期。
+  function adjDatePeriod(){
+    const channelId = document.getElementById('baChannel').value;
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    const dateVal = document.getElementById('baDate').value;
+    return (channel && dateVal) ? channelPeriodForDate(channel, dateVal) : null;
+  }
+  function adjBrowsePeriod(){
     const channelId = document.getElementById('baChannel').value;
     const channel = state.data.channels.find(ch=>ch.id===channelId);
     const monthStr = document.getElementById('bMonth').value;
     return channel ? defaultPeriod(channel, monthStr) : null;
   }
+  function updateDateHint(){
+    const period = adjDatePeriod();
+    const hintEl = document.getElementById('baDatePeriodHint');
+    if(!hintEl) return;
+    hintEl.textContent = period ? `這筆會歸進：${period.start}～${period.end} 這期` : '請先選通路並填發生日期';
+  }
   function refreshAdjList(){
     const channelId = document.getElementById('baChannel').value;
-    const period = adjChannelPeriod();
+    const period = adjBrowsePeriod();
     if(!period){ document.getElementById('billingAdjList').innerHTML = '<div class="empty">請先選擇對應月份</div>'; return; }
     const list = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===period.start && x.periodEnd===period.end);
-    document.getElementById('billingAdjList').innerHTML = list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">此週期尚無例外調整</div>';
+    document.getElementById('billingAdjList').innerHTML = `<div class="section-sub" style="margin-bottom:4px;">目前瀏覽週期：${period.start}～${period.end}</div>` +
+      (list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : `<div class="empty">${period.start}～${period.end} 這期目前尚無例外調整</div>`);
     document.getElementById('billingAdjList').querySelectorAll('[data-deladj]').forEach(btn=>{
       btn.onclick = async ()=>{
         const adj = list.find(x=>x.id===btn.dataset.deladj);
@@ -7187,21 +7212,26 @@ function renderBilling(c){
   }
   document.getElementById('addBillingAdj').onclick = async ()=>{
     const channelId = document.getElementById('baChannel').value;
-    const period = adjChannelPeriod();
+    const period = adjDatePeriod();
     const dateVal = document.getElementById('baDate').value;
     const noteVal = document.getElementById('baNote').value.trim();
     const amount = Number(document.getElementById('baAmount').value);
-    if(!period){ alert('請先選擇對應月份'); return; }
-    if(!dateVal || !noteVal || !amount){ alert('請填寫發生日期、備註與金額'); return; }
+    if(!dateVal){ alert('請填寫發生日期'); return; }
+    if(!period){ alert('這個通路查不到涵蓋這天的請款週期，請確認通路設定。'); return; }
+    if(!noteVal || !amount){ alert('請填寫備註與金額'); return; }
     const d = new Date(dateVal+'T00:00:00');
     const note = `${d.getMonth()+1}/${d.getDate()} ${noteVal}`;
     try{
       await createBillingAdjustment({ channelId, periodStart:period.start, periodEnd:period.end, note, amount });
       document.getElementById('baDate').value=''; document.getElementById('baNote').value=''; document.getElementById('baAmount').value='';
+      updateDateHint();
+      toast(`已新增，歸進 ${period.start}～${period.end} 這期`);
       refreshAdjList(); refresh();
     }catch(err){ alert(err.message); }
   };
-  document.getElementById('baChannel').onchange = refreshAdjList;
+  document.getElementById('baChannel').onchange = ()=>{ refreshAdjList(); updateDateHint(); };
+  document.getElementById('baDate').oninput = updateDateHint;
+  updateDateHint();
   // 通路自己的請款總覽（未稅/含稅合計）永遠套用「通路管理」裡設定的自己週期
   // 去算，只有勾選單一通路時，才會直接沿用共用的「區間起訖」欄位（維持原本
   // 可手動調整單一通路週期的彈性）。多選通路時，共用的「區間起訖」欄位改成
