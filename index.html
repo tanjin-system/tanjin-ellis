@@ -940,7 +940,6 @@ function openIdCardCapture(){
         <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
         <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;"></div>
         <div data-idlabel style="position:absolute; top:12px; left:0; right:0; text-align:center; color:#fff; font-size:16px; font-weight:700; text-shadow:0 1px 3px rgba(0,0,0,.6);"></div>
-        <div data-iddebug style="position:absolute; bottom:6px; left:6px; right:6px; color:#9f9; font-size:10px; font-family:monospace; text-shadow:0 1px 2px #000; white-space:pre-wrap; pointer-events:none;"></div>
       </div>
       <div style="padding:8px 16px; background:#111; color:#ccc; font-size:12.5px; text-align:center;">請把證件對齊框線拍攝；避免使用閃光燈、避免強光直射證件表面，減少反光</div>
       <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
@@ -951,7 +950,6 @@ function openIdCardCapture(){
     const video = overlay.querySelector('video');
     const frameEl = overlay.querySelector('[data-idframe]');
     const labelEl = overlay.querySelector('[data-idlabel]');
-    const debugEl = overlay.querySelector('[data-iddebug]');
     const shootBtn = overlay.querySelector('[data-idshoot]');
     let stream = null, settled = false;
     function cleanup(){
@@ -1017,12 +1015,10 @@ function openIdCardCapture(){
       const sy = Math.max(0, (frameRect.top-videoRect.top-offY)/scale);
       let sw = Math.min(vw-sx, frameRect.width/scale);
       let sh = Math.min(vh-sy, frameRect.height/scale);
-      const fellBack = !(sw>0) || !(sh>0);
-      if(fellBack){ sw = vw; sh = vh; }
-      // 手機上沒辦法打開devtools看console，螢幕上直接印出這次拍照用的實際數字（鏡頭原始
-      // 尺寸、畫面顯示尺寸、框的位置、算出來的裁切範圍），問題持續時請把這行文字截圖給我，
-      // 比用猜的準——這行字不會被拍進照片裡，只是疊在畫面上的提示。
-      debugEl.textContent = `[除錯] 鏡頭${vw}x${vh} 顯示${Math.round(videoRect.width)}x${Math.round(videoRect.height)} 框${Math.round(frameRect.width)}x${Math.round(frameRect.height)}@(${Math.round(frameRect.left)},${Math.round(frameRect.top)}) scale${scale.toFixed(3)} 裁切(${Math.round(sx)},${Math.round(sy)},${Math.round(sw)},${Math.round(sh)})${fellBack?' ⚠️裁切失效已退回整格畫面':''}`;
+      if(!(sw>0) || !(sh>0)){
+        console.warn('身分證導引框裁切失效，改用整格鏡頭畫面', { frameRect, videoRect, vw, vh });
+        sw = vw; sh = vh;
+      }
       const maxDim = 1100;
       const outScale = Math.min(1, maxDim/Math.max(sw,sh));
       const canvas = document.createElement('canvas');
