@@ -568,7 +568,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=23"></script>
-<script defer src="js/driver-ui.js?v=9"></script>
+<script defer src="js/driver-ui.js?v=10"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -3369,17 +3369,28 @@ function renderDrivers(c){
     // A4合成＋浮水印、最終確認畫面全部一樣），只是上傳對象換成主控正在編輯的這位夥伴，
     // 不是主控自己。driver-docs bucket本來就對app_admin全權限開放、drivers表主控也本來
     // 就能寫任何欄位，不需要額外的資料庫權限異動。
+    // 網路上傳這一步失敗時不直接放棄（跟夥伴端finishIdCardUpload()同樣的道理）：失敗時
+    // 問要不要重試，重試用同一張已經裁切合成好的dataUrl，不用重新拍照/選照片。
     const idCardAdminUpload = async (btn, driverId, grabPhoto)=>{
       btn.disabled = true;
       const original = btn.textContent;
-      try{
-        const dataUrl = await grabPhoto();
-        if(!dataUrl){ btn.disabled = false; return; }
+      let dataUrl;
+      try{ dataUrl = await grabPhoto(); }
+      catch(err){ alert(err.message); btn.disabled = false; return; }
+      if(!dataUrl){ btn.disabled = false; return; }
+      for(;;){
         btn.textContent = '上傳中…';
-        const path = await uploadDriverIdCard(driverId, dataUrl);
-        await setDriverIdCardPath(driverId, path);
-        renderContent();
-      }catch(err){ alert(err.message); btn.disabled = false; btn.textContent = original; }
+        try{
+          const path = await uploadDriverIdCard(driverId, dataUrl);
+          await setDriverIdCardPath(driverId, path);
+          renderContent();
+          return;
+        }catch(err){
+          if(!confirm(`上傳失敗：${err.message}\n\n要重試嗎？不用重新拍照/選照片，會直接用剛剛這張再試一次。`)){
+            btn.disabled = false; btn.textContent = original; return;
+          }
+        }
+      }
     };
     listEl.querySelectorAll('[data-idcardcapture]').forEach(btn=>{
       btn.onclick = ()=> idCardAdminUpload(btn, btn.dataset.idcardcapture, captureIdCardPhoto);

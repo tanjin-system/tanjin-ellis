@@ -1317,17 +1317,29 @@ function renderMyProfile(c){
   // 拍照／上傳現有照片兩個按鈕共用的收尾流程（取得裁切合成好的dataUrl後，上傳＋存路徑＋
   // 重新整理畫面），差別只在前面用哪個函式取得照片（captureIdCardPhoto跑相機、
   // uploadIdCardPhotos跑選檔案＋手動裁切）。
+  // 網路上傳這一步（跟前面拍照/裁切分開處理）失敗時不直接放棄：手機網路不穩是常見的
+  // 暫時性失敗，直接整個重來（兩張都要重拍/重選）很痛苦，所以失敗時問要不要重試，
+  // 重試用的是同一張已經裁切合成好的dataUrl，不會遺失剛剛拍/選的內容。
   async function finishIdCardUpload(btn, grabPhoto){
     btn.disabled = true;
     const original = btn.textContent;
-    try{
-      const dataUrl = await grabPhoto();
-      if(!dataUrl){ btn.disabled = false; return; }
+    let dataUrl;
+    try{ dataUrl = await grabPhoto(); }
+    catch(err){ alert(err.message); btn.disabled = false; return; }
+    if(!dataUrl){ btn.disabled = false; return; }
+    for(;;){
       btn.textContent = '上傳中…';
-      const path = await uploadDriverIdCard(dId, dataUrl);
-      await setDriverIdCardPath(dId, path);
-      renderContent();
-    }catch(err){ alert(err.message); btn.disabled = false; btn.textContent = original; }
+      try{
+        const path = await uploadDriverIdCard(dId, dataUrl);
+        await setDriverIdCardPath(dId, path);
+        renderContent();
+        return;
+      }catch(err){
+        if(!confirm(`上傳失敗：${err.message}\n\n要重試嗎？不用重新拍照/選照片，會直接用剛剛這張再試一次。`)){
+          btn.disabled = false; btn.textContent = original; return;
+        }
+      }
+    }
   }
   const idCardBtn = document.getElementById('mpIdCardBtn');
   if(idCardBtn) idCardBtn.onclick = ()=> finishIdCardUpload(idCardBtn, captureIdCardPhoto);
