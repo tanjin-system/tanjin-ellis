@@ -3179,9 +3179,11 @@ function renderDrivers(c){
         </div>
         <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
           <label>身分證正反面（勞報單用途）</label>
-          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">夥伴在自己的「我的資料」頁面拍攝上傳，系統自動合成正反面同頁、已加註浮水印的圖片；主控這裡無法代為上傳，只能查看／下載。</div>
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">夥伴可以自己在「我的資料」頁面拍攝/上傳；主控也可以在這裡代為拍攝/上傳（例如夥伴當面交證件、或不方便自己操作），系統自動合成正反面同頁、已加註浮水印的圖片。</div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             ${d.idCardPath ? `<span class="badge completed">已上傳</span> <button type="button" class="btn ghost" data-idcardview="${d.id}">查看</button> <button type="button" class="btn ghost" data-idcarddownload="${d.id}">下載</button>` : '<span class="badge pending">夥伴尚未上傳</span>'}
+            <button type="button" class="btn ghost" data-idcardcapture="${d.id}">${d.idCardPath?'重新拍攝':'拍攝'}</button>
+            <button type="button" class="btn ghost" data-idcardupload="${d.id}">${d.idCardPath?'重新上傳照片':'上傳照片'}</button>
           </div>
         </div>
       </div>
@@ -3361,6 +3363,29 @@ function renderDrivers(c){
           setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
         }catch(err){ alert(err.message); }
       };
+    });
+    // 主控代為拍攝/上傳身分證：跟夥伴自己在「我的資料」用的是同一套
+    // captureIdCardPhoto()／uploadIdCardPhotos()（導引裁切、四角角標、反光/模糊檢查、
+    // A4合成＋浮水印、最終確認畫面全部一樣），只是上傳對象換成主控正在編輯的這位夥伴，
+    // 不是主控自己。driver-docs bucket本來就對app_admin全權限開放、drivers表主控也本來
+    // 就能寫任何欄位，不需要額外的資料庫權限異動。
+    const idCardAdminUpload = async (btn, driverId, grabPhoto)=>{
+      btn.disabled = true;
+      const original = btn.textContent;
+      try{
+        const dataUrl = await grabPhoto();
+        if(!dataUrl){ btn.disabled = false; return; }
+        btn.textContent = '上傳中…';
+        const path = await uploadDriverIdCard(driverId, dataUrl);
+        await setDriverIdCardPath(driverId, path);
+        renderContent();
+      }catch(err){ alert(err.message); btn.disabled = false; btn.textContent = original; }
+    };
+    listEl.querySelectorAll('[data-idcardcapture]').forEach(btn=>{
+      btn.onclick = ()=> idCardAdminUpload(btn, btn.dataset.idcardcapture, captureIdCardPhoto);
+    });
+    listEl.querySelectorAll('[data-idcardupload]').forEach(btn=>{
+      btn.onclick = ()=> idCardAdminUpload(btn, btn.dataset.idcardupload, uploadIdCardPhotos);
     });
     listEl.querySelectorAll('[data-regen]').forEach(btn=>{
       btn.onclick = async ()=>{
