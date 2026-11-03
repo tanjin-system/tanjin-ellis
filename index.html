@@ -926,12 +926,19 @@ function openIdCardCapture(){
     const sides = [{ key:'front', label:'身分證正面' }, { key:'back', label:'身分證反面' }];
     let sideIdx = 0;
     const shots = {};
+    // 導引框尺寸直接用JS算好固定px、不是交給CSS的aspect-ratio屬性——部分裝置內建瀏覽器
+    // （例如LINE內建瀏覽器這類比較舊的WebView）不支援aspect-ratio，框的高度會直接變成0，
+    // 底下裁切計算讀到frameRect.height=0就會整個失效、改用整格鏡頭畫面，裁切形同沒做，
+    // 連帶反光偵測也因為量到的是整個畫面（背景稀釋掉證件本身的反光比例）而幾乎不會觸發。
+    // 用window.innerWidth/innerHeight算這種基本屬性沒有瀏覽器相容性疑慮。
+    const frameW = Math.round(Math.min(window.innerWidth*0.82, window.innerHeight*0.82));
+    const frameH = Math.round(frameW / ID_CARD_RATIO);
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
     overlay.innerHTML = `
       <div style="position:relative; flex:1; overflow:hidden;">
         <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
-        <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:min(82vw, 82vh); aspect-ratio:${ID_CARD_RATIO}; border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;"></div>
+        <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;"></div>
         <div data-idlabel style="position:absolute; top:12px; left:0; right:0; text-align:center; color:#fff; font-size:16px; font-weight:700; text-shadow:0 1px 3px rgba(0,0,0,.6);"></div>
       </div>
       <div style="padding:8px 16px; background:#111; color:#ccc; font-size:12.5px; text-align:center;">請把證件對齊框線拍攝；避免使用閃光燈、避免強光直射證件表面，減少反光</div>
@@ -1008,7 +1015,10 @@ function openIdCardCapture(){
       const sy = Math.max(0, (frameRect.top-videoRect.top-offY)/scale);
       let sw = Math.min(vw-sx, frameRect.width/scale);
       let sh = Math.min(vh-sy, frameRect.height/scale);
-      if(!(sw>0) || !(sh>0)){ sw = vw; sh = vh; }
+      if(!(sw>0) || !(sh>0)){
+        console.warn('身分證導引框裁切失效，改用整格鏡頭畫面', { frameRect, videoRect, vw, vh });
+        sw = vw; sh = vh;
+      }
       const maxDim = 1100;
       const outScale = Math.min(1, maxDim/Math.max(sw,sh));
       const canvas = document.createElement('canvas');
