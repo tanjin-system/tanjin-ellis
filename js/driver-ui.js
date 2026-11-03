@@ -356,6 +356,45 @@ function showNhiReminderModal(){
   document.getElementById('nhiReminderOk').onclick = ()=>{ applyMuteIfChecked(); host.innerHTML=''; state._meSlipPreviewOpen = true; switchTab('my-earnings'); };
   document.getElementById('nhiReminderBackdrop').onclick = (e)=>{ if(e.target.id==='nhiReminderBackdrop'){ applyMuteIfChecked(); host.innerHTML=''; } };
 }
+// 進入系統時提醒：夥伴還沒上傳身分證正反面（勞報單用途）就跳出來，讓他點「立即拍攝」
+// 直接進入拍照流程，或「稍後再說」先去忙別的事——不是強制關卡，不會擋住其他功能。
+// 跟上面NHI提醒不同，這裡故意不做「不再提醒」選項：使用者要求「要一直跳浮動視窗到
+// 他拍攝為止」，因為這是一次性的必要資料，不像NHI門檻是每月都要重新判斷的狀態，也
+// 沒有「這次先不管、之後自然不會再相關」的情況——沒拍完成之前，每次進系統都要再看到。
+// 主控「檢視夥伴」不會觸發。
+function maybeShowIdCardReminder(){
+  if(state.role!=='driver' || state.adminViewDriver || !state.activeDriverId) return;
+  const d = state.data.drivers.find(x=>x.id===state.activeDriverId);
+  if(!d || d.idCardPath) return;
+  showIdCardReminderModal(d.id);
+}
+function showIdCardReminderModal(dId){
+  let host = document.getElementById('idCardReminderHost');
+  if(!host){ host = document.createElement('div'); host.id = 'idCardReminderHost'; document.body.appendChild(host); }
+  host.innerHTML = `<div class="modal-backdrop" id="idCardReminderBackdrop">
+    <div class="modal-box" style="max-width:420px;">
+      <h3 style="margin-top:0;">📋 請拍攝身分證正反面</h3>
+      <p style="font-size:13.5px; line-height:1.7;">勞報單申報需要身分證正反面照片，請拍攝上傳——只有主控看得到，系統會自動合成並加註浮水印，僅供勞報使用。還沒完成之前，每次進來都會再提醒一次。</p>
+      <div style="display:flex; gap:10px; margin-top:14px;">
+        <button class="btn ghost" id="idCardReminderLater" style="flex:1;">稍後再說</button>
+        <button class="btn amber" id="idCardReminderGo" style="flex:1;">立即拍攝</button>
+      </div>
+    </div>
+  </div>`;
+  const close = ()=>{ host.innerHTML = ''; };
+  document.getElementById('idCardReminderLater').onclick = close;
+  document.getElementById('idCardReminderBackdrop').onclick = (e)=>{ if(e.target.id==='idCardReminderBackdrop') close(); };
+  document.getElementById('idCardReminderGo').onclick = async ()=>{
+    close();
+    try{
+      const dataUrl = await captureIdCardPhoto();
+      if(!dataUrl) return; // 使用者自己取消拍攝，什麼都不做，下次進系統會再提醒
+      const path = await uploadDriverIdCard(dId, dataUrl);
+      await setDriverIdCardPath(dId, path);
+      if(state.activeDriverId===dId) renderContent();
+    }catch(err){ alert(err.message); }
+  };
+}
 // 語音辨識結果的二次確認卡片（2026-10-29，雙大腦架構的安全關卡——2026-10-28定案：
 // 語音助理聽到的內容絕對不能直接寫入資料庫，一定要先讓夥伴看過、自己點確認才算數）。
 // intent格式：{ type:'leave', date:'YYYY-MM-DD'（可能沒有/格式不對）, rawText:'聽到的原話' }。
