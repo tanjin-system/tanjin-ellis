@@ -827,9 +827,14 @@ function openCameraCapture(maxShots, storeName){
 //    整張燒進「僅限信興行銷有限公司勞報使用」浮水印文字（跟drawPhotoWatermark一樣直接
 //    畫進canvas像素，不是疊圖層，事後沒辦法無痛裁掉），只上傳合成後的這一張，不保留
 //    未浮水印的原始裁切圖。
-// 3) 每拍一張都做一次簡單的反光檢查（裁切範圍內死白像素佔比）——這只是亮度統計的粗略
-//    經驗法則，不是真正的反光偵測，證件本身是亮面塑膠、強光下本來就可能偏亮，有誤判
-//    空間，所以設計成「提醒＋讓使用者自己選重拍或仍要使用」，不是強制擋下重拍。
+// 3) 每拍一張都做兩個簡單的品質檢查，裁切範圍內死白像素佔比（反光）、拉普拉斯變異數
+//    （模糊，業界常見的"Laplacian variance"土法，變異數越低代表邊緣越不銳利、畫面
+//    越糊）——兩個都只是經驗法則，不是真正的電腦視覺偵測，證件本身是亮面塑膠、手持
+//    拍攝難免有點手震，有誤判空間，所以設計成「提醒＋讓使用者自己選重拍或仍要使用」，
+//    不是強制擋下重拍。證件有沒有被切到框外（切邊）沒有做偵測——那需要先知道證件
+//    實際邊界在哪，等同於要做到真正的邊緣偵測，跟「自動去背」是同一個技術門檻，目前
+//    選擇不做（見openIdCardCapture()最上面的說明），改用框四角加角標，用更清楚的視覺
+//    引導降低使用者自己對不準切到邊的機率。
 // 回傳 {dataUrl}＝合成完成；{cancelled:true}＝使用者中途取消；{fallback:true}＝裝置
 // 不支援相機串流，呼叫端應退回檔案選擇（見captureIdCardPhoto）。
 const ID_CARD_RATIO = 85.6/54;
@@ -844,21 +849,41 @@ function detectGlareRatio(ctx, w, h){
   }
   return sampled ? bright/sampled : 0;
 }
-function confirmGlareDialog(overlay){
+// 灰階化後取樣格點算簡化版拉普拉斯（上下左右四鄰居減自己的4倍），再算這些值的變異數。
+// 閾值（30）是拿一張模擬證件文字的測試圖、用canvas filter:blur()疊不同程度模糊實測
+// 校正過的起始值（0px清晰約38000分、1px模糊約5100分、2px約390分、4px約25分、8px
+// 約7分——30分大致落在「清晰」跟「2px以上明顯模糊」中間），不是精確科學的數字，之後
+// 如果常常誤判（太容易判成模糊，或明明很糊卻沒抓到），需要再依實測結果調整。
+function computeBlurScore(ctx, w, h){
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const step = Math.max(2, Math.round(Math.sqrt((w*h)/40000))); // 抽樣控制在約4萬個取樣點內
+  const gray = (x,y)=>{ const i=(y*w+x)*4; return 0.299*data[i]+0.587*data[i+1]+0.114*data[i+2]; };
+  let sum=0, sumSq=0, n=0;
+  for(let y=step; y<h-step; y+=step){
+    for(let x=step; x<w-step; x+=step){
+      const lap = gray(x,y-step)+gray(x,y+step)+gray(x-step,y)+gray(x+step,y) - 4*gray(x,y);
+      sum += lap; sumSq += lap*lap; n++;
+    }
+  }
+  if(!n) return 999; // 取樣失敗（裁切範圍太小等異常情況）時不要誤判成模糊，直接當作過關
+  const mean = sum/n;
+  return sumSq/n - mean*mean;
+}
+function confirmQualityDialog(overlay, issues){
   return new Promise(resolve=>{
     const dlg = document.createElement('div');
     dlg.style.cssText = 'position:absolute; inset:0; background:rgba(0,0,0,.75); z-index:10; display:flex; align-items:center; justify-content:center; padding:24px;';
     dlg.innerHTML = `<div style="background:#1a1a1a; border-radius:12px; padding:20px; max-width:320px; text-align:center; color:#fff;">
-      <div style="font-size:15px; font-weight:700; margin-bottom:8px;">這張照片可能有反光</div>
-      <div style="font-size:13px; color:#ccc; margin-bottom:16px;">畫面裡有一大片死白，可能蓋住部分文字；建議避開光源重拍，或確認清晰可辨後繼續使用。</div>
+      <div style="font-size:15px; font-weight:700; margin-bottom:8px;">這張照片可能${issues.join('、')}</div>
+      <div style="font-size:13px; color:#ccc; margin-bottom:16px;">可能有部分文字看不清楚；建議重拍，或確認清晰可辨後繼續使用。</div>
       <div style="display:flex; gap:10px;">
-        <button type="button" data-glareretake style="flex:1; padding:12px; border-radius:8px; border:none; background:#444; color:#fff;">重拍</button>
-        <button type="button" data-glareuse style="flex:1; padding:12px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-weight:700;">仍要使用</button>
+        <button type="button" data-qretake style="flex:1; padding:12px; border-radius:8px; border:none; background:#444; color:#fff;">重拍</button>
+        <button type="button" data-quse style="flex:1; padding:12px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-weight:700;">仍要使用</button>
       </div>
     </div>`;
     overlay.appendChild(dlg);
-    dlg.querySelector('[data-glareretake]').onclick = ()=>{ dlg.remove(); resolve(false); };
-    dlg.querySelector('[data-glareuse]').onclick = ()=>{ dlg.remove(); resolve(true); };
+    dlg.querySelector('[data-qretake]').onclick = ()=>{ dlg.remove(); resolve(false); };
+    dlg.querySelector('[data-quse]').onclick = ()=>{ dlg.remove(); resolve(true); };
   });
 }
 function loadImg(dataUrl){
@@ -938,10 +963,15 @@ function openIdCardCapture(){
     overlay.innerHTML = `
       <div style="position:relative; flex:1; overflow:hidden;">
         <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
-        <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;"></div>
+        <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;">
+          <div style="position:absolute; top:-3px; left:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-left:4px solid #E0902E; border-top-left-radius:10px;"></div>
+          <div style="position:absolute; top:-3px; right:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-right:4px solid #E0902E; border-top-right-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; left:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-left:4px solid #E0902E; border-bottom-left-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; right:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-right:4px solid #E0902E; border-bottom-right-radius:10px;"></div>
+        </div>
         <div data-idlabel style="position:absolute; top:12px; left:0; right:0; text-align:center; color:#fff; font-size:16px; font-weight:700; text-shadow:0 1px 3px rgba(0,0,0,.6);"></div>
       </div>
-      <div style="padding:8px 16px; background:#111; color:#ccc; font-size:12.5px; text-align:center;">請把證件對齊框線拍攝；避免使用閃光燈、避免強光直射證件表面，減少反光</div>
+      <div style="padding:8px 16px; background:#111; color:#ccc; font-size:12.5px; text-align:center;">請把證件四個角對齊四個角標、整張貼滿框線拍攝；避免使用閃光燈、避免強光直射證件表面，減少反光</div>
       <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
         <button type="button" data-idcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
         <button type="button" data-idshoot disabled style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700; opacity:0.5;">拍照</button>
@@ -1026,9 +1056,13 @@ function openIdCardCapture(){
       const ctx = canvas.getContext('2d', { willReadFrequently:true });
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
       const glare = detectGlareRatio(ctx, canvas.width, canvas.height);
-      // 身分證常是亮面塑膠材質，正常拍攝下本來就容易偏亮，門檻放寬一點、提示文字也
-      // 講清楚「鏡頭不會關、可以直接重拍」，減少正常照片被誤判成反光的機會。
-      if(glare > 0.22 && !(await confirmGlareDialog(overlay))){ shootBtn.disabled = false; return; }
+      const blurScore = computeBlurScore(ctx, canvas.width, canvas.height);
+      // 身分證常是亮面塑膠材質，正常拍攝下本來就容易偏亮，反光門檻放寬一點，減少正常
+      // 照片被誤判。兩項都只是經驗法則，有問題就列出來一次問，不逐項分開問。
+      const issues = [];
+      if(glare > 0.22) issues.push('反光');
+      if(blurScore < 30) issues.push('模糊');
+      if(issues.length && !(await confirmQualityDialog(overlay, issues))){ shootBtn.disabled = false; return; }
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       shots[sides[sideIdx].key] = dataUrl;
       sideIdx++;
