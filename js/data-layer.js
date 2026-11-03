@@ -2591,33 +2591,6 @@ function validateServiceName(name, tripCount) {
   }
 }
 
-async function confirmMonthlyStatement(driverId, month, live) {
-  const supabase = getSupabase();
-  const driver = (state.data.drivers || []).find(d => d.id === driverId);
-  const serviceName = ((driver && driver.serviceName) || '').trim();
-  validateServiceName(serviceName, (live.trips || []).length);
-  const overlap = findOverlappingStatement(driverId, `${month}-01`, monthEndStr(month));
-  if (overlap) throw new Error(`${month} 這個月份已經有勞報單（${statementLabel(overlap)}）涵蓋，不能再整月月結，避免同一段期間重複開單。`);
-  const { adjTotal, net } = statementNetFromAdjustments(live.tripTotal, live.adjustments);
-  const reimbursement = live.adjustments.filter(a => a.type === 'reimbursement').reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
-  const ded = computePayrollDeductions(net, reimbursement);
-  const { data, error } = await supabase.from('statements').insert({
-    driver_id: driverId, statement_month: `${month}-01`,
-    trip_total: live.tripTotal, adj_total: adjTotal, net_amount: net,
-    income_type: ded.incomeType,
-    withhold_tax: ded.withholdTax, tax_rate: ded.taxRate, tax_amount: ded.taxAmount,
-    withhold_nhi: ded.withholdNhi, nhi_rate: ded.nhiRate, nhi_amount: ded.nhiAmount,
-    actual_net_amount: ded.actualNet, reimbursement_amount: ded.reimbursement,
-    service_name: serviceName || null,
-    status: 'awaiting_signature', confirmed_at: new Date().toISOString(), admin_acked: false
-  }).select().single();
-  if (error) throw new Error('月結確認失敗：' + error.message);
-  const st = mapStatement(data);
-  state.data.statements.push(st);
-  state._carryInCache = null;
-  return st;
-}
-
 // ---------------- 區間勞報單（依實際付款期間開單） ----------------
 // 夥伴每週（或每次付款）請款時，主控可以自選日期區間開一張勞報單：金額由系統裡該區間的
 // 完成任務與調整項（依調整項日期）算出來，不能手動改；給付日期記錄實際轉帳日。
