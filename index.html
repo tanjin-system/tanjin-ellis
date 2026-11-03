@@ -568,7 +568,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=23"></script>
-<script defer src="js/driver-ui.js?v=8"></script>
+<script defer src="js/driver-ui.js?v=9"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -869,15 +869,16 @@ function computeBlurScore(ctx, w, h){
   const mean = sum/n;
   return sumSq/n - mean*mean;
 }
-function confirmQualityDialog(overlay, issues){
+function confirmQualityDialog(overlay, issues, retakeLabel){
+  retakeLabel = retakeLabel || '重拍';
   return new Promise(resolve=>{
     const dlg = document.createElement('div');
     dlg.style.cssText = 'position:absolute; inset:0; background:rgba(0,0,0,.75); z-index:10; display:flex; align-items:center; justify-content:center; padding:24px;';
     dlg.innerHTML = `<div style="background:#1a1a1a; border-radius:12px; padding:20px; max-width:320px; text-align:center; color:#fff;">
       <div style="font-size:15px; font-weight:700; margin-bottom:8px;">這張照片可能${issues.join('、')}</div>
-      <div style="font-size:13px; color:#ccc; margin-bottom:16px;">可能有部分文字看不清楚；建議重拍，或確認清晰可辨後繼續使用。</div>
+      <div style="font-size:13px; color:#ccc; margin-bottom:16px;">可能有部分文字看不清楚；建議${retakeLabel}，或確認清晰可辨後繼續使用。</div>
       <div style="display:flex; gap:10px;">
-        <button type="button" data-qretake style="flex:1; padding:12px; border-radius:8px; border:none; background:#444; color:#fff;">重拍</button>
+        <button type="button" data-qretake style="flex:1; padding:12px; border-radius:8px; border:none; background:#444; color:#fff;">${retakeLabel}</button>
         <button type="button" data-quse style="flex:1; padding:12px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-weight:700;">仍要使用</button>
       </div>
     </div>`;
@@ -893,6 +894,127 @@ function loadImg(dataUrl){
     im.onerror = reject;
     im.src = dataUrl;
   });
+}
+// 上傳既有照片時的「合理切邊」：這種情況沒有即時鏡頭畫面可以疊導引框引導使用者對齊
+// 拍攝，改成讓使用者在自己選好的照片上，用同一個身分證比例（ID_CARD_RATIO）的框，
+// 自己拖曳／縮放把證件對準框內，按確認後裁切框內範圍——跟拍照流程用同一套四角角標
+// 視覺、同一套反光/模糊品質檢查，兩條路徑（拍照／上傳）最後處理結果一致。最小縮放
+// 卡在「剛好蓋滿框」（不能縮小到框外露出黑邊），可以放大、拖曳調整想要的範圍。
+// 回傳裁切後的dataUrl，使用者取消則回傳null。
+function openIdCardCropUI(imgDataUrl, label){
+  return new Promise(async (resolve)=>{
+    const img = await loadImg(imgDataUrl);
+    const frameW = Math.round(Math.min(window.innerWidth*0.82, window.innerHeight*0.5));
+    const frameH = Math.round(frameW / ID_CARD_RATIO);
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div data-cropstage style="position:relative; flex:1; overflow:hidden; touch-action:none; background:#000;">
+        <img data-cropimg src="${imgDataUrl}" style="position:absolute; left:0; top:0; transform-origin:0 0; user-select:none; -webkit-user-drag:none; pointer-events:none;">
+        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.6); pointer-events:none;">
+          <div style="position:absolute; top:-3px; left:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-left:4px solid #E0902E; border-top-left-radius:10px;"></div>
+          <div style="position:absolute; top:-3px; right:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-right:4px solid #E0902E; border-top-right-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; left:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-left:4px solid #E0902E; border-bottom-left-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; right:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-right:4px solid #E0902E; border-bottom-right-radius:10px;"></div>
+        </div>
+        <div style="position:absolute; top:12px; left:0; right:0; text-align:center; color:#fff; font-size:15px; font-weight:700; text-shadow:0 1px 3px rgba(0,0,0,.6); pointer-events:none;">拖曳調整位置、下方滑桿縮放，對準${label}</div>
+      </div>
+      <div style="padding:10px 16px; background:#111; display:flex; align-items:center; gap:10px;">
+        <span style="color:#ccc; font-size:18px;">🔍</span>
+        <input type="range" data-cropzoom min="100" max="300" value="100" style="flex:1;">
+      </div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-cropcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-cropok style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">確認</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const stage = overlay.querySelector('[data-cropstage]');
+    const imEl = overlay.querySelector('[data-cropimg]');
+    const zoomEl = overlay.querySelector('[data-cropzoom]');
+    let settled = false;
+    function cleanup(){ if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    function settle(result){ if(settled) return; settled = true; cleanup(); resolve(result); }
+
+    const stageW = stage.clientWidth, stageH = stage.clientHeight;
+    const frameLeft = (stageW-frameW)/2, frameTop = (stageH-frameH)/2;
+    const srcRatio = img.width/img.height, frameRatio = frameW/frameH;
+    // baseScale＝縮放100%時圖片剛好蓋滿框（跟object-fit:cover同一個算法），滑桿100~300%
+    // 都是從這個基準再放大，不會縮到比「剛好蓋滿」更小、不會露出框外黑邊。
+    const baseScale = srcRatio > frameRatio ? frameH/img.height : frameW/img.width;
+    let scale = baseScale;
+    let tx = frameLeft + frameW/2 - (img.width*scale)/2;
+    let ty = frameTop + frameH/2 - (img.height*scale)/2;
+    function clamp(){
+      const imgW = img.width*scale, imgH = img.height*scale;
+      const minTx = frameLeft+frameW-imgW, maxTx = frameLeft;
+      const minTy = frameTop+frameH-imgH, maxTy = frameTop;
+      tx = Math.min(maxTx, Math.max(minTx, tx));
+      ty = Math.min(maxTy, Math.max(minTy, ty));
+    }
+    function applyTransform(){ imEl.style.width = img.width+'px'; imEl.style.height = img.height+'px'; imEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
+    clamp(); applyTransform();
+
+    let dragging = false, lastX=0, lastY=0;
+    stage.addEventListener('pointerdown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; stage.setPointerCapture(e.pointerId); });
+    stage.addEventListener('pointermove', e=>{
+      if(!dragging) return;
+      tx += e.clientX-lastX; ty += e.clientY-lastY;
+      lastX=e.clientX; lastY=e.clientY;
+      clamp(); applyTransform();
+    });
+    const endDrag = ()=>{ dragging=false; };
+    stage.addEventListener('pointerup', endDrag);
+    stage.addEventListener('pointercancel', endDrag);
+    zoomEl.oninput = ()=>{
+      const newScale = baseScale*(Number(zoomEl.value)/100);
+      // 縮放時保持框中心對應的圖片位置不變，不要整張圖跳來跳去。
+      const cx = frameLeft+frameW/2, cy = frameTop+frameH/2;
+      const localX = (cx-tx)/scale, localY = (cy-ty)/scale;
+      scale = newScale;
+      tx = cx-localX*scale; ty = cy-localY*scale;
+      clamp(); applyTransform();
+    };
+    overlay.querySelector('[data-cropcancel]').onclick = ()=> settle(null);
+    overlay.querySelector('[data-cropok]').onclick = async ()=>{
+      const sx = (frameLeft-tx)/scale, sy = (frameTop-ty)/scale;
+      const sw = frameW/scale, sh = frameH/scale;
+      const maxDim = 1100;
+      const outScale = Math.min(1, maxDim/Math.max(sw,sh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw*outScale); canvas.height = Math.round(sh*outScale);
+      const ctx = canvas.getContext('2d', { willReadFrequently:true });
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const glare = detectGlareRatio(ctx, canvas.width, canvas.height);
+      const blurScore = computeBlurScore(ctx, canvas.width, canvas.height);
+      const issues = [];
+      if(glare>0.22) issues.push('反光');
+      if(blurScore<30) issues.push('模糊');
+      if(issues.length && !(await confirmQualityDialog(overlay, issues, '重新調整'))) return; // 留在裁切畫面，使用者可以重新拖曳/縮放
+      settle(canvas.toDataURL('image/jpeg', 0.85));
+    };
+  });
+}
+// 上傳既有照片的統一入口（跟拍照是平行的兩條路，使用者自己選）：依序選正面、反面照片，
+// 各自用openIdCardCropUI()手動裁切，裁完一樣送進composeIdCardImage()合成＋燒浮水印，
+// 跟拍照流程殊途同歸、最後產生的檔案格式/品質要求完全一致。
+async function uploadIdCardPhotos(){
+  const pick = ()=> new Promise(resolve=>{
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*';
+    input.onchange = ()=> resolve(input.files[0] || null);
+    input.click();
+  });
+  const frontFile = await pick();
+  if(!frontFile) return null;
+  const frontRaw = await compressImageFile(frontFile, 2000, 0.9);
+  const frontCropped = await openIdCardCropUI(frontRaw, '身分證正面');
+  if(!frontCropped) return null;
+  const backFile = await pick();
+  if(!backFile) return null;
+  const backRaw = await compressImageFile(backFile, 2000, 0.9);
+  const backCropped = await openIdCardCropUI(backRaw, '身分證反面');
+  if(!backCropped) return null;
+  return await composeIdCardImage(frontCropped, backCropped);
 }
 // 浮水印斜向滿版重複、燒進canvas像素（不是疊圖層，事後沒辦法無痛裁掉／去背）——身分證
 // 影本外流風險高，這行字提醒任何拿到這張圖的人用途僅限於此；不是防盜用的技術手段，
@@ -1086,25 +1208,11 @@ async function captureIdCardPhoto(){
   const result = await openIdCardCapture();
   if(result.dataUrl) return result.dataUrl;
   if(!result.fallback) return null; // 使用者自己取消，什麼都不做
-  const pick = (promptText)=> new Promise(resolve=>{
-    alert(promptText);
-    const input = document.createElement('input');
-    input.type = 'file'; input.accept = 'image/*';
-    input.onchange = ()=> resolve(input.files[0] || null);
-    input.click();
-  });
-  // 退回檔案選擇時明確告知使用者：接下來選的照片不會自動裁切、也不會做反光檢查，
-  // 避免使用者誤以為自己用的是完整的導引拍攝流程。result.reason是實際失敗原因（相機
-  // 權限被拒、找不到鏡頭等），方便回報問題時能準確定位，不用再憑猜的。
-  const frontFile = await pick(`無法開啟導引拍攝相機（${result.reason||'不明原因'}），改用一般選照片方式，不會自動裁切、也不會偵測反光——請自行確認照片完整清楚後再選取。請選擇身分證正面照片`);
-  if(!frontFile) return null;
-  const backFile = await pick('請選擇身分證反面照片');
-  if(!backFile) return null;
-  const [frontUrl, backUrl] = await Promise.all([
-    compressImageFile(frontFile, 1400, 0.85),
-    compressImageFile(backFile, 1400, 0.85)
-  ]);
-  return await composeIdCardImage(frontUrl, backUrl);
+  // 退回檔案選擇時明確告知失敗原因（result.reason，例如相機權限被拒、找不到鏡頭），
+  // 避免使用者誤以為自己用的是完整的導引拍攝流程；接下來改走uploadIdCardPhotos()同一套
+  // 選照片＋手動裁切流程，兩條路徑最後的裁切/品質檢查/合成都一致，不用再維護兩份邏輯。
+  alert(`無法開啟導引拍攝相機（${result.reason||'不明原因'}），改用選照片的方式，請依序選擇正反面。`);
+  return await uploadIdCardPhotos();
 }
 // 台灣財政部電子發票QR Code（左邊那個）固定格式：冒號分隔，第一段(前77碼)依序是
 // 發票字軌(2)+發票號碼(8)+發票日期民國年月日(7＝年3+月2+日2)+隨機碼(4)+銷售額16進位(8)+

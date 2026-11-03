@@ -1266,10 +1266,11 @@ function renderMyProfile(c){
     </div>
     <div class="panel">
       <h3 style="margin-top:0;">身分證正反面（勞報單用途）</h3>
-      <p class="section-sub" style="margin-top:0;">拍攝身分證正面與反面，系統會自動合成一張圖片並加註浮水印，只有主控能查看，用於勞報單申報文件。</p>
+      <p class="section-sub" style="margin-top:0;">拍攝或上傳身分證正面與反面，系統會自動合成一張圖片並加註浮水印，只有主控能查看，用於勞報單申報文件。</p>
       <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
         ${d.idCardPath ? '<span class="badge completed">已上傳</span>' : '<span class="badge pending">尚未上傳</span>'}
         <button type="button" class="btn ${d.idCardPath?'ghost':'amber'}" id="mpIdCardBtn">${d.idCardPath?'重新拍攝':'拍攝身分證正反面'}</button>
+        <button type="button" class="btn ghost" id="mpIdCardUpload">${d.idCardPath?'重新上傳照片':'上傳現有照片'}</button>
         ${d.idCardPath ? '<button type="button" class="btn ghost" id="mpIdCardView">查看我上傳的</button>' : ''}
       </div>
     </div>
@@ -1313,18 +1314,25 @@ function renderMyProfile(c){
       renderNav(); renderContent();
     }catch(err){ alert(err.message); }
   };
-  const idCardBtn = document.getElementById('mpIdCardBtn');
-  if(idCardBtn) idCardBtn.onclick = async ()=>{
-    idCardBtn.disabled = true;
+  // 拍照／上傳現有照片兩個按鈕共用的收尾流程（取得裁切合成好的dataUrl後，上傳＋存路徑＋
+  // 重新整理畫面），差別只在前面用哪個函式取得照片（captureIdCardPhoto跑相機、
+  // uploadIdCardPhotos跑選檔案＋手動裁切）。
+  async function finishIdCardUpload(btn, grabPhoto){
+    btn.disabled = true;
+    const original = btn.textContent;
     try{
-      const dataUrl = await captureIdCardPhoto();
-      if(!dataUrl){ idCardBtn.disabled = false; return; }
-      idCardBtn.textContent = '上傳中…';
+      const dataUrl = await grabPhoto();
+      if(!dataUrl){ btn.disabled = false; return; }
+      btn.textContent = '上傳中…';
       const path = await uploadDriverIdCard(dId, dataUrl);
       await setDriverIdCardPath(dId, path);
       renderContent();
-    }catch(err){ alert(err.message); idCardBtn.disabled = false; }
-  };
+    }catch(err){ alert(err.message); btn.disabled = false; btn.textContent = original; }
+  }
+  const idCardBtn = document.getElementById('mpIdCardBtn');
+  if(idCardBtn) idCardBtn.onclick = ()=> finishIdCardUpload(idCardBtn, captureIdCardPhoto);
+  const idCardUploadBtn = document.getElementById('mpIdCardUpload');
+  if(idCardUploadBtn) idCardUploadBtn.onclick = ()=> finishIdCardUpload(idCardUploadBtn, uploadIdCardPhotos);
   const idCardViewBtn = document.getElementById('mpIdCardView');
   if(idCardViewBtn) idCardViewBtn.onclick = async ()=>{
     try{ openPhotoLightbox([await getDriverIdCardUrl(d.idCardPath)]); }
