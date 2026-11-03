@@ -1225,6 +1225,15 @@ function renderMyProfile(c){
       </div>
       <button class="btn amber" id="mpSave">儲存修改</button>
     </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">身分證正反面（勞報單用途）</h3>
+      <p class="section-sub" style="margin-top:0;">拍攝身分證正面與反面，系統會自動合成一張圖片並加註浮水印，只有主控能查看，用於勞報單申報文件。</p>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        ${d.idCardPath ? '<span class="badge completed">已上傳</span>' : '<span class="badge pending">尚未上傳</span>'}
+        <button type="button" class="btn ${d.idCardPath?'ghost':'amber'}" id="mpIdCardBtn">${d.idCardPath?'重新拍攝':'拍攝身分證正反面'}</button>
+        ${d.idCardPath ? '<button type="button" class="btn ghost" id="mpIdCardView">查看我上傳的</button>' : ''}
+      </div>
+    </div>
     <div class="panel"><h3 style="margin-top:0;">通知設定</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
   `;
   pushRenderBox(document.getElementById('pushBox'));
@@ -1264,6 +1273,23 @@ function renderMyProfile(c){
       alert('已儲存。');
       renderNav(); renderContent();
     }catch(err){ alert(err.message); }
+  };
+  const idCardBtn = document.getElementById('mpIdCardBtn');
+  if(idCardBtn) idCardBtn.onclick = async ()=>{
+    idCardBtn.disabled = true;
+    try{
+      const dataUrl = await captureIdCardPhoto();
+      if(!dataUrl){ idCardBtn.disabled = false; return; }
+      idCardBtn.textContent = '上傳中…';
+      const path = await uploadDriverIdCard(dId, dataUrl);
+      await setDriverIdCardPath(dId, path);
+      renderContent();
+    }catch(err){ alert(err.message); idCardBtn.disabled = false; }
+  };
+  const idCardViewBtn = document.getElementById('mpIdCardView');
+  if(idCardViewBtn) idCardViewBtn.onclick = async ()=>{
+    try{ openPhotoLightbox([await getDriverIdCardUrl(d.idCardPath)]); }
+    catch(err){ alert(err.message); }
   };
 }
 

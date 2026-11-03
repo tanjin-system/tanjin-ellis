@@ -23,7 +23,8 @@ function mapDriver(row) {
     idNumber: row.id_number || '',
     unionInsured: !!row.union_insured, unionProofPath: row.union_proof_path || '',
     serviceName: row.service_name || '',
-    payrollName: row.payroll_name || ''
+    payrollName: row.payroll_name || '',
+    idCardPath: row.id_card_path || ''
   };
 }
 
@@ -3209,4 +3210,49 @@ async function removeDriverUnionProofFile(path) {
   if (!path) return;
   const supabase = getSupabase();
   await supabase.storage.from('driver-docs').remove([path]);
+}
+
+// ---------------- 夥伴身分證正反面（夥伴自拍上傳，勞報單用途，2026-11） ----------------
+
+// 跟工會證明同一個私有bucket driver-docs，但路徑固定 {driverId}/idcard.jpg（不是時間戳記
+// 命名）——每次重拍用upsert直接覆蓋同一個檔案，不留舊版本歷史。夥伴只能動自己這個路徑
+// （見schema.sql PART 52的driver_*_own_iddoc政策），主控維持PART 12已經設好的全權限。
+// dataUrl是前端已經合成好、燒了「僅限信興行銷有限公司勞報使用」浮水印的正反面合併圖
+// （見openIdCardCapture()），這裡只負責存檔，不處理圖片內容。
+async function uploadDriverIdCard(driverId, dataUrl) {
+  const { bytes, contentType } = dataUrlToBytesAndType(dataUrl);
+  const path = `${driverId}/idcard.jpg`;
+  const supabase = getSupabase();
+  const { error } = await supabase.storage.from('driver-docs').upload(path, bytes, { contentType, upsert: true });
+  if (error) throw new Error('上傳身分證照片失敗：' + error.message);
+  return path;
+}
+
+async function getDriverIdCardUrl(path) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.storage.from('driver-docs').createSignedUrl(path, 300);
+  if (error) throw new Error('讀取身分證照片失敗：' + error.message);
+  return data.signedUrl;
+}
+
+// 跟upload分開呼叫：萬一upload成功但這步失敗，檔案至少已經在bucket裡，夥伴下次重拍
+// 會直接覆蓋，不會卡在「上傳了卻完全沒紀錄」的中間狀態。更新完同步寫回
+// state.data.drivers，跟updateDriverProfile()一樣的收尾方式，呼叫端只要renderContent()
+// 就能看到最新狀態（不用自己手動改state）。
+async function setDriverIdCardPath(driverId, path) {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from('drivers').update({ id_card_path: path }).eq('id', driverId).select().single();
+  if (error) throw new Error('儲存身分證照片狀態失敗：' + error.message);
+  const idx = state.data.drivers.findIndex(d => d.id === driverId);
+  if (idx >= 0) state.data.drivers[idx] = mapDriver(data);
+}
+
+// 主控每次「查看／下載」某位夥伴的身分證照片都留一筆紀錄（誰、何時，見schema.sql
+// PART 52的id_card_views）——PART 35的audit_log只記資料表「寫入」事件，身分證這種
+// 高敏感個資額外需要「誰看過」的軌跡。寫入失敗不擋住查看本身，只在console留痕跡。
+async function logIdCardView(driverId) {
+  try {
+    const supabase = getSupabase();
+    await supabase.from('id_card_views').insert({ driver_id: driverId });
+  } catch (e) { console.error('記錄身分證查看紀錄失敗', e); }
 }

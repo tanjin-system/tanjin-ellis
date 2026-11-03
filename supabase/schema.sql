@@ -1801,3 +1801,130 @@ alter table statements add column if not exists pay_method text not null default
 -- 勞報單上實際顯示的所得人姓名（夥伴本人的法定姓名），才會跟身分證/居留證號對得起來。只有
 -- 主控能設定（不開放給app_driver的update grant），留空時沿用舊行為（用銀行戶名）。
 alter table drivers add column if not exists payroll_name text check (payroll_name is null or char_length(payroll_name) <= 30);
+
+-- ============================================================
+-- PART 52：夥伴自拍身分證正反面（勞報單用途，2026-11-11）
+-- 夥伴在「我的資料」自己用相機拍正反面，前端合成一張A4比例的單張圖片（正面在上、
+-- 反面在下，整張燒進「僅限信興行銷有限公司勞報使用」浮水印），只上傳這一張合成圖，
+-- 不留原始未浮水印版本。存私有bucket driver-docs（沿用PART 12工會證明同一個bucket），
+-- 路徑固定 {driver_id}/idcard.jpg（不是用時間戳記命名——每次重拍用upsert直接覆蓋同一
+-- 個檔案，不留舊版本歷史，避免身分證影像越存越多份）。
+-- 權限設計：夥伴只能上傳/讀取自己路徑下的檔案（RLS比照PART 4 assignment-photos司機
+-- 自己上傳照片那套，用路徑第一段=自己的driver_id判斷），完全看不到別人的；沒有開放
+-- delete，刪除只能由主控處理。主控（app_admin）維持PART 12已經設好的全權限。
+-- id_card_path本身只是一個儲存路徑字串、不是個資內容，但指向的是高敏感影像，比照
+-- bank_account/id_number同等級處理：加進PART 35稽核軌跡的watch＋masked清單（異動只記
+-- 「改了id_card_path」，不記路徑內容本身）。下面用create or replace重新定義
+-- audit_row()，內容跟PART 35完全一樣、只多了這一個欄位（比照PART 41修正PART 39的做法，
+-- 不是定義一支新函式）。
+alter table drivers add column if not exists id_card_path text;
+grant update (id_card_path) on drivers to app_driver;
+
+create policy driver_select_own_iddoc on storage.objects for select to app_driver
+  using (
+    bucket_id = 'driver-docs'
+    and (storage.foldername(name))[1] = auth_driver_id()::text
+  );
+
+create policy driver_upload_own_iddoc on storage.objects for insert to app_driver
+  with check (
+    bucket_id = 'driver-docs'
+    and (storage.foldername(name))[1] = auth_driver_id()::text
+  );
+
+-- 重拍用upsert:true覆蓋同一路徑的既有檔案，Storage底層當UPDATE處理，沒有這條的話
+-- 第一次拍完之後再重拍會被RLS擋下（理由同PART 4 driver_update_own_photos的註解）。
+create policy driver_update_own_iddoc on storage.objects for update to app_driver
+  using (
+    bucket_id = 'driver-docs'
+    and (storage.foldername(name))[1] = auth_driver_id()::text
+  )
+  with check (
+    bucket_id = 'driver-docs'
+    and (storage.foldername(name))[1] = auth_driver_id()::text
+  );
+
+-- 主控每次「查看／下載」某位夥伴的身分證影像，前端都會insert一筆這裡——身分證是
+-- 高敏感個資，PART 35的audit_log只記資料表「寫入」事件，不會記錄「誰在什麼時候
+-- 點開看了哪張身分證照片」這種「讀取」事件，所以另外開一張小表專門記這個，主控自己
+-- 也能讀（在系統上找得到「誰看過」的紀錄），只有觸發這個動作的app_admin能寫入、
+-- 任何人都不能改/刪（只增不改，比照audit_log的精神）。
+create table if not exists id_card_views (
+  id bigserial primary key,
+  driver_id uuid not null references drivers(id) on delete cascade,
+  at timestamptz not null default now()
+);
+create index if not exists idx_id_card_views_driver on id_card_views (driver_id, at desc);
+alter table id_card_views enable row level security;
+revoke all on id_card_views from anon, authenticated, app_driver, public;
+grant select, insert on id_card_views to app_admin;
+create policy admin_all_iddoc_views on id_card_views for all to app_admin using (true) with check (true);
+
+create or replace function audit_row() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  claims jsonb := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb, '{}'::jsonb);
+  who text;
+  o jsonb := case when tg_op in ('UPDATE','DELETE') then to_jsonb(old) else null end;
+  n jsonb := case when tg_op in ('UPDATE','INSERT') then to_jsonb(new) else null end;
+  rid text := coalesce((coalesce(n, o)) ->> 'id', (coalesce(n, o)) ->> 'assignment_id');
+  k text;
+  changed text[] := '{}';
+  od jsonb := '{}'::jsonb;
+  nd jsonb := '{}'::jsonb;
+  watch text[];
+  summ text;
+  masked constant text[] := array['bank_name','bank_branch','bank_account','bank_holder','id_number','phone','access_code','id_card_path'];
+begin
+  who := case claims ->> 'role'
+    when 'app_admin' then '主控'
+    when 'app_driver' then '夥伴:' || coalesce((select name from drivers where id = nullif(claims ->> 'driver_id','')::uuid), '?')
+    else '系統／後端' end;
+
+  -- 各表只看「要追蹤的欄位」；UPDATE 時沒有任何追蹤欄位改變就不記
+  watch := case tg_table_name
+    when 'assignments' then array['fare','payroll_fare_snapshot','billing_total_snapshot','billing_by_channel_snapshot','extra_pay','paid_amount','paid_date','paid_method','fare_manual','billing_manual','driver_id','published']
+    when 'route_versions' then array['driver_fare','billing_total','billing_by_channel','extra_fees','start_date','end_date','distance_km']
+    when 'channels' then array['rate_km','rate_point','flat_amount','tax_mode','status','period_type','start_day','end_day','formula_type','name']
+    when 'drivers' then array['bank_name','bank_branch','bank_account','bank_holder','id_number','phone','access_code','status','name','id_card_path']
+    when 'statements' then array['status','trip_total','adj_total','net_amount','actual_net_amount','tax_amount','nhi_amount','period_start','period_end','pay_date']
+    else null end;
+
+  if tg_op = 'UPDATE' then
+    if watch is not null then
+      foreach k in array watch loop
+        if (o -> k) is distinct from (n -> k) then changed := changed || k; od := od || jsonb_build_object(k, o -> k); nd := nd || jsonb_build_object(k, n -> k); end if;
+      end loop;
+      if array_length(changed, 1) is null then return null; end if;
+      -- 完成任務時系統自動算的請款／薪資快照不算「人工異動」，不記
+      if tg_table_name = 'assignments' and (o ->> 'status') is distinct from (n ->> 'status') then return null; end if;
+    else
+      if o = n then return null; end if;
+      od := o; nd := n;
+    end if;
+    summ := case when watch is not null then '改了：' || array_to_string(changed, '、') else '更新' end;
+  elsif tg_op = 'INSERT' then
+    nd := case when tg_table_name = 'drivers' then jsonb_build_object('name', n ->> 'name') else n end; summ := '新增';
+  else
+    od := case when tg_table_name = 'drivers' then jsonb_build_object('name', o ->> 'name') else o end; summ := '刪除';
+  end if;
+
+  -- 趟次新增／刪除很頻繁（排班、複製、批量刪除）：只留追蹤欄位與日期、路線，不存整列
+  if tg_table_name = 'assignments' and tg_op <> 'UPDATE' then
+    od := (select coalesce(jsonb_object_agg(key, value), '{}'::jsonb) from jsonb_each(od) where key = any (watch || array['trip_date','route_id']));
+    nd := (select coalesce(jsonb_object_agg(key, value), '{}'::jsonb) from jsonb_each(nd) where key = any (watch || array['trip_date','route_id']));
+  end if;
+  -- 夥伴個資與代碼：只記「改了哪些欄位」，內容一律遮掉
+  if tg_table_name = 'drivers' then
+    od := (select coalesce(jsonb_object_agg(key, case when key = any (masked) then to_jsonb('***'::text) else value end), '{}'::jsonb) from jsonb_each(od));
+    nd := (select coalesce(jsonb_object_agg(key, case when key = any (masked) then to_jsonb('***'::text) else value end), '{}'::jsonb) from jsonb_each(nd));
+  end if;
+  if tg_table_name = 'channels' then od := od - 'access_token'; nd := nd - 'access_token'; end if;
+
+  insert into audit_log (actor, table_name, op, row_id, summary, old_data, new_data)
+  values (who, tg_table_name, tg_op, rid, summ, nullif(od, '{}'::jsonb), nullif(nd, '{}'::jsonb));
+  return null;
+end;
+$$;
+-- audit_row()本身是觸發器函式，trg_audit觸發器PART 35已經建過、綁定的是函式名稱不是
+-- 函式內容，create or replace不會動到既有的trigger綁定，這裡不用重新drop/create trigger。

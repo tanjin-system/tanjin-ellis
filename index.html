@@ -567,8 +567,8 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=21"></script>
-<script defer src="js/driver-ui.js?v=6"></script>
+<script defer src="js/data-layer.js?v=22"></script>
+<script defer src="js/driver-ui.js?v=7"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -816,6 +816,223 @@ function openCameraCapture(maxShots, storeName){
       if(shots.length>=maxShots) settle({ dataUrls:shots, coords:geoCoords });
     };
   });
+}
+// ---------------- 夥伴自拍身分證正反面（勞報單用途，2026-11） ----------------
+// 跟openCameraCapture()同一套鏡頭開關/串流處理方式，但多了三件事：
+// 1) 畫面疊一個身分證比例（ISO/IEC 7810 ID-1，85.6×54mm≈1.586）的導引框，只裁切框內
+//    範圍、不是整個鏡頭畫面——不是真正的電腦視覺邊緣偵測，但不用額外載入任何函式庫，
+//    使用者對齊框線拍就能裁出乾淨的證件照，符合這個專案一貫輕量vanilla JS的風格；身分
+//    證照片用途是留底給記帳士看，不是要做OCR辨識，不需要做到更重的自動偵測。
+// 2) 拍完正面、反面各一張後，自動合成一張A4直式版面的單張圖片（正面在上、反面在下），
+//    整張燒進「僅限信興行銷有限公司勞報使用」浮水印文字（跟drawPhotoWatermark一樣直接
+//    畫進canvas像素，不是疊圖層，事後沒辦法無痛裁掉），只上傳合成後的這一張，不保留
+//    未浮水印的原始裁切圖。
+// 3) 每拍一張都做一次簡單的反光檢查（裁切範圍內死白像素佔比）——這只是亮度統計的粗略
+//    經驗法則，不是真正的反光偵測，證件本身是亮面塑膠、強光下本來就可能偏亮，有誤判
+//    空間，所以設計成「提醒＋讓使用者自己選重拍或仍要使用」，不是強制擋下重拍。
+// 回傳 {dataUrl}＝合成完成；{cancelled:true}＝使用者中途取消；{fallback:true}＝裝置
+// 不支援相機串流，呼叫端應退回檔案選擇（見captureIdCardPhoto）。
+const ID_CARD_RATIO = 85.6/54;
+function detectGlareRatio(ctx, w, h){
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const total = w*h;
+  const step = 4 * Math.max(1, Math.round(total/200000)); // 抽樣，避免百萬像素逐一掃太慢
+  let bright = 0, sampled = 0;
+  for(let i=0; i<data.length; i+=step){
+    if(data[i]>250 && data[i+1]>250 && data[i+2]>250) bright++;
+    sampled++;
+  }
+  return sampled ? bright/sampled : 0;
+}
+function confirmGlareDialog(overlay){
+  return new Promise(resolve=>{
+    const dlg = document.createElement('div');
+    dlg.style.cssText = 'position:absolute; inset:0; background:rgba(0,0,0,.75); z-index:10; display:flex; align-items:center; justify-content:center; padding:24px;';
+    dlg.innerHTML = `<div style="background:#1a1a1a; border-radius:12px; padding:20px; max-width:320px; text-align:center; color:#fff;">
+      <div style="font-size:15px; font-weight:700; margin-bottom:8px;">這張照片可能有反光</div>
+      <div style="font-size:13px; color:#ccc; margin-bottom:16px;">畫面裡有一大片死白，可能蓋住部分文字；建議避開光源重拍，或確認清晰可辨後繼續使用。</div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" data-glareretake style="flex:1; padding:12px; border-radius:8px; border:none; background:#444; color:#fff;">重拍</button>
+        <button type="button" data-glareuse style="flex:1; padding:12px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-weight:700;">仍要使用</button>
+      </div>
+    </div>`;
+    overlay.appendChild(dlg);
+    dlg.querySelector('[data-glareretake]').onclick = ()=>{ dlg.remove(); resolve(false); };
+    dlg.querySelector('[data-glareuse]').onclick = ()=>{ dlg.remove(); resolve(true); };
+  });
+}
+function loadImg(dataUrl){
+  return new Promise((resolve,reject)=>{
+    const im = new Image();
+    im.onload = ()=> resolve(im);
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+}
+// 浮水印斜向滿版重複、燒進canvas像素（不是疊圖層，事後沒辦法無痛裁掉／去背）——身分證
+// 影本外流風險高，這行字提醒任何拿到這張圖的人用途僅限於此；不是防盜用的技術手段，
+// 只是多一層嚇阻跟限縮誤用空間。
+function drawIdCardWatermark(ctx, w, h){
+  const text = '僅限信興行銷有限公司勞報使用';
+  ctx.save();
+  ctx.font = `bold ${Math.round(w*0.034)}px -apple-system, "Microsoft JhengHei", sans-serif`;
+  ctx.fillStyle = 'rgba(200,40,40,0.22)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.translate(w/2, h/2);
+  ctx.rotate(-Math.PI/6);
+  const stepY = Math.round(h*0.11);
+  const rows = Math.ceil((h*1.6)/stepY);
+  for(let i=-rows; i<=rows; i++) ctx.fillText(text, 0, i*stepY);
+  ctx.restore();
+}
+// 正反面合成一張A4直式比例的圖片（正面在上、反面在下），各自用cover方式填滿框（置中裁切
+// 超出部分，不拉伸變形），最後燒浮水印。只回傳這一張合成圖。
+async function composeIdCardImage(frontDataUrl, backDataUrl){
+  const [front, back] = await Promise.all([loadImg(frontDataUrl), loadImg(backDataUrl)]);
+  const pageW = 1240, pageH = 1754; // A4直式比例（約1:1.414），解析度夠印出來清楚
+  const canvas = document.createElement('canvas');
+  canvas.width = pageW; canvas.height = pageH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, pageW, pageH);
+  const margin = 60, gap = 40, labelH = 36;
+  const slotW = pageW - margin*2;
+  const slotH = Math.round(slotW / ID_CARD_RATIO);
+  const drawCard = (img, y, label)=>{
+    ctx.fillStyle = '#333';
+    ctx.font = `bold ${labelH-10}px -apple-system, "Microsoft JhengHei", sans-serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(label, margin, y);
+    const imgY = y + labelH;
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 2;
+    ctx.strokeRect(margin, imgY, slotW, slotH);
+    const srcRatio = img.width/img.height, dstRatio = slotW/slotH;
+    let sx=0, sy=0, sw=img.width, sh=img.height;
+    if(srcRatio > dstRatio){ sw = img.height*dstRatio; sx = (img.width-sw)/2; }
+    else { sh = img.width/dstRatio; sy = (img.height-sh)/2; }
+    ctx.drawImage(img, sx, sy, sw, sh, margin, imgY, slotW, slotH);
+    return imgY + slotH;
+  };
+  let y = margin;
+  y = drawCard(front, y, '身分證正面') + gap;
+  drawCard(back, y, '身分證反面');
+  drawIdCardWatermark(ctx, pageW, pageH);
+  return canvas.toDataURL('image/jpeg', 0.88);
+}
+function openIdCardCapture(){
+  return new Promise((resolve)=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve({ fallback:true }); return; }
+    const sides = [{ key:'front', label:'身分證正面' }, { key:'back', label:'身分證反面' }];
+    let sideIdx = 0;
+    const shots = {};
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div style="position:relative; flex:1; overflow:hidden;">
+        <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
+        <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:min(82vw, 82vh); aspect-ratio:${ID_CARD_RATIO}; border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;"></div>
+        <div data-idlabel style="position:absolute; top:12px; left:0; right:0; text-align:center; color:#fff; font-size:16px; font-weight:700; text-shadow:0 1px 3px rgba(0,0,0,.6);"></div>
+      </div>
+      <div style="padding:8px 16px; background:#111; color:#ccc; font-size:12.5px; text-align:center;">請把證件對齊框線拍攝；避免使用閃光燈、避免強光直射證件表面，減少反光</div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-idcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-idshoot disabled style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700; opacity:0.5;">拍照</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const video = overlay.querySelector('video');
+    const frameEl = overlay.querySelector('[data-idframe]');
+    const labelEl = overlay.querySelector('[data-idlabel]');
+    const shootBtn = overlay.querySelector('[data-idshoot]');
+    let stream = null, settled = false;
+    function cleanup(){
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+      if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function settle(result){
+      if(settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+    function updateLabel(){ labelEl.textContent = `請拍攝${sides[sideIdx].label}（${sideIdx+1}/2）`; }
+    updateLabel();
+    let frameReady = false;
+    function markFrameReady(){
+      if(frameReady) return;
+      frameReady = true;
+      shootBtn.disabled = false;
+      shootBtn.style.opacity = '';
+    }
+    video.addEventListener('loadeddata', markFrameReady);
+    setTimeout(markFrameReady, 3000);
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
+      stream = s;
+      video.srcObject = s;
+      video.play().catch(()=>{});
+    }).catch(()=>{ settle({ fallback:true }); });
+    overlay.querySelector('[data-idcancel]').onclick = ()=> settle({ cancelled:true });
+    shootBtn.onclick = async ()=>{
+      if(!video.videoWidth || !video.videoHeight){ settle({ fallback:true }); return; }
+      shootBtn.disabled = true;
+      const frameRect = frameEl.getBoundingClientRect();
+      const videoRect = video.getBoundingClientRect();
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const scale = Math.max(videoRect.width/vw, videoRect.height/vh);
+      const dispW = vw*scale, dispH = vh*scale;
+      const offX = (videoRect.width-dispW)/2, offY = (videoRect.height-dispH)/2;
+      const sx = Math.max(0, (frameRect.left-videoRect.left-offX)/scale);
+      const sy = Math.max(0, (frameRect.top-videoRect.top-offY)/scale);
+      let sw = Math.min(vw-sx, frameRect.width/scale);
+      let sh = Math.min(vh-sy, frameRect.height/scale);
+      if(!(sw>0) || !(sh>0)){ sw = vw; sh = vh; }
+      const maxDim = 1100;
+      const outScale = Math.min(1, maxDim/Math.max(sw,sh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw*outScale); canvas.height = Math.round(sh*outScale);
+      const ctx = canvas.getContext('2d', { willReadFrequently:true });
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const glare = detectGlareRatio(ctx, canvas.width, canvas.height);
+      if(glare > 0.12 && !(await confirmGlareDialog(overlay))){ shootBtn.disabled = false; return; }
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      shots[sides[sideIdx].key] = dataUrl;
+      sideIdx++;
+      if(sideIdx >= sides.length){
+        labelEl.textContent = '處理中…';
+        try{
+          const composed = await composeIdCardImage(shots.front, shots.back);
+          settle({ dataUrl: composed });
+        }catch(e){ settle({ fallback:true }); }
+        return;
+      }
+      updateLabel();
+      shootBtn.disabled = false;
+    };
+  });
+}
+// 拍身分證的統一入口：先試自建相機導引裁切流程，裝置不支援鏡頭串流時退回「依序選兩張
+// 既有照片（正面/反面）」，一樣會自動合成＋燒浮水印，只是沒有導引框、沒有反光檢查。
+async function captureIdCardPhoto(){
+  const result = await openIdCardCapture();
+  if(result.dataUrl) return result.dataUrl;
+  if(!result.fallback) return null; // 使用者自己取消，什麼都不做
+  const pick = (promptText)=> new Promise(resolve=>{
+    alert(promptText);
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*';
+    input.onchange = ()=> resolve(input.files[0] || null);
+    input.click();
+  });
+  const frontFile = await pick('裝置不支援相機拍攝，請選擇身分證正面照片');
+  if(!frontFile) return null;
+  const backFile = await pick('請選擇身分證反面照片');
+  if(!backFile) return null;
+  const [frontUrl, backUrl] = await Promise.all([
+    compressImageFile(frontFile, 1400, 0.85),
+    compressImageFile(backFile, 1400, 0.85)
+  ]);
+  return await composeIdCardImage(frontUrl, backUrl);
 }
 // 台灣財政部電子發票QR Code（左邊那個）固定格式：冒號分隔，第一段(前77碼)依序是
 // 發票字軌(2)+發票號碼(8)+發票日期民國年月日(7＝年3+月2+日2)+隨機碼(4)+銷售額16進位(8)+
@@ -2746,6 +2963,13 @@ function renderDrivers(c){
             <input type="file" id="eUnionFile" accept="image/*" style="max-width:260px;">
           </div>
         </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
+          <label>身分證正反面（勞報單用途）</label>
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">夥伴在自己的「我的資料」頁面拍攝上傳，系統自動合成正反面同頁、已加註浮水印的圖片；主控這裡無法代為上傳，只能查看／下載。</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            ${d.idCardPath ? `<span class="badge completed">已上傳</span> <button type="button" class="btn ghost" data-idcardview="${d.id}">查看</button> <button type="button" class="btn ghost" data-idcarddownload="${d.id}">下載</button>` : '<span class="badge pending">夥伴尚未上傳</span>'}
+          </div>
+        </div>
       </div>
       <div data-etapage="finance" hidden>
         <div class="grid4">
@@ -2894,6 +3118,32 @@ function renderDrivers(c){
           await updateDriverProfile(driver.id, { unionProofPath:'' });
           removeDriverUnionProofFile(old).catch(()=>{});
           renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+    // 身分證查看／下載：每次點都留一筆id_card_views紀錄（誰、何時看過），身分證是高敏感
+    // 個資，寫入紀錄失敗不擋住查看本身（見logIdCardView註解）。
+    listEl.querySelectorAll('[data-idcardview]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.idcardview);
+        try{
+          logIdCardView(driver.id);
+          openPhotoLightbox([await getDriverIdCardUrl(driver.idCardPath)]);
+        }catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-idcarddownload]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.idcarddownload);
+        try{
+          logIdCardView(driver.id);
+          const url = await getDriverIdCardUrl(driver.idCardPath);
+          const blob = await (await fetch(url)).blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `${driver.name}_身分證.jpg`;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
         }catch(err){ alert(err.message); }
       };
     });
