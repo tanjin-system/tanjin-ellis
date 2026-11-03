@@ -5840,7 +5840,8 @@ function renderPayrollPage(c){
     <div id="deferredList"></div>` : ''}
     <div id="payrollPending"></div>
     ${scope ? (()=>{
-      // 這位夥伴的全部月份勞報單（月結＋區間），預設收合；點「查看」切到那一份。
+      // 這位夥伴的全部月份勞報單（月結＋區間，含已開的區間勞報單），直接顯示、不收合——
+      // 選了夥伴就是要處理這一位，這份記錄是重要參考，不該多一次點擊才看得到。
       // 只在選了特定夥伴時顯示——「全部夥伴」畫面不需要一次列出所有人的歷史記錄，用不到又佔畫面。
       const stText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">待簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
       const d = state.data.drivers.find(x=>x.id===scope);
@@ -5848,11 +5849,9 @@ function renderPayrollPage(c){
       if(!d || !list.length) return '';
       const wait = list.filter(x=>x.status==='awaiting_signature').length;
       return `<div class="panel no-print">
-        <details>
-          <summary style="cursor:pointer; font-weight:600;">${escapeHtml(d.name)} 的勞報單記錄（全部月份）　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></summary>
-          <table style="margin-top:6px;"><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
-            <tbody>${list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
-        </details>
+        <h3 style="margin:0 0 8px; font-size:14px;">${escapeHtml(d.name)} 的勞報單記錄（全部月份）　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></h3>
+        <table><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
+          <tbody>${list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
       </div>`;
     })() : ''}
     ${scope ? `<div class="panel no-print">
@@ -6359,11 +6358,11 @@ function renderPayrollPage(c){
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
         ${statementDriftNote(record, live)}
         ${!record ? (fullyCovered
-          ? `<div class="note">這個月已經透過區間勞報單（${coveringStatements.map(statementLabel).join('、')}）處理完畢，不用再開單；詳情跟簽名狀態請看下方「區間勞報單」。新增調整項會算進下一張還沒開的勞報單。</div>`
+          ? `<div class="note">這個月已經透過區間勞報單（${coveringStatements.map(statementLabel).join('、')}）處理完畢，不用再開單；下面是整月合計，詳情跟簽名狀態請看下方「區間勞報單」。新增調整項會算進下一張還沒開的勞報單。</div>`
           : coveringStatements.length
-            ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}）涵蓋部分日期，其餘日期請在下方「區間勞報單」處理；下方「可領淨額」已採用已開出部分的實際扣稅後金額＋尚未開單部分的原始金額計算（不假設整月合併扣稅）。</div>`
-            : `<div class="note">尚未月結確認。配送明細、調整項、可領淨額請直接看下方「區間勞報單」的即時預覽（預設期間就是整個月）——這裡不再重複顯示一次一樣的數字，調整項如果要新增，用上方的「新增調整項」表單即可。</div>`
-        ) : `
+            ? `<div class="note">這個月已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}）涵蓋部分日期，其餘日期請在下方「區間勞報單」處理；下面「可領淨額」已採用已開出部分的實際扣稅後金額＋尚未開單部分的原始金額計算（不假設整月合併扣稅）。</div>`
+            : `<div class="note">尚未月結確認，以下為整月即時試算（未開單部分用原始金額，不假設扣稅）。要正式開單／讓夥伴簽名，請用下方「區間勞報單」。</div>`
+        ) : ''}
         <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
           <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
           <span class="fold-chev">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
@@ -6390,7 +6389,7 @@ function renderPayrollPage(c){
           ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
           ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待付（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
           <tr><td><strong>應付合計（含掛帳）</strong></td><td class="amount"><strong>$${money(payable+defSplit.other.total)}</strong></td></tr>` : ''}
-        </table>`}
+        </table>
       </div>
       ${record ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
       <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
