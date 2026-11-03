@@ -971,10 +971,32 @@ function openIdCardCapture(){
       stream = s;
       video.srcObject = s;
       video.play().catch(()=>{});
-    }).catch(()=>{ settle({ fallback:true }); });
+    }).catch(err=>{
+      // 退回檔案選擇前先留下實際失敗原因（例如使用者拒絕相機權限、這台裝置找不到
+      // 符合的鏡頭），不是靜悄悄切換模式——不然使用者會以為自己用的就是導引裁切
+      // 模式，實際上已經是完全沒有裁切/反光偵測的陽春檔案選擇流程。
+      console.error('身分證相機開啟失敗，改用檔案選擇', err && err.name, err && err.message);
+      settle({ fallback:true, reason: err && (err.name + '：' + err.message) });
+    });
     overlay.querySelector('[data-idcancel]').onclick = ()=> settle({ cancelled:true });
+    // 正面拍完後，畫面上疊一個醒目的✓提示（不只是悄悄換掉上面那行小字），讓使用者清楚
+    // 知道「鏡頭還開著，接下來換拍反面」，不會誤以為拍完一張就結束了。
+    function flashSideDone(){
+      const flash = document.createElement('div');
+      flash.style.cssText = 'position:absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:rgba(44,107,68,.92); color:#fff; font-size:22px; font-weight:700; z-index:5; pointer-events:none;';
+      flash.textContent = '✓ 正面拍攝完成，請翻到反面';
+      overlay.firstElementChild.appendChild(flash);
+      setTimeout(()=>{ if(flash.parentNode) flash.parentNode.removeChild(flash); }, 1100);
+    }
     shootBtn.onclick = async ()=>{
-      if(!video.videoWidth || !video.videoHeight){ settle({ fallback:true }); return; }
+      // 拍第一張（正面）之前鏡頭畫面真的還沒準備好，才當作裝置不支援、整個結束；拍完
+      // 第一張之後如果偶爾讀到暫時的0（部分裝置在忙著處理上一張canvas運算時可能發生），
+      // 不能直接關鏡頭、放棄已經拍到的正面照——只是這一次按鍵沒反應，讓使用者再按一次
+      // 「拍照」就好，拍到一半的進度不會不見。
+      if(!video.videoWidth || !video.videoHeight){
+        if(sideIdx===0){ settle({ fallback:true }); }
+        return;
+      }
       shootBtn.disabled = true;
       const frameRect = frameEl.getBoundingClientRect();
       const videoRect = video.getBoundingClientRect();
@@ -994,7 +1016,9 @@ function openIdCardCapture(){
       const ctx = canvas.getContext('2d', { willReadFrequently:true });
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
       const glare = detectGlareRatio(ctx, canvas.width, canvas.height);
-      if(glare > 0.12 && !(await confirmGlareDialog(overlay))){ shootBtn.disabled = false; return; }
+      // 身分證常是亮面塑膠材質，正常拍攝下本來就容易偏亮，門檻放寬一點、提示文字也
+      // 講清楚「鏡頭不會關、可以直接重拍」，減少正常照片被誤判成反光的機會。
+      if(glare > 0.22 && !(await confirmGlareDialog(overlay))){ shootBtn.disabled = false; return; }
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       shots[sides[sideIdx].key] = dataUrl;
       sideIdx++;
@@ -1006,6 +1030,7 @@ function openIdCardCapture(){
         }catch(e){ settle({ fallback:true }); }
         return;
       }
+      flashSideDone();
       updateLabel();
       shootBtn.disabled = false;
     };
@@ -1024,7 +1049,10 @@ async function captureIdCardPhoto(){
     input.onchange = ()=> resolve(input.files[0] || null);
     input.click();
   });
-  const frontFile = await pick('裝置不支援相機拍攝，請選擇身分證正面照片');
+  // 退回檔案選擇時明確告知使用者：接下來選的照片不會自動裁切、也不會做反光檢查，
+  // 避免使用者誤以為自己用的是完整的導引拍攝流程。result.reason是實際失敗原因（相機
+  // 權限被拒、找不到鏡頭等），方便回報問題時能準確定位，不用再憑猜的。
+  const frontFile = await pick(`無法開啟導引拍攝相機（${result.reason||'不明原因'}），改用一般選照片方式，不會自動裁切、也不會偵測反光——請自行確認照片完整清楚後再選取。請選擇身分證正面照片`);
   if(!frontFile) return null;
   const backFile = await pick('請選擇身分證反面照片');
   if(!backFile) return null;
