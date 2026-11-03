@@ -5773,6 +5773,7 @@ function renderPayrollPage(c){
         <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
       </div>
     </div>
+    <div id="payrollResult"></div>
     ${inbox.length ? `<div class="panel">
       <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
       ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
@@ -5840,18 +5841,20 @@ function renderPayrollPage(c){
     <div id="deferredList"></div>` : ''}
     <div id="payrollPending"></div>
     ${scope ? (()=>{
-      // 這位夥伴的全部月份勞報單（月結＋區間，含已開的區間勞報單），直接顯示、不收合——
-      // 選了夥伴就是要處理這一位，這份記錄是重要參考，不該多一次點擊才看得到。
-      // 只在選了特定夥伴時顯示——「全部夥伴」畫面不需要一次列出所有人的歷史記錄，用不到又佔畫面。
+      // 這位夥伴的全部月份勞報單（月結＋區間），預設收合、點開才看——原本periodRefresh()
+      // 底下還另外列一份「已開的區間勞報單」，2026-11新增全月明細後整合進這裡單一份清單，
+      // 不重複列兩份一樣的資料。
       const stText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">待簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
       const d = state.data.drivers.find(x=>x.id===scope);
       const list = state.data.statements.filter(x=>x.driverId===scope).sort((a,b)=> statementRange(b)[1].localeCompare(statementRange(a)[1]));
       if(!d || !list.length) return '';
       const wait = list.filter(x=>x.status==='awaiting_signature').length;
       return `<div class="panel no-print">
-        <h3 style="margin:0 0 8px; font-size:14px;">${escapeHtml(d.name)} 的勞報單記錄（全部月份）　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></h3>
-        <table><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
-          <tbody>${list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
+        <details>
+          <summary style="cursor:pointer; font-weight:600;">${escapeHtml(d.name)} 的勞報單記錄（全部月份，含已開的區間勞報單）　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></summary>
+          <table style="margin-top:6px;"><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
+            <tbody>${list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
+        </details>
       </div>`;
     })() : ''}
     ${scope ? `<div class="panel no-print">
@@ -5867,7 +5870,6 @@ function renderPayrollPage(c){
       <button class="btn amber" id="perPreview">預覽區間勞報單</button>
     </div>
     <div id="periodResult"></div>` : ''}
-    <div id="payrollResult"></div>
   `;
   // 收回月結（單筆／全部）：確認文字會寫清楚後果，已經簽名的特別提醒。
   async function doRevoke(list){
@@ -6161,7 +6163,10 @@ function renderPayrollPage(c){
     else { state._payrollMonth = x.month; state._scrollTo = 'payrollResult'; }
     renderContent();
   }
-  // 區間勞報單區塊：預覽／確認開單／查看已開的（退回簽名、收回、列印）。
+  // 區間勞報單區塊：只有主控按「預覽區間勞報單」（或改期間／給付日／付款方式，或從「尚未月結」
+  // 清單點「開區間勞報單」直接帶期間過來）才會顯示內容，不然這裡保持空白——避免選了夥伴後
+  // 畫面自動跳出一段預設期間的試算，容易被誤會是已經確定的數字。已開過的區間勞報單清單不在
+  // 這裡重複列，統一看上面「勞報單記錄（全部月份）」那一份。
   async function periodRefresh(){
     const box = document.getElementById('periodResult');
     if(!box) return;
@@ -6172,20 +6177,16 @@ function renderPayrollPage(c){
     const payDate = document.getElementById('perPay').value;
     const payMethod = document.getElementById('perMethod').value;
     state._periodSel = { driverId, start, end, payDate, payMethod };
-    const mine = state.data.statements.filter(x=>x.driverId===driverId && x.periodStart).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd));
     const statusText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">等待夥伴簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
-    const listHtml = `<div class="panel no-print"><h4 style="margin:0 0 6px;">${escapeHtml(driverName(driverId))} 已開的區間勞報單（${mine.length}）</h4>
-      ${mine.length ? `<table><thead><tr><th>期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead><tbody>${mine.map(x=>`<tr><td>${statementLabel(x)}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${statusText(x)}</td><td><button class="btn ghost" data-perview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">還沒有區間勞報單</div>'}</div>`;
-    const wireList = ()=> box.querySelectorAll('[data-perview]').forEach(b=>{ b.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===b.dataset.perview); if(x) openStatementView(x); }; });
-    if(!driverId || !start || !end){ box.innerHTML = listHtml; wireList(); return; }
-    if(end < start){ box.innerHTML = listHtml + '<div class="panel"><div class="empty">結束日期不能早於開始日期</div></div>'; wireList(); return; }
-    box.innerHTML = listHtml + '<div class="empty">載入中...</div>';
+    if(!start || !end){ box.innerHTML = ''; return; }
+    if(end < start){ box.innerHTML = '<div class="panel"><div class="empty">結束日期不能早於開始日期</div></div>'; return; }
+    box.innerHTML = '<div class="empty">載入中...</div>';
     let rangeAssignments;
     try{
       rangeAssignments = await fetchAssignmentsInRange(start, end);
       await ensureAdjustmentsRange(start); await ensureFuelClaimsRange(start);
     }
-    catch(err){ box.innerHTML = listHtml + `<div class="panel"><div class="empty">${err.message}</div></div>`; wireList(); return; }
+    catch(err){ box.innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
     const cur = state._periodSel;
     if(cur.driverId!==driverId || cur.start!==start || cur.end!==end) return; // 使用者可能已經改選
     const driver = state.data.drivers.find(d=>d.id===driverId);
@@ -6213,7 +6214,7 @@ function renderPayrollPage(c){
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('perStart')?.value!==start || document.getElementById('perEnd')?.value!==end) return; // 使用者可能在這段等待期間又改選了別的夥伴/期間
     const payable = ded.actualNet - advanceTotal - paidTotal + carryIn;
     const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
-    box.innerHTML = listHtml + `
+    box.innerHTML = `
       <div class="panel no-print">
         <h3 style="margin-top:0;">${escapeHtml(driverName(driverId))} — ${start}～${end} ${record ? statusText(record) : ''}</h3>
         ${record ? statementDriftNote(record, live) : '<div class="note">尚未開單，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。確認無誤後按「確認開單」凍結金額並開放夥伴簽名。</div>'}
@@ -6241,7 +6242,6 @@ function renderPayrollPage(c){
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="perReject">退回簽名</button>` : ''}
         ${record ? `<button class="btn danger" id="perRevoke" title="帳務有問題時，整份收回、重新計算">收回這張勞報單</button>` : ''}
       </div>`;
-    wireList();
     document.getElementById('perPrint').onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${start}～${end}_勞報單`);
     box.querySelectorAll('[data-perdeladj]').forEach(b=>{
       b.onclick = async ()=>{
@@ -6428,6 +6428,10 @@ function renderPayrollPage(c){
     state._periodSel = null; renderContent();   // 選了夥伴，整頁重畫（會不會出現編輯區塊取決於有沒有選夥伴）
   };
   document.getElementById('pMonth').onchange = refresh;
+  // 從「尚未月結」清單點「開區間勞報單」過來時，state._scrollTo會指定跳到periodResult，
+  // 這種情況代表主控已經明確選好要開哪一段期間，直接預覽；單純選夥伴／換月份則不自動預覽
+  // （要主控自己按「預覽區間勞報單」才會試算、顯示內容）。
+  const autoPreviewPeriod = state._scrollTo === 'periodResult';
   if(scope){
     // 區間區塊：換夥伴時，預設開始日＝這位夥伴上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
     const sel = state._periodSel;
@@ -6439,7 +6443,7 @@ function renderPayrollPage(c){
     } else { setPeriodDefaults(); }
     ['perStart','perEnd','perPay','perMethod'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
     document.getElementById('perPreview').onclick = periodRefresh;
-    periodRefresh();
+    if(autoPreviewPeriod) periodRefresh();
     wireDeferredForm(); renderDeferredPanel();
   }
   renderPendingSettlePanel();
