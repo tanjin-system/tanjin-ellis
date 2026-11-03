@@ -2877,11 +2877,12 @@ async function renderHomeAdmin(c){
   }
   const covNow = computeCoverage(todayStr());
   const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length + covNow.imprecise.length;
+  const noIdCardNames = state.data.drivers.filter(d=>d.status==='active' && !d.idCardPath).map(d=>d.name);
   c.innerHTML = `
     <h2 class="section-title">首頁</h2>
     <p class="section-sub">主控帳號${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
-    ${emptyTrips.length || covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length ? `<div class="rem-box">
-      <h3>⏰ 待辦提醒 <span class="rem-count">${[emptyTrips.length,covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length].filter(Boolean).length}</span></h3>
+    ${emptyTrips.length || covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length || noIdCardNames.length ? `<div class="rem-box">
+      <h3>⏰ 待辦提醒 <span class="rem-count">${[emptyTrips.length,covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length,noIdCardNames.length].filter(Boolean).length}</span></h3>
       ${emptyTrips.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${emptyTrips.length} 趟任務沒有任何店點（夥伴會看到空的行程）：${emptyTrips.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${emptyTrips.length>6?'…':''}。請到週期任務清單刪掉重排，或到路線管理重新套用。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
       ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:'', covNow.imprecise.length?`📍 ${covNow.imprecise.length} 家店座標可能不精確`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
       ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
@@ -2892,6 +2893,7 @@ async function renderHomeAdmin(c){
       ${pendingFuelCount ? `<div class="rem" data-lv="warn"><div class="rem-t">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
       ${backupReminder ? `<div class="rem" data-lv="info"><div class="rem-t">📦 ${backupReminder}，建議去「系統設定」做一次備份。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="settings">前往系統設定</button></div>` : ''}
       ${periodReminders.map(r=>`<div class="rem" data-lv="warn"><div class="rem-t">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="billing">前往請款結算</button></div>`).join('')}
+      ${noIdCardNames.length ? `<div class="rem" data-lv="info"><div class="rem-t">📋 有 ${noIdCardNames.length} 位夥伴尚未上傳身分證正反面：${noIdCardNames.map(escapeHtml).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="drivers">前往夥伴資料</button></div>` : ''}
     </div>` : ''}
     <div class="panel" style="border-color:var(--amber); border-width:2px;">
       <div class="toolbar"><h3 style="margin:0;">請款－薪資即時利潤（${p.monthStr} 至今）</h3><button class="btn ghost" data-goto="billing">查看請款明細</button></div>
@@ -3075,6 +3077,7 @@ function renderDrivers(c){
             登入代碼：<span class="mono">${d.accessCode}</span>
             ${d.unionInsured ? (d.unionProofPath ? '<span class="badge completed" style="margin-left:6px;">已投保職業工會</span>' : '<span class="badge pending" style="margin-left:6px;">工會：已勾選・缺證明圖檔</span>') : ''}
             ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
+            ${d.status==='active' && !d.idCardPath ? '<span class="badge pending" style="margin-left:6px;">尚未上傳身分證</span>' : ''}
           </div>
         </div>
       </div>
@@ -5980,6 +5983,29 @@ function slipUsesV2(record){
   if(!record || record.status==='awaiting_signature') return true;
   return !!record.signedAt && record.signedAt >= PAYROLL_SLIP_V2_CUTOVER;
 }
+// 身分證正反面只需要夾帶一次——使用者要求「第一次出勞報單就需要夾帶，第二次起毋須
+// 夾帶」，不是每張勞報單都附（會計師第一次收到留底後，之後每張都附反而是重複資料）。
+// 判斷依據：這位夥伴目前所有正式勞報單（月結＋區間）裡，依建立時間（createdAt）最早
+// 的那一張，才算「第一次出」；還沒有任何一張正式勞報單時（即將確認的第一張、或單純
+// 預覽還沒確認），也視為第一次。recordId傳null代表「預覽中、還沒存檔」的情況。
+function shouldAttachIdCard(driverId, recordId){
+  const list = state.data.statements.filter(s=>s.driverId===driverId).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  if(!list.length) return true;
+  return !!recordId && list[0].id===recordId;
+}
+// 夾帶身分證附件：跟查看/下載共用同一支getDriverIdCardUrl()，只是包成列印用的HTML頁。
+// signed URL效期5分鐘，匯出當下才去抓，不要提前存起來；抓不到（例如還沒上傳、網路
+// 問題）就安靜跳過，不要讓整份勞報單因此列印失敗。純讀取，不異動任何資料。
+async function idCardAttachmentHtml(driver){
+  if(!driver || !driver.idCardPath) return '';
+  try{
+    const url = await getDriverIdCardUrl(driver.idCardPath);
+    return `<div class="panel payroll-slip" style="max-width:720px;">
+      <h3 style="text-align:center; margin:0 0 14px;">附件：身分證正反面</h3>
+      <img src="${url}" style="width:100%; display:block;">
+    </div>`;
+  }catch(e){ return ''; }
+}
 function payrollAttachmentHtml(driver, monthStr, r, opts){
   opts = opts || {};
   const items = (r.adjustments||[]).filter(a=>a.type==='reimbursement').map(a=>{
@@ -6269,13 +6295,16 @@ function renderPayrollPage(c){
     }
     catch(err){ alert(err.message); btn.disabled=false; btn.textContent=originalText; return; }
     btn.textContent = 'PDF 產生中…';
-    const slips = records.map(record=>{
+    const slipGroups = await Promise.all(records.map(async record=>{
       const driver = state.data.drivers.find(d=>d.id===record.driverId);
       if(!driver) return null;
-      // 一位夥伴勞報單第1頁＋（有代墊款才有的）第2頁明細附件，依序放在一起。
+      // 一位夥伴勞報單第1頁＋（有代墊款才有的）代墊明細＋（第一次出勞報單才有的）
+      // 身分證正反面，依序放在一起。
       const { slipHtml, attHtml } = buildSlipHtmls(driver, record, monthAssignments);
-      return [slipHtml, attHtml].filter(Boolean);
-    }).filter(Boolean).flat();
+      const idCardHtml = shouldAttachIdCard(driver.id, record.id) ? await idCardAttachmentHtml(driver) : '';
+      return [slipHtml, attHtml, idCardHtml].filter(Boolean);
+    }));
+    const slips = slipGroups.filter(Boolean).flat();
     try{ await exportPayrollPortraitPdf(slips, `全體夥伴勞報單_${monthStr}`); }
     finally{ btn.disabled = false; btn.textContent = originalText; }
   };
@@ -6564,7 +6593,10 @@ function renderPayrollPage(c){
         ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="perReject">退回簽名</button>` : ''}
         ${record ? `<button class="btn danger" id="perRevoke" title="帳務有問題時，整份收回、重新計算">收回這張勞報單</button>` : ''}
       </div>`;
-    document.getElementById('perPrint').onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${start}～${end}_勞報單`);
+    document.getElementById('perPrint').onclick = async ()=>{
+      const idCardHtml = shouldAttachIdCard(driverId, record ? record.id : null) ? await idCardAttachmentHtml(driver) : '';
+      exportPayrollPortraitPdf([slipHtml, attHtml, idCardHtml].filter(Boolean), `${driverName(driverId)}_${start}～${end}_勞報單`);
+    };
     box.querySelectorAll('[data-perdeladj]').forEach(b=>{
       b.onclick = async ()=>{
         const adj = r.adjustments.find(x=>x.id===b.dataset.perdeladj);
@@ -6720,7 +6752,10 @@ function renderPayrollPage(c){
         <button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>
       </div>` : ''}`;
     const printBtn = document.getElementById('printStatement');
-    if(printBtn) printBtn.onclick = ()=> exportPayrollPortraitPdf([slipHtml, attHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
+    if(printBtn) printBtn.onclick = async ()=>{
+      const idCardHtml = shouldAttachIdCard(driverId, record.id) ? await idCardAttachmentHtml(driver) : '';
+      exportPayrollPortraitPdf([slipHtml, attHtml, idCardHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
+    };
     const tripsToggle = document.querySelector('[data-tripstoggle]');
     if(tripsToggle) tripsToggle.onclick = ()=>{ payrollTripsExpanded = !payrollTripsExpanded; refresh(); };
     const rejectBtn = document.getElementById('rejectSignBtn');
