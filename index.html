@@ -994,9 +994,34 @@ function openIdCardCropUI(imgDataUrl, label){
     };
   });
 }
+// 最後確認畫面：合成好的A4＋浮水印圖先讓使用者看過，按「完成」才真的回傳去上傳，
+// 「取消」則整個放棄（不是「重新選擇其中一張」，要重來請重新點「拍攝」或「上傳現有照片」
+// ——不做部分重試是為了保持流程簡單，使用者兩張都要重選的情況本來就不常見）。
+// 拍照／上傳兩條路徑都共用這一步，確保使用者送出前都看過最終結果長什麼樣子。
+function confirmIdCardComposite(dataUrl){
+  return new Promise(resolve=>{
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div style="flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; align-items:center;">
+        <div style="color:#fff; font-size:14px; font-weight:700; margin:0 0 10px;">請確認正反面都清楚可辨，沒問題再按「完成」</div>
+        <img src="${dataUrl}" style="max-width:100%; border-radius:8px;">
+      </div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-composecancel style="flex:1; max-width:160px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-composeok style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">完成</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = ()=>{ if(overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+    overlay.querySelector('[data-composecancel]').onclick = ()=>{ cleanup(); resolve(null); };
+    overlay.querySelector('[data-composeok]').onclick = ()=>{ cleanup(); resolve(dataUrl); };
+  });
+}
 // 上傳既有照片的統一入口（跟拍照是平行的兩條路，使用者自己選）：依序選正面、反面照片，
-// 各自用openIdCardCropUI()手動裁切，裁完一樣送進composeIdCardImage()合成＋燒浮水印，
-// 跟拍照流程殊途同歸、最後產生的檔案格式/品質要求完全一致。
+// 各自用openIdCardCropUI()手動裁切，裁完送進composeIdCardImage()合成＋燒浮水印，最後
+// 用confirmIdCardComposite()給使用者看過結果再確認——跟拍照流程殊途同歸，最後產生的
+// 檔案格式/品質要求/確認步驟完全一致。每一步之前都用alert()明確提示現在要選哪一張，
+// 避免使用者選完正面後不知道接下來系統選圖視窗是要選反面、以為卡住了。
 async function uploadIdCardPhotos(){
   const pick = ()=> new Promise(resolve=>{
     const input = document.createElement('input');
@@ -1004,17 +1029,20 @@ async function uploadIdCardPhotos(){
     input.onchange = ()=> resolve(input.files[0] || null);
     input.click();
   });
+  alert('請選擇身分證正面照片');
   const frontFile = await pick();
   if(!frontFile) return null;
   const frontRaw = await compressImageFile(frontFile, 2000, 0.9);
   const frontCropped = await openIdCardCropUI(frontRaw, '身分證正面');
   if(!frontCropped) return null;
+  alert('正面完成，接著請選擇身分證反面照片');
   const backFile = await pick();
   if(!backFile) return null;
   const backRaw = await compressImageFile(backFile, 2000, 0.9);
   const backCropped = await openIdCardCropUI(backRaw, '身分證反面');
   if(!backCropped) return null;
-  return await composeIdCardImage(frontCropped, backCropped);
+  const composed = await composeIdCardImage(frontCropped, backCropped);
+  return await confirmIdCardComposite(composed);
 }
 // 浮水印斜向滿版重複、燒進canvas像素（不是疊圖層，事後沒辦法無痛裁掉／去背）——身分證
 // 影本外流風險高，這行字提醒任何拿到這張圖的人用途僅限於此；不是防盜用的技術手段，
@@ -1190,10 +1218,14 @@ function openIdCardCapture(){
       sideIdx++;
       if(sideIdx >= sides.length){
         labelEl.textContent = '處理中…';
-        try{
-          const composed = await composeIdCardImage(shots.front, shots.back);
-          settle({ dataUrl: composed });
-        }catch(e){ settle({ fallback:true }); }
+        let composed;
+        try{ composed = await composeIdCardImage(shots.front, shots.back); }
+        catch(e){ settle({ fallback:true }); return; }
+        // 先收掉鏡頭畫面再疊確認畫面，不要兩層全螢幕黑畫面疊在一起；跟上傳既有照片
+        // 那條路徑共用同一個confirmIdCardComposite()，使用者送出前都會看過最終結果。
+        cleanup();
+        const confirmed = await confirmIdCardComposite(composed);
+        settle(confirmed ? { dataUrl: confirmed } : { cancelled: true });
         return;
       }
       flashSideDone();
