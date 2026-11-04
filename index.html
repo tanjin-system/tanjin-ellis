@@ -7678,11 +7678,19 @@ async function buildBillingWorkbook(reports, merged, channelIds, start, end){
   });
   return wb;
 }
+// 請款單檔名：「通路名稱＋月份＋月請款單」（例如牧穀10月請款單）；通路跨月份週期
+// （例如7-11每月27日至次月26日）一律以區間「結束日」所在月份為準，比照一般慣例
+// 用結算收尾的月份命名；多通路一起結算時，通路名稱用「、」接在一起。
+function billingFileName(reports, end){
+  const names = reports.map(r=>r.channel.name).join('、');
+  const mon = Number(end.slice(5,7));
+  return `${names}${mon}月請款單`;
+}
 async function downloadBillingExcel(reports, merged, channelIds, start, end){
   const wb = await buildBillingWorkbook(reports, merged, channelIds, start, end);
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `請款單_${start}_${end}.xlsx`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${billingFileName(reports, end).replace(/[\\/:*?"<>|]/g,'_')}.xlsx`;
   document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
 }
 function renderBilling(c){
@@ -7871,7 +7879,7 @@ function renderBilling(c){
     };
     document.getElementById('printBilling').onclick = ()=>{
       const p = pickOrigins('PDF'); if(!p) return;
-      exportPrintable(`請款單_${start}_${end}`, billingPrintHtml(p.reportsPick, p.mergedPick, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
+      exportPrintable(billingFileName(p.reportsPick, end), billingPrintHtml(p.reportsPick, p.mergedPick, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
     };
     document.getElementById('exportBillingXlsx').onclick = async ev=>{
       const p = pickOrigins('Excel'); if(!p) return;
