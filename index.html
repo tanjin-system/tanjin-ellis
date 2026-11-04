@@ -2089,13 +2089,12 @@ function computeProfitSnapshot(){
     return { channel: ch, total: tripTotal + adj, tripTotal, adj, period: { start: calStart, end: today } };
   });
   const revenueTotal = perChannel.reduce((s,x)=>s+x.total, 0);
-  let expenseTotal = 0;
-  state.data.drivers.forEach(d=>{
-    const r = driverMonthly(d.id, monthStr);
-    // 預支只是提前發放薪資、不是公司少付一筆錢，不能從支出扣掉，否則預支
-    // 越多利潤就被灌水越多；沿用勞報單的算法（任務報酬＋加減項，不含預支）。
-    expenseTotal += statementNetFromAdjustments(r.tripTotal, r.adjustments).net;
-  });
+  // 2026-11-04修正：支出以前是用driverMonthly()算「整個月」（含還沒到的日期，例如
+  // 已經先登打、生效日排在今天之後的加減項），但上面的收入是算「本月1號到今天」，
+  // 兩邊時間範圍對不起來，導致這裡顯示的利潤總額跟點開「每日明細」看到的本月合計
+  // 兜不起來。改成直接加總computeProfitDaily()逐日算出來的支出，確保這裡跟展開的
+  // 每日明細永遠是同一個數字、不會再對不齊。
+  const expenseTotal = computeProfitDaily().reduce((s,r)=>s+r.expense, 0);
   return { perChannel, revenueTotal, expenseTotal, profit: revenueTotal-expenseTotal, monthStr };
 }
 function getWeekDates(offset){
