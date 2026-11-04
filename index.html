@@ -8469,6 +8469,19 @@ function monthOptionsHtml(selected, n=6){
 function updateTitle(){
   document.getElementById('appTitle').innerHTML = '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金 Hub</span>';
 }
+// 登出／憑證過期要回登入畫面時呼叫：renderLoginGate() 只會把 #appLayout 藏起來，
+// 不會動到 header 裡的 whoAmI／logoutBtn（這兩個本來就在 #appLayout 外面，是故意
+// 常駐的），也不會動到語音小幫手的浮動頭像（voiceFab，是掛在 document.body 底下的
+// 獨立元素）。沒有這段的話，登出後畫面會卡著上一個人的「夥伴：OOO」字樣、登出按鈕、
+// 跟他的語音助理頭像，雖然點了也不會真的做什麼（都要重新登入才能用），但看起來
+// 像是還留著上一個人的身份，使用者會誤以為系統沒有真的登出。
+function resetAppChrome(){
+  const who = document.getElementById('whoAmI');
+  if(who) who.textContent = '';
+  const btn = document.getElementById('logoutBtn');
+  if(btn) btn.style.display = 'none';
+  if(typeof voiceFabEnsure==='function') voiceFabEnsure(false);
+}
 function updateHeaderBar(){
   const who = document.getElementById('whoAmI');
   const btn = document.getElementById('logoutBtn');
@@ -8520,6 +8533,7 @@ document.getElementById('logoutBtn').onclick = ()=>{
   }
   stopRealtimeSync();
   clearAuth(); state.role=null; state.activeDriverId=null; state.tab=null;
+  resetAppChrome();
   renderLoginGate();
 };
 
@@ -8744,12 +8758,12 @@ async function bootApp(){
     // 是哪裡壞了。
     const isExpired = /jwt expired/i.test(e.message || '');
     alert(isExpired ? '登入已過期，請重新登入。' : ('讀取資料失敗，請重新登入：' + e.message));
-    clearAuth(); renderLoginGate();
+    clearAuth(); resetAppChrome(); renderLoginGate();
     return;
   }
   if(auth.role==='driver'){
     const me = state.data.drivers.find(d=>d.id===auth.driver.id);
-    if(!me || me.status!=='active'){ clearAuth(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
+    if(!me || me.status!=='active'){ clearAuth(); resetAppChrome(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
     if(me.forceCodeReset){ renderForceCodeResetGate(me.id, me.name); return; }
     await syncSupportStops();   // 臨時交給我支援的店點（沒有就是空的）
   }
