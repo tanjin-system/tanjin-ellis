@@ -184,7 +184,11 @@
     body.driver-view nav.tabs button{ flex:1; flex-direction:column; justify-content:center; gap:1px; padding:7px 2px 6px; min-width:0; border-top:none; border-bottom:3px solid transparent; text-align:center; font-size:10.5px; white-space:nowrap; }
     body.driver-view nav.tabs button .ni{ width:auto; font-size:21px; line-height:1.2; }
     body.driver-view nav.tabs button.active{ border-bottom-color:var(--amber); border-top:none; background:var(--tint-warn); }
-  }  .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
+  }
+  /* 夥伴端「我的資料」字體大小設定：只放大/縮小內容區域，分頁列維持原大小不受影響 */
+  body.fs-small #content{ zoom:.88; }
+  body.fs-large #content{ zoom:1.2; }
+  .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
   .btn.amber{ background:var(--amber); color:#1B2129; }
   .btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
   .btn.danger{ background:none; border:1px solid var(--danger); color:var(--danger); }
@@ -568,7 +572,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=23"></script>
-<script defer src="js/driver-ui.js?v=10"></script>
+<script defer src="js/driver-ui.js?v=11"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -2273,7 +2277,15 @@ function gsGo(key){
 // iOS Safari 不理 user-scalable=no，雙指放大要另外擋（只擋夥伴本人）。
 document.addEventListener('gesturestart', e=>{ if(document.body.classList.contains('driver-lock')) e.preventDefault(); });
 document.addEventListener('contextmenu', e=>{ if(document.body.classList.contains('driver-lock') && !/^(INPUT|TEXTAREA)$/.test((e.target||{}).tagName)) e.preventDefault(); });
+// 字體大小偏好存在本機（localStorage），每台裝置/瀏覽器各自記住，不會同步到其他裝置；
+// 只縮放 #content（不影響分頁列），small/large 以外（含沒存過的情況）視為中（不加class＝不縮放）。
+function applyFontSizePref(){
+  const pref = localStorage.getItem('driverFontSize') || 'medium';
+  document.body.classList.toggle('fs-small', pref==='small');
+  document.body.classList.toggle('fs-large', pref==='large');
+}
 function renderNav(){
+  applyFontSizePref();
   const inDriverView = state.adminViewDriver || state.role==='driver';
   const tabs = inDriverView ? DRIVER_TABS : ADMIN_TABS;
   const lockToProfile = state.role==='driver' && !state.adminViewDriver &&

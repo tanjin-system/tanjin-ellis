@@ -1274,6 +1274,15 @@ function renderMyProfile(c){
         ${d.idCardPath ? '<button type="button" class="btn ghost" id="mpIdCardView">查看我上傳的</button>' : ''}
       </div>
     </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">字體大小</h3>
+      <p class="section-sub" style="margin-top:0;">調整整個系統畫面文字的大小，只存在這台裝置上，換別的手機或瀏覽器要重新設定。</p>
+      <div style="display:flex; gap:8px;" id="fsPicker">
+        <button type="button" class="btn ghost" data-fs="small">小</button>
+        <button type="button" class="btn ghost" data-fs="medium">中</button>
+        <button type="button" class="btn ghost" data-fs="large">大</button>
+      </div>
+    </div>
     <div class="panel"><h3 style="margin-top:0;">通知設定</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
   `;
   pushRenderBox(document.getElementById('pushBox'));
@@ -1314,6 +1323,17 @@ function renderMyProfile(c){
       renderNav(); renderContent();
     }catch(err){ alert(err.message); }
   };
+  // 字體大小：存localStorage（本機裝置偏好，不是夥伴資料，不用上傳到資料庫），
+  // 套用後整頁重繪，按鈕的選中樣式也會跟著新的字體大小一起重畫出來。
+  const fsCurrent = localStorage.getItem('driverFontSize') || 'medium';
+  document.querySelectorAll('#fsPicker [data-fs]').forEach(btn=>{
+    if(btn.dataset.fs===fsCurrent) btn.classList.replace('ghost', 'amber');
+    btn.onclick = ()=>{
+      localStorage.setItem('driverFontSize', btn.dataset.fs);
+      applyFontSizePref();
+      renderContent();
+    };
+  });
   // 拍照／上傳現有照片兩個按鈕共用的收尾流程（取得裁切合成好的dataUrl後，上傳＋存路徑＋
   // 重新整理畫面），差別只在前面用哪個函式取得照片（captureIdCardPhoto跑相機、
   // uploadIdCardPhotos跑選檔案＋手動裁切）。
