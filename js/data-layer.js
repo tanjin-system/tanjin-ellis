@@ -2033,8 +2033,13 @@ async function deleteDropPointPhoto(assignmentId, dropPointId) {
   const resetAt = archived ? new Date().toISOString() : undefined;
   const payload = { status: 'pending', photo_url: null, completed_at: null, delivery_lat: null, delivery_lng: null };
   if (resetAt) payload.admin_reset_at = resetAt;
-  const { error: updErr } = await supabase.from('assignment_drop_points').update(payload).eq('id', dropPointId);
+  // .select()強制PostgREST回傳實際被改到的列：Supabase在RLS擋掉整筆更新時（0列符合）
+  // 預設不會回報error，只會悄悄「成功但什麼都沒改」——沒有這個.select()檢查的話，
+  // 畫面會看起來像刪除成功（本機state照樣被改掉），但資料庫其實完全沒變，
+  // 下次重新整理又會變回原狀，而且使用者完全不會知道發生了什麼事。
+  const { data: updRows, error: updErr } = await supabase.from('assignment_drop_points').update(payload).eq('id', dropPointId).select('id');
   if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
+  if (!updRows || !updRows.length) throw new Error('更新店點狀態失敗：沒有任何資料被更新到（可能是權限問題），照片檔案可能已經刪除但狀態沒有改回去，請聯絡工程師確認。');
   if (dp) {
     dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null;
     if (resetAt) dp.adminResetAt = resetAt;
@@ -2054,8 +2059,10 @@ async function deleteDropPointMedia(assignmentId, mediaId) {
     const { error: rmErr } = await supabase.storage.from('assignment-photos').remove([media.path]);
     if (rmErr) throw new Error('刪除照片失敗：' + rmErr.message);
   }
-  const { error: delErr } = await supabase.from('assignment_drop_point_media').delete().eq('id', mediaId);
+  // 同deleteDropPointPhoto，加.select()確保真的有刪到列，不是RLS悄悄擋掉卻不報錯。
+  const { data: delRows, error: delErr } = await supabase.from('assignment_drop_point_media').delete().eq('id', mediaId).select('id');
   if (delErr) throw new Error('刪除附加照片紀錄失敗：' + delErr.message);
+  if (!delRows || !delRows.length) throw new Error('刪除附加照片紀錄失敗：沒有任何資料被刪到（可能是權限問題），請聯絡工程師確認。');
   if (dp) dp.media = (dp.media || []).filter(x => x.id !== mediaId);
 }
 
