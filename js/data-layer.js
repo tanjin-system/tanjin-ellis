@@ -2038,7 +2038,9 @@ async function deleteDropPointPhoto(assignmentId, dropPointId) {
   // 畫面會看起來像刪除成功（本機state照樣被改掉），但資料庫其實完全沒變，
   // 下次重新整理又會變回原狀，而且使用者完全不會知道發生了什麼事。
   const { data: updRows, error: updErr } = await supabase.from('assignment_drop_points').update(payload).eq('id', dropPointId).select('id');
-  if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
+  // 錯誤訊息把 code/details/hint 都印出來（不只 message）：之前遇到的「悄悄失敗」
+  // 就是因為只看 message 看不出真正卡在哪一關，這裡多留一點線索方便下次直接定位。
+  if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message + (updErr.code ? `（code:${updErr.code}）` : '') + (updErr.details ? ` [${updErr.details}]` : '') + (updErr.hint ? ` 提示:${updErr.hint}` : ''));
   if (!updRows || !updRows.length) throw new Error('更新店點狀態失敗：沒有任何資料被更新到（可能是權限問題），照片檔案可能已經刪除但狀態沒有改回去，請聯絡工程師確認。');
   if (dp) {
     dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null;
