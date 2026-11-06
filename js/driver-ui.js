@@ -760,118 +760,10 @@ function renderTodayDetail(todays){
   const dpById = {};
   const aByDpId = {};
   [...todays, ...supportToday].forEach(a=> a.dropPoints.forEach(dp=> { dpById[dp.id]=dp; aByDpId[dp.id]=a; }));
-  // 店點的拍照/上傳/未完成原因/卸貨備註控制項獨立成一支函式（接受任意 root、
-  // 選填 onDone），目前只有 box 自己呼叫（onDone 不用傳，box 已經靠外層
-  // renderContent() 整頁重畫涵蓋到了）；root/onDone 留著是給未來如果有別的
-  // DOM（不在 box 底下，box 重畫不會連帶更新到的）想重用同一套 dpRow() 控制項時用。
-  function wireStopPhotoControls(root, onDone){
-    const refresh = ()=>{ renderContent(); if(onDone) onDone(); };
-    root.querySelectorAll('[data-dpid]').forEach(el=>{
-      const dp = dpById[el.dataset.dpid];
-      if(!dp) return;
-      const items = dpPhotoItems(dp);
-      const vp = el.querySelector('[data-viewphoto]');
-      if(!items.length || !vp) return;
-      const a = aByDpId[el.dataset.dpid];
-      // 任務還沒封存（status !== 'completed'）才開放刪除：跟歷史任務「不可再編輯」
-      // 同一條界線，見 deleteDropPointPhoto/deleteDropPointMedia 的說明。
-      const canDelete = a && a.status!=='completed';
-      vp.onclick = ()=> openPhotoLightbox(items.map(x=>x.url), canDelete ? {
-        onDelete: async (i)=>{
-          const item = items[i];
-          if(item.kind==='main') await deleteDropPointPhoto(a.id, dp.id);
-          else await deleteDropPointMedia(a.id, item.mediaId);
-          refresh();
-        }
-      } : null);
-    });
-    root.querySelectorAll('[data-photo]').forEach(btn=>{
-      const [aid, dpid] = btn.dataset.photo.split('|');
-      const fallbackInput = root.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
-      // 浮水印要疊的店名：跟店點一起查，拍照當下就知道是哪一家，不用等上傳完才補。
-      const storeName = dpLabel(state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid));
-      async function goMany(dataUrls, coords){
-        const up = toast(`📤 照片上傳中（${dataUrls.length} 張），請稍候…`, { type:'info', sticky:true });
-        try{
-          for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl, coords);
-          up.dismiss();
-          state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
-          refresh();
-          showCheckOverlay(dataUrls.length);
-        }catch(err){
-          up.dismiss();
-          if(err.queued){ toast('📦 '+err.message, { type:'info' }); refresh(); }
-          else { console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
-        }
-      }
-      btn.onclick = ()=>{
-        const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-        const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
-        const budget = Math.max(1, 3 - photoCount);
-        capturePhoto(fallbackInput, budget, goMany, storeName);
-      };
-      fallbackInput.onchange = (e)=>{
-        const files = [...e.target.files]; if(!files.length) return;
-        (async ()=>{
-          try{
-            const shots = [];
-            for(const f of files){ const coords = await readExifGps(f); shots.push(await watermarkDataUrl(await compressImageFile(f), storeName, coords)); }
-            await goMany(shots.map(x=>x.dataUrl), shots[0]?.coords||null);
-          }catch(err){
-            console.error('照片處理失敗', err);
-            alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
-          }
-        })();
-      };
-    });
-    root.querySelectorAll('[data-photolib]').forEach(btn=>{
-      const [aid, dpid] = btn.dataset.photolib.split('|');
-      const libInput = root.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
-      btn.onclick = ()=> libInput.click();
-      libInput.onchange = (e)=>{
-        const files = [...e.target.files]; if(!files.length) return;
-        const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-        const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
-        const budget = Math.max(0, 3 - photoCount);
-        const acceptFiles = files.slice(0, budget);
-        const droppedCount = files.length - acceptFiles.length;
-        (async ()=>{
-          try{
-            const shots = [];
-            for(const f of acceptFiles){ const coords = await readExifGps(f); shots.push(await watermarkDataUrl(await compressImageFile(f), dpLabel(dp), coords)); }
-            for(const s of shots) await fillNextPhotoSlot(aid, dpid, s.dataUrl, s.coords);
-            state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
-            showCheckOverlay(acceptFiles.length);
-            if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
-            refresh();
-          }catch(err){
-            if(err.queued){ toast('📦 '+err.message, { type:'info' }); refresh(); return; }
-            console.error('照片處理失敗', err);
-            alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
-          }
-        })();
-      };
-    });
-    root.querySelectorAll('[data-issue]').forEach(sel=>{
-      sel.onchange = async ()=>{
-        const [aid, dpid] = sel.dataset.issue.split('|');
-        try{ await setDropPointIssueReason(aid, dpid, sel.value || null); refresh(); }
-        catch(err){ alert(err.message); }
-      };
-    });
-    root.querySelectorAll('[data-unloadnote]').forEach(btn=>{
-      btn.onclick = async ()=>{
-        const sourceDpId = btn.dataset.unloadnote;
-        if(!sourceDpId){ alert('這個店點還沒有建檔完整的店點資料，無法寫備註。'); return; }
-        const current = state.data.dropPoints.find(x=>x.id===sourceDpId)?.unloadNote || '';
-        const note = prompt('卸貨備註（其他司機排到這個店也會看到，留空代表清除）：', current);
-        if(note===null) return;
-        try{ await saveUnloadNote(sourceDpId, note.trim()); refresh(); }
-        catch(err){ alert(err.message); }
-      };
-    });
-  }
-  wireStopPhotoControls(box);
+  // 店點的拍照/上傳/刪除/未完成原因/卸貨備註控制項是top-level的wireStopPhotoControls()
+  // （見下方定義，接受 root/dpById/aByDpId/onDone）；renderHistory() 也會呼叫同一套，
+  // 讓主控重置過的店點在歷史任務畫面裡一樣能重新拍照上傳，不用再寫一次同樣的邏輯。
+  wireStopPhotoControls(box, dpById, aByDpId);
   box.querySelectorAll('[data-tlpick]').forEach(el=>{
     el.onclick = ()=>{ const [aid, dpid] = el.dataset.tlpick.split('|'); const st = tlState(aid); st.focus = (st.eff===dpid) ? '__none' : dpid; renderTodayDetail(todays); };
   });
@@ -905,39 +797,154 @@ function renderTodayDetail(todays){
       catch(err){ alert(err.message); }
     };
   });
-  // 「拍照上傳」跟「上傳照片」兩顆按鈕共用同一套「填下一格」邏輯：一個
-  // 店點最多3格照片，第1格是主要送達證明照（決定這個點是否算已完成），
-  // 第2、3格是附加照片。不管是先按拍照還是先用相簿上傳、按第幾次，都是
-  // 「填下一個還空著的格子」，沒有「重新拍照＝覆蓋」這種概念了——按鈕
-  // 名稱/行為固定，同一顆「拍照上傳」按第一次拍主要照片，再按同一顆按
-  // 鈕拍第二、第三張，都是往後補上附加照片，直到補滿3格按鈕才會消失
-  // （見上面模板 photoCount<3 的判斷）。
-  async function fillNextPhotoSlot(aid, dpid, dataUrl, coords){
-    // 重複照片偵測：同一張(或幾乎同一張)照片被送了兩次——例如相簿多選時
-    // 不小心選到同一張、或網路重試時同一張被送了第二次——擋下來，不要讓
-    // 同一個店點塞進兩張一樣的證明照。雜湊只存在這次畫面存活期間（不用
-    // 跨登入階段記），夠用來擋這種短時間內的重複。
-    const hash = quickImageHash(dataUrl);
-    if(!state._recentPhotoHashes) state._recentPhotoHashes = new Set();
-    if(state._recentPhotoHashes.has(hash)) throw new Error('偵測到重複照片，請重新拍攝或選擇不同照片。');
-    const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
-    const kind = (dp && dp.status!=='completed') ? 'photo' : 'media';
-    try{
-      if(kind==='photo') await uploadDropPointPhoto(aid, dpid, dataUrl, coords);
-      else await handleExtraMediaUpload(aid, dpid, [dataUrl]);
-    }catch(err){
-      // 網路真的不通才排進離線佇列——業務邏輯錯誤（RLS擋掉、資料不存在…）
-      // 重試也不會成功，直接把原始錯誤丟回去讓夥伴知道，不要假裝排隊等好。
-      if(!isNetworkError(err)) throw err;
-      await queuePendingUpload({ kind, assignmentId:aid, dropPointId:dpid, dataUrl, coords: kind==='photo' ? coords : null });
-      markDpOfflinePending(dpid);
-      state._recentPhotoHashes.add(hash);
-      await thumbsAdd(dpid, dataUrl);
-      throw Object.assign(new Error('目前沒有網路，已將照片存在裝置上，恢復網路後會自動上傳。'), { queued:true });
+}
+
+// 店點的拍照/上傳/刪除/未完成原因/卸貨備註控制項：原本寫在 renderTodayDetail() 裡面、
+// 靠閉包抓 dpById/aByDpId，只有「今天」畫面能用；現在改成 top-level 函式、dpById/aByDpId
+// 當參數傳進來，renderTodayDetail()跟renderHistory()可以共用同一套（主控在歷史任務裡
+// 重置某個店點後，一樣要能在這裡重新拍照上傳，不想為了這個再寫一次一樣的邏輯）。
+// onDone 選填：呼叫端如果有自己的局部重畫邏輯（目前都沒有，都是靠外層 renderContent()
+// 整頁重畫涵蓋到），可以傳進來在 refresh() 時一併執行。
+function wireStopPhotoControls(root, dpById, aByDpId, onDone){
+  const refresh = ()=>{ renderContent(); if(onDone) onDone(); };
+  root.querySelectorAll('[data-dpid]').forEach(el=>{
+    const dp = dpById[el.dataset.dpid];
+    if(!dp) return;
+    const items = dpPhotoItems(dp);
+    const vp = el.querySelector('[data-viewphoto]');
+    if(!items.length || !vp) return;
+    const a = aByDpId[el.dataset.dpid];
+    // 任務還沒封存（status !== 'completed'）才開放夥伴自己刪除；主控（state.role==='admin'，
+    // 含「主控檢視中」）不受這條限制，封存後真的傳錯也能刪——理由見
+    // deleteDropPointPhoto/deleteDropPointMedia 的說明。
+    const canDelete = a && (a.status!=='completed' || state.role==='admin');
+    vp.onclick = ()=> openPhotoLightbox(items.map(x=>x.url), canDelete ? {
+      onDelete: async (i)=>{
+        const item = items[i];
+        if(item.kind==='main') await deleteDropPointPhoto(a.id, dp.id);
+        else await deleteDropPointMedia(a.id, item.mediaId);
+        refresh();
+      }
+    } : null);
+  });
+  root.querySelectorAll('[data-photo]').forEach(btn=>{
+    const [aid, dpid] = btn.dataset.photo.split('|');
+    const fallbackInput = root.querySelector(`[data-photofallback="${aid}|${dpid}"]`);
+    // 浮水印要疊的店名：跟店點一起查，拍照當下就知道是哪一家，不用等上傳完才補。
+    const storeName = dpLabel(state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid));
+    async function goMany(dataUrls, coords){
+      const up = toast(`📤 照片上傳中（${dataUrls.length} 張），請稍候…`, { type:'info', sticky:true });
+      try{
+        for(const dataUrl of dataUrls) await fillNextPhotoSlot(aid, dpid, dataUrl, coords);
+        up.dismiss();
+        state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
+        refresh();
+        showCheckOverlay(dataUrls.length);
+      }catch(err){
+        up.dismiss();
+        if(err.queued){ toast('📦 '+err.message, { type:'info' }); refresh(); }
+        else { console.error('照片處理失敗', err); alert('照片處理失敗：'+err.message+'\n請重新拍攝再試一次。'); }
+      }
     }
+    btn.onclick = ()=>{
+      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+      const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
+      const budget = Math.max(1, 3 - photoCount);
+      capturePhoto(fallbackInput, budget, goMany, storeName);
+    };
+    fallbackInput.onchange = (e)=>{
+      const files = [...e.target.files]; if(!files.length) return;
+      (async ()=>{
+        try{
+          const shots = [];
+          for(const f of files){ const coords = await readExifGps(f); shots.push(await watermarkDataUrl(await compressImageFile(f), storeName, coords)); }
+          await goMany(shots.map(x=>x.dataUrl), shots[0]?.coords||null);
+        }catch(err){
+          console.error('照片處理失敗', err);
+          alert('照片處理失敗：'+err.message+'\n請重新拍攝或選擇另一張照片再試一次。');
+        }
+      })();
+    };
+  });
+  root.querySelectorAll('[data-photolib]').forEach(btn=>{
+    const [aid, dpid] = btn.dataset.photolib.split('|');
+    const libInput = root.querySelector(`[data-photolibinput="${aid}|${dpid}"]`);
+    btn.onclick = ()=> libInput.click();
+    libInput.onchange = (e)=>{
+      const files = [...e.target.files]; if(!files.length) return;
+      const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+      const photoCount = (dp && dp.status==='completed'?1:0) + (dp?.media||[]).filter(m=>m.type==='image').length;
+      const budget = Math.max(0, 3 - photoCount);
+      const acceptFiles = files.slice(0, budget);
+      const droppedCount = files.length - acceptFiles.length;
+      (async ()=>{
+        try{
+          const shots = [];
+          for(const f of acceptFiles){ const coords = await readExifGps(f); shots.push(await watermarkDataUrl(await compressImageFile(f), dpLabel(dp), coords)); }
+          for(const s of shots) await fillNextPhotoSlot(aid, dpid, s.dataUrl, s.coords);
+          state._flashDp = dpid; if(state._tl && state._tl[aid]) state._tl[aid].focus = null;
+          showCheckOverlay(acceptFiles.length);
+          if(droppedCount>0) alert(`一個店點最多3張照片，已上傳${acceptFiles.length}張，其餘 ${droppedCount} 張未上傳。`);
+          refresh();
+        }catch(err){
+          if(err.queued){ toast('📦 '+err.message, { type:'info' }); refresh(); return; }
+          console.error('照片處理失敗', err);
+          alert('照片處理失敗：'+err.message+'\n請重新選擇照片再試一次。');
+        }
+      })();
+    };
+  });
+  root.querySelectorAll('[data-issue]').forEach(sel=>{
+    sel.onchange = async ()=>{
+      const [aid, dpid] = sel.dataset.issue.split('|');
+      try{ await setDropPointIssueReason(aid, dpid, sel.value || null); refresh(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  root.querySelectorAll('[data-unloadnote]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const sourceDpId = btn.dataset.unloadnote;
+      if(!sourceDpId){ alert('這個店點還沒有建檔完整的店點資料，無法寫備註。'); return; }
+      const current = state.data.dropPoints.find(x=>x.id===sourceDpId)?.unloadNote || '';
+      const note = prompt('卸貨備註（其他司機排到這個店也會看到，留空代表清除）：', current);
+      if(note===null) return;
+      try{ await saveUnloadNote(sourceDpId, note.trim()); refresh(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+}
+// 「拍照上傳」跟「上傳照片」兩顆按鈕共用同一套「填下一格」邏輯：一個
+// 店點最多3格照片，第1格是主要送達證明照（決定這個點是否算已完成），
+// 第2、3格是附加照片。不管是先按拍照還是先用相簿上傳、按第幾次，都是
+// 「填下一個還空著的格子」，沒有「重新拍照＝覆蓋」這種概念了——按鈕
+// 名稱/行為固定，同一顆「拍照上傳」按第一次拍主要照片，再按同一顆按
+// 鈕拍第二、第三張，都是往後補上附加照片，直到補滿3格按鈕才會消失
+// （見上面模板 photoCount<3 的判斷）。
+async function fillNextPhotoSlot(aid, dpid, dataUrl, coords){
+  // 重複照片偵測：同一張(或幾乎同一張)照片被送了兩次——例如相簿多選時
+  // 不小心選到同一張、或網路重試時同一張被送了第二次——擋下來，不要讓
+  // 同一個店點塞進兩張一樣的證明照。雜湊只存在這次畫面存活期間（不用
+  // 跨登入階段記），夠用來擋這種短時間內的重複。
+  const hash = quickImageHash(dataUrl);
+  if(!state._recentPhotoHashes) state._recentPhotoHashes = new Set();
+  if(state._recentPhotoHashes.has(hash)) throw new Error('偵測到重複照片，請重新拍攝或選擇不同照片。');
+  const dp = state.data.assignments.find(x=>x.id===aid)?.dropPoints.find(x=>x.id===dpid);
+  const kind = (dp && dp.status!=='completed') ? 'photo' : 'media';
+  try{
+    if(kind==='photo') await uploadDropPointPhoto(aid, dpid, dataUrl, coords);
+    else await handleExtraMediaUpload(aid, dpid, [dataUrl]);
+  }catch(err){
+    // 網路真的不通才排進離線佇列——業務邏輯錯誤（RLS擋掉、資料不存在…）
+    // 重試也不會成功，直接把原始錯誤丟回去讓夥伴知道，不要假裝排隊等好。
+    if(!isNetworkError(err)) throw err;
+    await queuePendingUpload({ kind, assignmentId:aid, dropPointId:dpid, dataUrl, coords: kind==='photo' ? coords : null });
+    markDpOfflinePending(dpid);
     state._recentPhotoHashes.add(hash);
-    await thumbsAdd(dpid, dataUrl); // 上傳成功才存縮圖（只存本機，不佔流量）
+    await thumbsAdd(dpid, dataUrl);
+    throw Object.assign(new Error('目前沒有網路，已將照片存在裝置上，恢復網路後會自動上傳。'), { queued:true });
   }
+  state._recentPhotoHashes.add(hash);
+  await thumbsAdd(dpid, dataUrl); // 上傳成功才存縮圖（只存本機，不佔流量）
 }
 
 // dpPhotoItems：跟 dpPhotoUrls 同一套順序／篩選條件，多附上每張照片對應的「怎麼刪」
@@ -1001,7 +1008,18 @@ async function renderHistory(c){
                 const statusBadge = dp.status==='completed'
                   ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
                   : `<span class="badge pending">未完成${dp.issueReason?'：'+dp.issueReason:''}</span>`;
-                return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photo && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}</div>`;
+                // 主控刪掉已封存任務的照片後，這一格的 issue_reason 會被設成固定提示字串
+                // （見 deleteDropPointPhoto），這裡靠它判斷要不要重新長出拍照/上傳按鈕——
+                // 其他原因關閉的未完成店點（夥伴自己選的理由）維持唯讀，不會多長按鈕出來。
+                const reopened = dp.status!=='completed' && dp.issueReason===ADMIN_RESET_PHOTO_REASON;
+                return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photo && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
+                  ${reopened ? `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                    <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>
+                    <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${dp.id}" style="display:none;">
+                    <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photolib="${a.id}|${dp.id}">上傳照片</button>
+                    <input type="file" accept="image/*" multiple data-photolibinput="${a.id}|${dp.id}" style="display:none;">
+                  </div>` : ''}
+                </div>`;
               }).join('')}
             </div>
           `).join('')}
@@ -1013,12 +1031,12 @@ async function renderHistory(c){
     head.onclick = ()=> head.closest('.date-group').classList.toggle('open');
   });
   const dpById = {};
-  list.forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
-  c.querySelectorAll('[data-dpid]').forEach(el=>{
-    const dp = dpById[el.dataset.dpid];
-    const urls = dp ? dpPhotoUrls(dp) : [];
-    if(urls.length) el.querySelector('[data-viewphoto]').onclick = ()=> openPhotoLightbox(urls);
-  });
+  const aByDpId = {};
+  list.forEach(a=> a.dropPoints.forEach(dp=> { dpById[dp.id]=dp; aByDpId[dp.id]=a; }));
+  // 跟「今天」畫面共用同一套控制項（拍照/上傳/刪除）：歷史任務預設還是唯讀
+  // （沒有按鈕可以按），只有主控剛剛重置過的那一格才會真的用到拍照/上傳；
+  // 看圖彈窗的刪除則是主控（state.role==='admin'）才會出現，夥伴自己看不到。
+  wireStopPhotoControls(c, dpById, aByDpId);
 }
 
 let editingFuelClaimId = null;

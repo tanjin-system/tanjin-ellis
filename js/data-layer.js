@@ -1999,32 +1999,46 @@ async function uploadDropPointMedia(assignmentId, dropPointId, items) {
   return uploaded;
 }
 
-// 刪除傳錯的照片（夥伴端「拍照上傳」開放的刪除功能）：只能刪還沒封存進歷史任務的
-// 店點（assignment.status !== 'completed'），跟「歷史任務不可再編輯」是同一條界線，
-// 避免已經確定的送達／請款憑證事後被動手腳——這個檢查在這裡（應用層）做，RLS 本身
-// 不知道「已封存」這個概念，跟既有 driver_update_own 系列 policy 的設計一致。
+// 刪除傳錯的照片（夥伴端「拍照上傳」開放的刪除功能）：夥伴自己只能刪還沒封存進
+// 歷史任務的店點（assignment.status !== 'completed'），跟「歷史任務不可再編輯」是
+// 同一條界線，避免已經確定的送達／請款憑證事後被動手腳；主控（state.role==='admin'，
+// 含「主控檢視中」用夥伴視角操作）不受這條限制，可以在封存後發現真的傳錯時刪除、
+// 讓夥伴補傳——這個檢查在這裡（應用層）做，RLS 本身不知道「已封存」這個概念，
+// 跟既有 driver_update_own 系列 policy 的設計一致；主控本來就對這些表/Storage有
+// 全權限（admin_all policy），不需要另外調整資料庫權限。
 // 刪的是主要送達證明照：這張照片決定這個點算不算已完成，刪掉後沒有照片就不該再算
-// 已送達，所以連同把店點狀態退回 pending，要重新拍照才會再變回已完成。
+// 已送達，所以連同把店點狀態退回 pending，要重新拍照才會再變回已完成；這裡刻意不動
+// assignment 本身的 status（維持 completed，請款／報酬快照都不受影響），讓歷史任務
+// 畫面上其他已經確定的店點繼續鎖住，只有被重置的這一格重新開放拍照上傳。
+// 主控在「已封存」的任務上刪照片時，額外把 issue_reason 設成固定的提示字串（借用
+// 既有欄位，不用改資料庫）：renderHistory() 靠這個字串判斷「這格是被主控重置、要
+// 重新拍照」，才會在本來唯讀的歷史任務畫面上重新長出拍照/上傳按鈕——跟夥伴自己
+// 選的「通路未下單」之類正常未完成原因分開，不會互相誤判。重新拍照成功後
+// uploadDropPointPhoto 本來就會把 issue_reason 清掉，badge 會自動變回「已完成」。
+const ADMIN_RESET_PHOTO_REASON = '主控已刪除照片，請重新拍照上傳';
 async function deleteDropPointPhoto(assignmentId, dropPointId) {
   const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a && a.status === 'completed') throw new Error('這趟任務已經完成封存，無法再刪除照片。');
+  const archived = a && a.status === 'completed';
+  if (archived && state.role !== 'admin') throw new Error('這趟任務已經完成封存，無法再刪除照片。');
   const dp = a?.dropPoints.find(x => x.id === dropPointId);
   const path = dp?.photoPath || `${assignmentId}/${dropPointId}.jpg`;
   const supabase = getSupabase();
   const { error: rmErr } = await supabase.storage.from('assignment-photos').remove([path]);
   if (rmErr) throw new Error('刪除照片失敗：' + rmErr.message);
+  const reason = archived ? ADMIN_RESET_PHOTO_REASON : null;
   const { error: updErr } = await supabase.from('assignment_drop_points')
-    .update({ status: 'pending', photo_url: null, completed_at: null, delivery_lat: null, delivery_lng: null })
+    .update({ status: 'pending', photo_url: null, completed_at: null, delivery_lat: null, delivery_lng: null, issue_reason: reason })
     .eq('id', dropPointId);
   if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
-  if (dp) { dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null; }
+  if (dp) { dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null; dp.issueReason = reason; }
 }
 
 // 刪的是附加照片（第2、3格）：只是把格子空出來，不影響店點完成狀態——跟主要照片
-// 是分開的兩件事，見上面 uploadDropPointMedia 的說明。同樣只能在還沒封存前刪。
+// 是分開的兩件事，見上面 uploadDropPointMedia 的說明。夥伴自己同樣只能在還沒封存前
+// 刪；主控不受限制，理由同 deleteDropPointPhoto。
 async function deleteDropPointMedia(assignmentId, mediaId) {
   const a = state.data.assignments.find(x => x.id === assignmentId);
-  if (a && a.status === 'completed') throw new Error('這趟任務已經完成封存，無法再刪除照片。');
+  if (a && a.status === 'completed' && state.role !== 'admin') throw new Error('這趟任務已經完成封存，無法再刪除照片。');
   let dp, media;
   for (const dpp of (a?.dropPoints || [])) { const m = (dpp.media || []).find(x => x.id === mediaId); if (m) { dp = dpp; media = m; break; } }
   const supabase = getSupabase();
