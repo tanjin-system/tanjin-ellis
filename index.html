@@ -571,8 +571,8 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=23"></script>
-<script defer src="js/driver-ui.js?v=11"></script>
+<script defer src="js/data-layer.js?v=24"></script>
+<script defer src="js/driver-ui.js?v=12"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -8425,18 +8425,35 @@ function renderExport(c){
 // 像之前那樣「同一頁裡有的門店有照片縮圖、有的沒有」看起來時有時無
 // （其實是每張縮圖都直接下載，只是簽名連結偶爾失敗才會看起來不一致），
 // 同時也減少Supabase流量。
-function openPhotoLightbox(urls){
+// opts.onDelete（選填，只有夥伴端「今天」畫面在任務還沒封存時會傳）：傳了才會在每張
+// 照片右上角多一顆「刪除」，夥伴傳錯照片時可以自己刪掉重拍，不用整趟任務都卡住。
+// 其他呼叫端（歷史任務、身分證/工會證明照片）沒傳 opts，畫面跟原本一模一樣。
+function openPhotoLightbox(urls, opts){
   if(!urls || !urls.length) return;
+  opts = opts || {};
   let host = document.getElementById('photoLightboxHost');
   if(!host){ host = document.createElement('div'); host.id = 'photoLightboxHost'; document.body.appendChild(host); }
   host.innerHTML = `<div class="modal-backdrop" id="photoLightboxBackdrop">
     <div class="modal-box" style="max-width:480px;">
       <div class="toolbar"><strong>送達照片</strong><button class="btn ghost" id="photoLightboxClose">關閉</button></div>
-      ${urls.map(u=>`<img src="${u}" style="width:100%; border-radius:4px; margin-bottom:8px; display:block;" loading="lazy">`).join('')}
+      ${urls.map((u,i)=>`<div style="position:relative; margin-bottom:8px;">
+        <img src="${u}" style="width:100%; border-radius:4px; display:block;" loading="lazy">
+        ${opts.onDelete ? `<button type="button" data-lbdel="${i}" style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:6px; padding:6px 10px; font-size:12px;">🗑 刪除</button>` : ''}
+      </div>`).join('')}
     </div>
   </div>`;
   document.getElementById('photoLightboxBackdrop').onclick = (e)=>{ if(e.target.id==='photoLightboxBackdrop') host.innerHTML=''; };
   document.getElementById('photoLightboxClose').onclick = ()=> host.innerHTML='';
+  if(opts.onDelete){
+    host.querySelectorAll('[data-lbdel]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        if(!confirm('確定要刪除這張照片嗎？刪除後要重新拍照上傳。')) return;
+        btn.disabled = true; btn.textContent = '刪除中…';
+        try{ await opts.onDelete(Number(btn.dataset.lbdel)); host.innerHTML=''; }
+        catch(err){ alert(err.message); btn.disabled = false; btn.textContent = '🗑 刪除'; }
+      };
+    });
+  }
 }
 // 近6個月（含本月）供月份下拉選單共用，由新到舊排序。月結算這類表單原本
 // 用 <input type="month">，手機瀏覽器原生的月份選擇器不好點、也容易選到

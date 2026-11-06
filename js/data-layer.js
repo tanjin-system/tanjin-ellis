@@ -1999,6 +1999,44 @@ async function uploadDropPointMedia(assignmentId, dropPointId, items) {
   return uploaded;
 }
 
+// 刪除傳錯的照片（夥伴端「拍照上傳」開放的刪除功能）：只能刪還沒封存進歷史任務的
+// 店點（assignment.status !== 'completed'），跟「歷史任務不可再編輯」是同一條界線，
+// 避免已經確定的送達／請款憑證事後被動手腳——這個檢查在這裡（應用層）做，RLS 本身
+// 不知道「已封存」這個概念，跟既有 driver_update_own 系列 policy 的設計一致。
+// 刪的是主要送達證明照：這張照片決定這個點算不算已完成，刪掉後沒有照片就不該再算
+// 已送達，所以連同把店點狀態退回 pending，要重新拍照才會再變回已完成。
+async function deleteDropPointPhoto(assignmentId, dropPointId) {
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (a && a.status === 'completed') throw new Error('這趟任務已經完成封存，無法再刪除照片。');
+  const dp = a?.dropPoints.find(x => x.id === dropPointId);
+  const path = dp?.photoPath || `${assignmentId}/${dropPointId}.jpg`;
+  const supabase = getSupabase();
+  const { error: rmErr } = await supabase.storage.from('assignment-photos').remove([path]);
+  if (rmErr) throw new Error('刪除照片失敗：' + rmErr.message);
+  const { error: updErr } = await supabase.from('assignment_drop_points')
+    .update({ status: 'pending', photo_url: null, completed_at: null, delivery_lat: null, delivery_lng: null })
+    .eq('id', dropPointId);
+  if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
+  if (dp) { dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null; }
+}
+
+// 刪的是附加照片（第2、3格）：只是把格子空出來，不影響店點完成狀態——跟主要照片
+// 是分開的兩件事，見上面 uploadDropPointMedia 的說明。同樣只能在還沒封存前刪。
+async function deleteDropPointMedia(assignmentId, mediaId) {
+  const a = state.data.assignments.find(x => x.id === assignmentId);
+  if (a && a.status === 'completed') throw new Error('這趟任務已經完成封存，無法再刪除照片。');
+  let dp, media;
+  for (const dpp of (a?.dropPoints || [])) { const m = (dpp.media || []).find(x => x.id === mediaId); if (m) { dp = dpp; media = m; break; } }
+  const supabase = getSupabase();
+  if (media?.path) {
+    const { error: rmErr } = await supabase.storage.from('assignment-photos').remove([media.path]);
+    if (rmErr) throw new Error('刪除照片失敗：' + rmErr.message);
+  }
+  const { error: delErr } = await supabase.from('assignment_drop_point_media').delete().eq('id', mediaId);
+  if (delErr) throw new Error('刪除附加照片紀錄失敗：' + delErr.message);
+  if (dp) dp.media = (dp.media || []).filter(x => x.id !== mediaId);
+}
+
 // ---------- 離線上傳佇列（IndexedDB） ----------
 // 訊號差的店家（地下室、倉庫）拍完照上傳失敗，不該直接把照片丟掉逼夥伴重拍——
 // 先把整筆「要做的事」存進手機本地，恢復上網後自動補送。用IndexedDB不用

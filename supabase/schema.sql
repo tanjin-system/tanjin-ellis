@@ -1928,3 +1928,32 @@ end;
 $$;
 -- audit_row()本身是觸發器函式，trg_audit觸發器PART 35已經建過、綁定的是函式名稱不是
 -- 函式內容，create or replace不會動到既有的trigger綁定，這裡不用重新drop/create trigger。
+
+-- PART 53：夥伴「拍照上傳」開放刪除傳錯的照片（2026-11-06）
+-- 一個店點最多3格照片：第1格是主要送達證明照（決定這個點算不算已完成，存在
+-- assignment_drop_points.photo_url）、第2、3格是附加照片（assignment_drop_point_media）。
+-- 原本兩種都只能新增、不能刪，傳錯張沒辦法補救。現在開放夥伴自己刪：
+--   - 刪主要照片：連同把店點狀態退回 pending（沒有照片就不該算已送達，要重新拍照才會再變已完成）。
+--   - 刪附加照片：只是把格子空出來，不影響完成狀態。
+-- 範圍限制（跟「歷史任務不可再編輯」同一條界線，避免已經確定的送達／請款憑證事後被動手腳）：
+-- 只能刪 assignment.status 還不是 'completed' 的任務（這個檢查在應用程式層做，RLS 本身
+-- 不知道「已封存」這個概念——跟既有 driver_update_own 系列 policy 的設計一致）。
+-- 權限／Storage 刪除物件的 ownership 判斷完全比照既有 select/insert/update policy
+-- （含支援夥伴 helper_id 那段邏輯），避免又另外長出一套不一致的規則。
+grant delete on storage.objects to app_driver;
+grant delete on assignment_drop_point_media to app_driver;
+
+create policy driver_delete_own_photos on storage.objects for delete to app_driver
+  using (
+    bucket_id = 'assignment-photos'
+    and (
+      exists (select 1 from assignments a where a.id::text = (storage.foldername(name))[1] and a.driver_id = auth_driver_id())
+      or exists (select 1 from assignment_drop_points d where d.assignment_id::text = (storage.foldername(name))[1] and d.helper_id = auth_driver_id())
+    )
+  );
+
+create policy driver_delete_own on assignment_drop_point_media for delete to app_driver
+  using (
+    exists (select 1 from assignment_drop_points adp where adp.id = assignment_drop_point_media.assignment_drop_point_id and adp.helper_id = auth_driver_id())
+    or exists (select 1 from assignment_drop_points adp join assignments a on a.id = adp.assignment_id where adp.id = assignment_drop_point_media.assignment_drop_point_id and a.driver_id = auth_driver_id())
+  );

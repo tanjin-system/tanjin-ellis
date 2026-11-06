@@ -758,7 +758,8 @@ function renderTodayDetail(todays){
   // 重開，之前「一開頁面就自動載入當天所有已完成照片」會讓同一批照片被
   // 重複下載很多次，是 Storage 流量爆量的主因之一。
   const dpById = {};
-  [...todays, ...supportToday].forEach(a=> a.dropPoints.forEach(dp=> dpById[dp.id]=dp));
+  const aByDpId = {};
+  [...todays, ...supportToday].forEach(a=> a.dropPoints.forEach(dp=> { dpById[dp.id]=dp; aByDpId[dp.id]=a; }));
   // 店點的拍照/上傳/未完成原因/卸貨備註控制項獨立成一支函式（接受任意 root、
   // 選填 onDone），目前只有 box 自己呼叫（onDone 不用傳，box 已經靠外層
   // renderContent() 整頁重畫涵蓋到了）；root/onDone 留著是給未來如果有別的
@@ -767,9 +768,22 @@ function renderTodayDetail(todays){
     const refresh = ()=>{ renderContent(); if(onDone) onDone(); };
     root.querySelectorAll('[data-dpid]').forEach(el=>{
       const dp = dpById[el.dataset.dpid];
-      const urls = dp ? dpPhotoUrls(dp) : [];
+      if(!dp) return;
+      const items = dpPhotoItems(dp);
       const vp = el.querySelector('[data-viewphoto]');
-      if(urls.length && vp) vp.onclick = ()=> openPhotoLightbox(urls);
+      if(!items.length || !vp) return;
+      const a = aByDpId[el.dataset.dpid];
+      // 任務還沒封存（status !== 'completed'）才開放刪除：跟歷史任務「不可再編輯」
+      // 同一條界線，見 deleteDropPointPhoto/deleteDropPointMedia 的說明。
+      const canDelete = a && a.status!=='completed';
+      vp.onclick = ()=> openPhotoLightbox(items.map(x=>x.url), canDelete ? {
+        onDelete: async (i)=>{
+          const item = items[i];
+          if(item.kind==='main') await deleteDropPointPhoto(a.id, dp.id);
+          else await deleteDropPointMedia(a.id, item.mediaId);
+          refresh();
+        }
+      } : null);
     });
     root.querySelectorAll('[data-photo]').forEach(btn=>{
       const [aid, dpid] = btn.dataset.photo.split('|');
@@ -926,11 +940,17 @@ function renderTodayDetail(todays){
   }
 }
 
+// dpPhotoItems：跟 dpPhotoUrls 同一套順序／篩選條件，多附上每張照片對應的「怎麼刪」
+// 資訊（主要照片 vs 附加照片的哪一筆），給「傳錯刪除」功能用；dpPhotoUrls 保留原本
+// 只回傳網址的簽章，其他呼叫端（歷史任務、看圖彈窗預設行為）不用跟著改。
+function dpPhotoItems(dp){
+  const items = [];
+  if(dp.photo) items.push({ url:dp.photo, kind:'main' });
+  (dp.media||[]).filter(m=>m.type==='image' && m.url).forEach(m=> items.push({ url:m.url, kind:'media', mediaId:m.id }));
+  return items;
+}
 function dpPhotoUrls(dp){
-  const urls = [];
-  if(dp.photo) urls.push(dp.photo);
-  (dp.media||[]).filter(m=>m.type==='image' && m.url).forEach(m=> urls.push(m.url));
-  return urls;
+  return dpPhotoItems(dp).map(x=>x.url);
 }
 async function renderHistory(c){
   const dId = state.activeDriverId;
