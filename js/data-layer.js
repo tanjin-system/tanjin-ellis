@@ -111,6 +111,11 @@ function mapAssignment(row) {
       deliveryLng: p.delivery_lng != null ? Number(p.delivery_lng) : null,
       completedAt: p.completed_at || null,
       issueReason: p.issue_reason || null,
+      // 主控在已封存的任務上刪掉這一格的照片時會寫入這個時間戳，不是空的、
+      // 而且目前狀態不是completed，代表「等主控處理完、等重新拍照」——
+      // 跟夥伴自己選的issue_reason分開記，因為issue_reason有固定選項的
+      // check constraint，塞不進去這種系統自動產生的提示文字。
+      adminResetAt: p.admin_reset_at || null,
       helperId: p.helper_id || null, helperName: p.helper_name || '', delegationId: p.delegation_id || null, completedBy: p.completed_by || null,
       // 主要送達證明照以外的附加照片/影片（見 assignment_drop_point_media）；
       // url 要另外呼叫 resolvePhotoUrls() 才會補上簽名連結，跟 photo 欄位同一套機制。
@@ -2010,12 +2015,12 @@ async function uploadDropPointMedia(assignmentId, dropPointId, items) {
 // 已送達，所以連同把店點狀態退回 pending，要重新拍照才會再變回已完成；這裡刻意不動
 // assignment 本身的 status（維持 completed，請款／報酬快照都不受影響），讓歷史任務
 // 畫面上其他已經確定的店點繼續鎖住，只有被重置的這一格重新開放拍照上傳。
-// 主控在「已封存」的任務上刪照片時，額外把 issue_reason 設成固定的提示字串（借用
-// 既有欄位，不用改資料庫）：renderHistory() 靠這個字串判斷「這格是被主控重置、要
-// 重新拍照」，才會在本來唯讀的歷史任務畫面上重新長出拍照/上傳按鈕——跟夥伴自己
-// 選的「通路未下單」之類正常未完成原因分開，不會互相誤判。重新拍照成功後
-// uploadDropPointPhoto 本來就會把 issue_reason 清掉，badge 會自動變回「已完成」。
-const ADMIN_RESET_PHOTO_REASON = '主控已刪除照片，請重新拍照上傳';
+// 主控在「已封存」的任務上刪照片時，額外寫入 admin_reset_at 時間戳（新欄位，見
+// supabase/schema.sql PART 54）：renderHistory() 靠「狀態不是completed、而且
+// admin_reset_at有值」判斷「這格是被主控重置、要重新拍照」，才會在本來唯讀的
+// 歷史任務畫面上重新長出拍照/上傳按鈕。原本想借用issue_reason欄位存一個提示
+// 字串，但那欄位有固定選項的 check constraint（只允許'通路未下單'等4個值），
+// 塞系統自訂文字會直接整個更新失敗，所以改成獨立欄位，不動issue_reason。
 async function deleteDropPointPhoto(assignmentId, dropPointId) {
   const a = state.data.assignments.find(x => x.id === assignmentId);
   const archived = a && a.status === 'completed';
@@ -2025,12 +2030,15 @@ async function deleteDropPointPhoto(assignmentId, dropPointId) {
   const supabase = getSupabase();
   const { error: rmErr } = await supabase.storage.from('assignment-photos').remove([path]);
   if (rmErr) throw new Error('刪除照片失敗：' + rmErr.message);
-  const reason = archived ? ADMIN_RESET_PHOTO_REASON : null;
-  const { error: updErr } = await supabase.from('assignment_drop_points')
-    .update({ status: 'pending', photo_url: null, completed_at: null, delivery_lat: null, delivery_lng: null, issue_reason: reason })
-    .eq('id', dropPointId);
+  const resetAt = archived ? new Date().toISOString() : undefined;
+  const payload = { status: 'pending', photo_url: null, completed_at: null, delivery_lat: null, delivery_lng: null };
+  if (resetAt) payload.admin_reset_at = resetAt;
+  const { error: updErr } = await supabase.from('assignment_drop_points').update(payload).eq('id', dropPointId);
   if (updErr) throw new Error('更新店點狀態失敗：' + updErr.message);
-  if (dp) { dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null; dp.issueReason = reason; }
+  if (dp) {
+    dp.status = 'pending'; dp.photoPath = null; dp.photo = null; dp.completedAt = null; dp.deliveryLat = null; dp.deliveryLng = null;
+    if (resetAt) dp.adminResetAt = resetAt;
+  }
 }
 
 // 刪的是附加照片（第2、3格）：只是把格子空出來，不影響店點完成狀態——跟主要照片

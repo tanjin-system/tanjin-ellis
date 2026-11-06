@@ -1957,3 +1957,14 @@ create policy driver_delete_own on assignment_drop_point_media for delete to app
     exists (select 1 from assignment_drop_points adp where adp.id = assignment_drop_point_media.assignment_drop_point_id and adp.helper_id = auth_driver_id())
     or exists (select 1 from assignment_drop_points adp join assignments a on a.id = adp.assignment_id where adp.id = assignment_drop_point_media.assignment_drop_point_id and a.driver_id = auth_driver_id())
   );
+
+-- PART 54：主控可以在任務「已封存」後刪除夥伴傳錯的照片（2026-11-06）
+-- PART 53 的刪除限制（只能刪 assignment.status != 'completed' 的）只套用在夥伴自己身上，
+-- 主控（state.role==='admin'，含「主控檢視中」用夥伴視角操作）不受限制——主控本來就
+-- 對 assignment_drop_points／assignment_drop_point_media／storage.objects 有全權限
+-- （admin_all 系列 policy，using(true)），這一半不需要任何資料庫異動。
+-- 唯一需要的異動：主控刪掉已封存店點的主要照片時，要標記「這格在等重新拍照」，
+-- 讓歷史任務畫面知道該不該重新長出拍照/上傳按鈕。原本想直接寫進 issue_reason
+-- （不想加新欄位），但那欄位有 check constraint 只允許4個固定值（見 PART 4 附近
+-- 定義），塞系統自訂提示文字會直接整個 UPDATE 失敗，所以改成獨立的時間戳欄位。
+alter table assignment_drop_points add column if not exists admin_reset_at timestamptz;

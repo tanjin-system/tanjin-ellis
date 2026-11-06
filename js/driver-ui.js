@@ -1008,12 +1008,13 @@ async function renderHistory(c){
                 const statusBadge = dp.status==='completed'
                   ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
                   : `<span class="badge pending">未完成${dp.issueReason?'：'+dp.issueReason:''}</span>`;
-                // 主控刪掉已封存任務的照片後，這一格的 issue_reason 會被設成固定提示字串
+                // 主控刪掉已封存任務的照片後，這一格的 admin_reset_at 會被寫入時間戳
                 // （見 deleteDropPointPhoto），這裡靠它判斷要不要重新長出拍照/上傳按鈕——
                 // 其他原因關閉的未完成店點（夥伴自己選的理由）維持唯讀，不會多長按鈕出來。
-                const reopened = dp.status!=='completed' && dp.issueReason===ADMIN_RESET_PHOTO_REASON;
+                const reopened = dp.status!=='completed' && dp.adminResetAt;
                 return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photo && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
-                  ${reopened ? `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                  ${reopened ? `<div style="font-size:12px; color:var(--danger); margin-top:6px;">主控已刪除這張照片，請重新拍照上傳</div>
+                  <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
                     <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>
                     <input type="file" accept="image/*" capture="environment" data-photofallback="${a.id}|${dp.id}" style="display:none;">
                     <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photolib="${a.id}|${dp.id}">上傳照片</button>
