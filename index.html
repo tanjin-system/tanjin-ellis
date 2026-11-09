@@ -175,6 +175,15 @@
   .route-fold{ margin-top:7px; }
   .route-fold > .fold-head{ padding:10px 12px; }
   .route-fold > .fold-body{ padding:4px 10px 10px; }
+  /* 路線管理手機版：一些說明文字跟收合箭頭在電腦版有空間放、手機版太擠，手機版直接不顯示；
+     .rm-hide 的東西手機版隱藏、電腦版正常顯示，.rm-only 相反（平常隱藏，只在手機版顯示當作精簡替代字）；
+     名稱特地跟別處已經在用的 .m-only 分開，避免兩邊規則互相打架。 */
+  #routeTableWrap .rm-only{ display:none; }
+  @media (max-width:640px){
+    #routeTableWrap .fold-chev{ display:none; }
+    #routeTableWrap .rm-hide{ display:none; }
+    #routeTableWrap .rm-only{ display:inline; }
+  }
   .route-detail-inner{ padding-top:6px; }
   /* 手機：輸入框一律 16px——iOS 在輸入框字小於 16px 時，點進去會自動把整個畫面放大（很難操作）；16px 就不會。 */
   @media (max-width:640px){
@@ -4630,7 +4639,7 @@ function renderRouteDetail(rid){
         <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
         ${(v.extraFees||[]).length ? `<div style="font-size:12px; margin-top:4px; color:var(--ink-soft);">額外固定費：${(v.extraFees||[]).map(x=>`${escapeHtml(channelName(x.channelId))} $${money(x.amount)}${x.solo!==false?'（只收固定費）':''}${x.note?`（${escapeHtml(x.note)}）`:''}`).join('、')}（已含在請款總額內）</div>` : ''}
         <div style="font-size:12.5px; margin:8px 0 0;">夥伴費用 <strong>$${money(v.driverFare||0)}</strong></div>
-        ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航</a>` : ''; })()}
+        ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;"><span class="rm-hide">開啟Google地圖多點導航</span><span class="rm-only">導航</span></a>` : ''; })()}
         <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
         ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
         <button class="btn ghost" data-verfix="${v.id}" style="margin-top:8px; padding:4px 12px; font-size:12px;">修正這個版本的日期／拆賬…</button>
@@ -4645,7 +4654,7 @@ function renderRouteDetail(rid){
           ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
         </span>
       </div>
-      <p style="font-size:12.5px; color:var(--ink-soft);">任務起點：${og?(og.label||og.address):(r.originAddr||'—')}（固定跟隨路線設定，如需更改任務起點請新增一條路線）</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">任務起點：${og?(og.label||og.address):(r.originAddr||'—')}<span class="rm-hide">（固定跟隨路線設定，如需更改任務起點請新增一條路線）</span></p>
       <div class="field" style="max-width:260px;"><label>地區（選填，用於路線列表收合分組）</label>
         <div style="display:flex; gap:6px;">
           <input id="rvRegion" list="regionOptionsDetail" value="${r.region||''}" style="flex:1;">
@@ -4672,7 +4681,7 @@ function renderRouteDetail(rid){
       <div id="dpSearchResults" style="margin-top:6px;"></div>
 
       <label style="margin-top:10px; display:block;">目前順序（可用↑↓調整，實際跑車順序以此為準）</label>
-      ${(()=>{ const link = buildMultiStopMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;">開啟Google地圖多點導航（依下面目前順序）</a>` : ''; })()}
+      ${(()=>{ const link = buildMultiStopMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;"><span class="rm-hide">開啟Google地圖多點導航（依下面目前順序）</span><span class="rm-only">導航</span></a>` : ''; })()}
       <div data-orderlist="${r.id}">
         ${draft.order.map((id,i)=>{
           const dp = state.data.dropPoints.find(x=>x.id===id);
@@ -4681,7 +4690,7 @@ function renderRouteDetail(rid){
             <span>
               <button class="btn ghost" data-up="${r.id}|${i}" ${i===0?'disabled':''}>↑</button>
               <button class="btn ghost" data-down="${r.id}|${i}" ${i===draft.order.length-1?'disabled':''}>↓</button>
-              <button class="btn danger" data-remove="${r.id}|${i}">移除</button>
+              <button class="btn danger" data-remove="${r.id}|${i}"><span class="rm-hide">移除</span><span class="rm-only">✕</span></button>
             </span>
           </div>`;
         }).join('') || '<div class="empty">尚未加入任何店點</div>'}
@@ -4701,12 +4710,12 @@ function renderRouteDetail(rid){
       <div class="grid3">
         <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
         <div class="field"><label>夥伴費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
-        <div class="field"><label>請款總額（元｜僅用於下方自動建議拆賬比例）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
+        <div class="field"><label>請款總額（元<span class="rm-hide">｜僅用於下方自動建議拆賬比例</span>）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
       </div>
       <div id="rvFeeHint" style="font-size:12px; color:var(--ink-soft); margin:2px 0 6px;"></div>
       <label style="margin-top:8px; display:block;">額外固定費（另計：不受里程、店數影響，每跑一趟加收；例如某家店另有一筆固定物流費）</label>
       <div id="rvExtra" style="margin:4px 0 8px;"></div>
-      <label style="margin-top:8px; display:block;">通路拆賬金額（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與夥伴結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</label>
+      <label style="margin-top:8px; display:block;">通路拆賬金額<span class="rm-hide">（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與夥伴結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</span></label>
       <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
       <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
     </div>
@@ -4732,7 +4741,7 @@ function renderRouteDetail(rid){
     resultsEl.innerHTML = kw ? (matches.map(dp=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
         <span>${dpLabel(dp)}（${channelName(dp.channelId)}）</span>
         <button class="btn ghost" data-dpaddbtn="${r.id}|${dp.id}">加入</button>
-      </div>`).join('') || '<div class="empty">找不到符合的店點</div>') : '<p style="font-size:11.5px; color:var(--ink-soft);">輸入關鍵字開始搜尋（店點數量多時，不會一次全部列出）</p>';
+      </div>`).join('') || '<div class="empty">找不到符合的店點</div>') : '<p class="rm-hide" style="font-size:11.5px; color:var(--ink-soft);">輸入關鍵字開始搜尋（店點數量多時，不會一次全部列出）</p>';
     resultsEl.querySelectorAll('[data-dpaddbtn]').forEach(btn=>{
       btn.onclick = ()=>{
         const [routeId, dpId] = btn.dataset.dpaddbtn.split('|');
