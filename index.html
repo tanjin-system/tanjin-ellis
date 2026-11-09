@@ -175,6 +175,12 @@
   .route-fold{ margin-top:7px; }
   .route-fold > .fold-head{ padding:10px 12px; }
   .route-fold > .fold-body{ padding:4px 10px 10px; }
+  /* 路線卡片標題列的夥伴／請款／毛利三個數字：label 疊在數字上面各自成一欄，比原本擠在一行好讀。 */
+  .route-head{ flex-wrap:wrap; }
+  .route-stats{ display:flex; gap:16px; }
+  .route-stat{ display:flex; flex-direction:column; align-items:flex-end; line-height:1.3; }
+  .route-stat-label{ font-size:10.5px; color:var(--ink-soft); }
+  .route-stat-value{ font-size:13px; font-weight:700; white-space:nowrap; }
   /* 路線管理手機版：一些說明文字跟收合箭頭在電腦版有空間放、手機版太擠，手機版直接不顯示；
      .rm-hide 的東西手機版隱藏、電腦版正常顯示，.rm-only 相反（平常隱藏，只在手機版顯示當作精簡替代字）；
      名稱特地跟別處已經在用的 .m-only 分開，避免兩邊規則互相打架。 */
@@ -4298,12 +4304,15 @@ function routeRowHtml(r){
   const open = expandedRouteId===r.id;
   // 路線本身也用跟地區一樣的收合卡片樣式（.fold）：整排都能點開，不用額外的「管理」按鈕文字；
   // 手機版不會因為獨立的按鈕欄位被撐出表格寬度，順便解決了手機版要左右滑動才看得到「管理」的問題。
+  const marginColor = hasBoth ? ((billingVersion.billingTotal - openVersion.driverFare) >= 0 ? 'var(--teal)' : 'var(--danger)') : 'inherit';
   return `<div class="fold route-fold ${open?'open':''}" data-toggleroute="${r.id}">
-    <div class="fold-head" style="flex-wrap:wrap;">
+    <div class="fold-head route-head">
       <span style="font-weight:600;">${routeDisplayName(r.name)}${r.status==='inactive'?' <span class="badge pending">已停用</span>':''}</span>
-      <span style="display:flex; gap:12px; flex-wrap:wrap; font-size:12px; font-weight:400; color:var(--ink-soft);">
-        <span>夥伴 ${fareText}</span><span>請款 ${billingText}</span><span>毛利 ${marginText}</span>
-      </span>
+      <div class="route-stats">
+        <div class="route-stat"><span class="route-stat-label">夥伴</span><span class="route-stat-value">${fareText}</span></div>
+        <div class="route-stat"><span class="route-stat-label">請款</span><span class="route-stat-value">${billingText}</span></div>
+        <div class="route-stat"><span class="route-stat-label">毛利</span><span class="route-stat-value" style="color:${marginColor};">${marginText}</span></div>
+      </div>
       <span class="fold-chev">${open?'▾':'▸'}</span>
     </div>
     <div class="fold-body" data-routebody="${r.id}" style="${open?'':'display:none;'}"></div>
