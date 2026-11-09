@@ -4298,7 +4298,9 @@ function renderRouteTable(){
     if(!kw) return true;
     const og = state.data.origins.find(o=>o.address===r.originAddr);
     const originText = (og?(og.label||og.address):r.originAddr||'').toLowerCase();
-    return r.name.toLowerCase().includes(kw) || originText.includes(kw) || (r.seq||'').toLowerCase().includes(kw);
+    // routeDisplayName() 把「第一車」轉成「R1」只是畫面顯示、不會改資料庫裡存的 r.name，
+    // 但使用者搜尋時打的是畫面上看到的「R1」，只比對 r.name 原始字串會完全比對不到，一律加進來一起比對。
+    return r.name.toLowerCase().includes(kw) || routeDisplayName(r.name).toLowerCase().includes(kw) || originText.includes(kw) || (r.seq||'').toLowerCase().includes(kw);
   });
   if(!filtered.length){
     wrap.innerHTML = `<div class="panel"><div class="empty">${kw?'找不到符合的路線':'尚未建立任何路線'}</div></div>`;
