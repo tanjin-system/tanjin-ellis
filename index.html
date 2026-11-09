@@ -170,8 +170,12 @@
   .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
   @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} .nav-group{ display:none; } nav.tabs button{ width:auto; flex:none; } }
-  /* 路線管理列表在手機寬度會橫向溢出（表格5欄+管理按鈕比螢幕寬），手機版先隱藏夥伴費用／請款費用／毛利三欄，這三個數字點開「管理」後的版本區塊裡都看得到，不會漏資訊。 */
-  @media (max-width:640px){ #routeTableWrap table th:nth-child(2), #routeTableWrap table td:nth-child(2), #routeTableWrap table th:nth-child(3), #routeTableWrap table td:nth-child(3), #routeTableWrap table th:nth-child(4), #routeTableWrap table td:nth-child(4){ display:none; } }
+  /* 路線管理：路線本身也是可點開的收合卡片（.route-fold），巢狀包在地區卡片的 .fold-body 裡，
+     兩層卡片的左右留白疊起來會太寬，這裡把巢狀那一層的留白縮小；展開後的管理內容也不再額外套一層 .panel 留白。 */
+  .route-fold{ margin-top:7px; }
+  .route-fold > .fold-head{ padding:10px 12px; }
+  .route-fold > .fold-body{ padding:4px 10px 10px; }
+  .route-detail-inner{ padding-top:6px; }
   /* 手機：輸入框一律 16px——iOS 在輸入框字小於 16px 時，點進去會自動把整個畫面放大（很難操作）；16px 就不會。 */
   @media (max-width:640px){
     input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea{ font-size:16px !important; }
@@ -527,7 +531,6 @@
   .origin-title{ background:var(--group); font-weight:600; padding:8px 10px; margin:14px 0 6px; border-radius:var(--radius); }
   table.route-grid tr.assign-detail-row td{ white-space:normal; text-align:left; cursor:default; background:var(--bg-soft2); padding:10px; }
   table.route-grid tr.assign-detail-row .panel{ margin:0; }
-  tr.route-detail-row td{ background:var(--bg-soft2); padding:10px; }
   @media print{ nav.tabs,header,.no-print{ display:none !important; } main{ max-width:100%; padding:0; } body{ background:var(--panel); } }
   /* 開機畫面：手機打開系統到畫面真正能用之前，中間那段（載入 js/*.js、抓資料）原本是一片
      空白，看起來像當機。這塊用最前面、不依賴任何外部資源的純 HTML/CSS 畫出來，開頭就能
@@ -4216,7 +4219,7 @@ function renderRoutes(c){
 }
 let routeDraft = {};
 let expandedRouteId = null;
-let expandedRouteBox = null; // 目前展開中那個「管理」面板實際插入的容器（插在被點的那一列下方），
+let expandedRouteBox = null; // 目前展開中那張路線卡片自己的 .fold-body（data-routebody），
 // 讓 renderRouteDetail() 內部存檔/刪除後能重新渲染回同一個位置，不會跳回頁面最底部的舊容器。
 let routeListSearch = '';
 let regionExpandedSet = new Set(); // 使用者手動展開過的地區名稱，預設全部收合
@@ -4283,13 +4286,19 @@ function routeRowHtml(r){
   const billingText = billingVersion && billingVersion.billingTotal != null ? `$${money(billingVersion.billingTotal)}` : '尚未設定';
   const hasBoth = openVersion && openVersion.driverFare != null && billingVersion && billingVersion.billingTotal != null;
   const marginText = hasBoth ? `$${money(billingVersion.billingTotal - openVersion.driverFare)}` : '—';
-  return `<tr>
-    <td>${routeDisplayName(r.name)}${r.status==='inactive'?' <span class="badge pending">已停用</span>':''}</td>
-    <td class="amount">${fareText}</td>
-    <td class="amount">${billingText}</td>
-    <td class="amount">${marginText}</td>
-    <td><button class="btn ${expandedRouteId===r.id?'amber':'ghost'}" data-toggleroute="${r.id}">${expandedRouteId===r.id?'收合':'管理'}</button></td>
-  </tr>`;
+  const open = expandedRouteId===r.id;
+  // 路線本身也用跟地區一樣的收合卡片樣式（.fold）：整排都能點開，不用額外的「管理」按鈕文字；
+  // 手機版不會因為獨立的按鈕欄位被撐出表格寬度，順便解決了手機版要左右滑動才看得到「管理」的問題。
+  return `<div class="fold route-fold ${open?'open':''}" data-toggleroute="${r.id}">
+    <div class="fold-head" style="flex-wrap:wrap;">
+      <span style="font-weight:600;">${routeDisplayName(r.name)}${r.status==='inactive'?' <span class="badge pending">已停用</span>':''}</span>
+      <span style="display:flex; gap:12px; flex-wrap:wrap; font-size:12px; font-weight:400; color:var(--ink-soft);">
+        <span>夥伴 ${fareText}</span><span>請款 ${billingText}</span><span>毛利 ${marginText}</span>
+      </span>
+      <span class="fold-chev">${open?'▾':'▸'}</span>
+    </div>
+    <div class="fold-body" data-routebody="${r.id}" style="${open?'':'display:none;'}"></div>
+  </div>`;
 }
 function renderRouteTable(){
   const wrap = document.getElementById('routeTableWrap');
@@ -4316,21 +4325,15 @@ function renderRouteTable(){
     const collapsed = !regionExpandedSet.has(region) && !kw;
     return `<div class="panel fold ${collapsed?'':'open'}" data-regiontoggle="${region}">
       <div class="fold-head">
-        <span class="fold-title">${region}（${rows.length}）</span><span class="fold-chev">${collapsed?'展開 ▸':'收合 ▾'}</span>
+        <span class="fold-title">${region}（${rows.length}）</span><span class="fold-chev">${collapsed?'▸':'▾'}</span>
       </div>
-      <div class="fold-body" style="overflow-x:auto; ${collapsed?'display:none;':''}">
-        <table>
-          <thead><tr><th>路線</th><th>夥伴費用</th><th>請款費用</th><th>毛利（請款-夥伴）</th><th></th></tr></thead>
-          <tbody>${rows.map(routeRowHtml).join('')}</tbody>
-        </table>
+      <div class="fold-body" style="${collapsed?'display:none;':''}">
+        ${rows.map(routeRowHtml).join('')}
       </div>
     </div>`;
-  }).join('') + (inactiveRoutes.length ? `<div class="panel" style="overflow-x:auto;">
+  }).join('') + (inactiveRoutes.length ? `<div class="panel">
       <details class="fold-d" ${kw || inactiveRoutes.some(r=>r.id===expandedRouteId) ? 'open' : ''}><summary style="font-weight:700;"><span>已停用的路線（${inactiveRoutes.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— 不出現在週期任務清單，歷史紀錄保留，可隨時恢復</span></span></summary>
-        <table style="margin-top:8px;">
-          <thead><tr><th>路線</th><th>夥伴費用</th><th>請款費用</th><th>毛利（請款-夥伴）</th><th></th></tr></thead>
-          <tbody>${inactiveRoutes.map(routeRowHtml).join('')}</tbody>
-        </table>
+        <div style="margin-top:8px;">${inactiveRoutes.map(routeRowHtml).join('')}</div>
       </details>
     </div>` : '');
   wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
@@ -4341,27 +4344,24 @@ function renderRouteTable(){
       renderRouteTable();
     };
   });
-  wrap.querySelectorAll('[data-toggleroute]').forEach(btn=>{
-    btn.onclick = ()=>{
-      expandedRouteId = (expandedRouteId===btn.dataset.toggleroute) ? null : btn.dataset.toggleroute;
+  wrap.querySelectorAll('[data-toggleroute]').forEach(card=>{
+    card.onclick = (e)=>{
+      // 路線卡片包在地區卡片的 .fold-body 裡面，點路線卡片本身的標題，事件路徑上一定會經過
+      // 地區那層 .fold-body——clickedInFoldBody() 看到就會以為「點到內容區裡面」而擋掉，
+      // 這裡只需要擋「點到自己展開後的管理內容」，所以改成只檢查 card 自己裡面的 .fold-body。
+      if(e.composedPath().some(el=> el && el.classList && el.classList.contains('fold-body') && card.contains(el))) return;
+      expandedRouteId = (expandedRouteId===card.dataset.toggleroute) ? null : card.dataset.toggleroute;
       expandedRouteBox = null;
       renderRouteTable();
     };
   });
-  // 管理面板改成直接展開在點擊的那一列下方（同一張表格裡插入一列），
-  // 不用再滑到頁面最底部看；同一列再點一次收合。路線只能同時展開一個
-  // （跟 expandedRouteId 本來就是單一值一致），不用擔心多個面板互相干擾。
+  // 管理面板直接展開在點擊的那張路線卡片自己的 .fold-body 裡，不用再滑到頁面最底部看；
+  // 同一張再點一次收合。路線只能同時展開一個（跟 expandedRouteId 本來就是單一值一致），
+  // 不用擔心多個面板互相干擾。
   if(expandedRouteId){
-    const btn = wrap.querySelector(`[data-toggleroute="${expandedRouteId}"]`);
-    if(btn){
-      const tr = btn.closest('tr');
-      const detailTr = document.createElement('tr');
-      detailTr.className = 'route-detail-row';
-      const detailTd = document.createElement('td');
-      detailTd.colSpan = tr.children.length;
-      detailTr.appendChild(detailTd);
-      tr.after(detailTr);
-      expandedRouteBox = detailTd;
+    const card = wrap.querySelector(`[data-toggleroute="${expandedRouteId}"]`);
+    if(card){
+      expandedRouteBox = card.querySelector('[data-routebody]');
       renderRouteDetail(expandedRouteId);
     } else {
       // 展開中的路線被搜尋篩掉了，不用維持展開狀態
@@ -4638,7 +4638,7 @@ function renderRouteDetail(rid){
       </div>`;
   const draft = ensureDraft(r);
   detailEl.innerHTML = `
-    <div class="panel">
+    <div class="route-detail-inner">
       <div class="toolbar"><strong>${routeDisplayName(r.name)}</strong>
         <span>
           ${r.status==='inactive' ? `<span class="badge pending">已停用</span> <button class="btn amber" data-routestatus="active">恢復使用</button>` : `<button class="btn ghost" data-routestatus="inactive">停用路線</button>`}
