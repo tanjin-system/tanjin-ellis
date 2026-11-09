@@ -170,6 +170,8 @@
   .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .grid4{ display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; }
   @media (max-width:640px){ .grid2,.grid3,.grid4{ grid-template-columns:1fr; } .layout{flex-direction:column;} nav.tabs{width:100%; display:flex; overflow-x:auto; padding:6px;} nav.tabs button{border-left:none; border-bottom:3px solid transparent; white-space:nowrap;} nav.tabs button.active{border-bottom-color:var(--amber);} .nav-group{ display:none; } nav.tabs button{ width:auto; flex:none; } }
+  /* 路線管理列表在手機寬度會橫向溢出（表格5欄+管理按鈕比螢幕寬），手機版先隱藏夥伴費用／請款費用／毛利三欄，這三個數字點開「管理」後的版本區塊裡都看得到，不會漏資訊。 */
+  @media (max-width:640px){ #routeTableWrap table th:nth-child(2), #routeTableWrap table td:nth-child(2), #routeTableWrap table th:nth-child(3), #routeTableWrap table td:nth-child(3), #routeTableWrap table th:nth-child(4), #routeTableWrap table td:nth-child(4){ display:none; } }
   /* 手機：輸入框一律 16px——iOS 在輸入框字小於 16px 時，點進去會自動把整個畫面放大（很難操作）；16px 就不會。 */
   @media (max-width:640px){
     input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea{ font-size:16px !important; }
