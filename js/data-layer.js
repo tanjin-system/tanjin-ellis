@@ -334,13 +334,7 @@ const CATALOG_VERSION_COL = { drivers: 'drivers_version', channels: 'channels_ve
 const catalogCacheKey = (part) => `fleet_catalog_cache_v4_${part}_${catalogCacheSuffix()}`;
 const catalogVersionKey = (part) => `fleet_catalog_version_v4_${part}_${catalogCacheSuffix()}`;
 
-// 2026-11-10 暫時加的除錯計時：登入流程(loadAllData)卡在查詢、網路、還是前端處理，
-// 用猜的沒意義，直接印出每一段實際花多少毫秒。查完這次效能問題就會拿掉，不是正式功能。
-const __perfMark = (() => { let t0 = null; return (label) => { const now = performance.now(); if (label === '__start__') { t0 = now; console.log('[perf] loadAllData 開始'); return; } console.log(`[perf] ${label}: ${(now - t0).toFixed(0)}ms`); }; })();
-function __timed(label, p) { return Promise.resolve(p).then(r => { __perfMark(label); return r; }); }
-
 async function loadAllData() {
-  __perfMark('__start__');
   const supabase = getSupabase();
   // 清掉舊版（沒分身份）的目錄快取，避免佔著空間；新版快取用不同的 key，不受影響。
   try { localStorage.removeItem('fleet_catalog_cache_v1'); localStorage.removeItem('fleet_catalog_version_v1'); } catch (e) { /* 忽略 */ }
@@ -348,29 +342,6 @@ async function loadAllData() {
   try { Object.keys(localStorage).filter(k => /^fleet_catalog_(cache|version)_v2_/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { /* 忽略 */ }
   // v3 是拆成 5 類之前的「整包合併存一個 blob」格式，跟 v4 的 key 結構不相容，清掉釋放空間。
   try { Object.keys(localStorage).filter(k => /^fleet_catalog_(cache|version)_v3_/.test(k)).forEach(k => localStorage.removeItem(k)); } catch (e) { /* 忽略 */ }
-
-  // 目錄資料（drivers/channels/origins/dropPoints/routes）5 類各自獨立比對版本號、各自決定
-  // 要不要用快取——改一條路線只會讓 routes 這一類重抓，其他 4 類繼續吃本機快取。
-  // cachedParts[part] 有值＝這一類直接用快取，不用查資料庫；remoteVersions[part] 存遠端版本號，
-  // 不管有沒有用到快取都要記住，等一下決定要不要寫回本機快取時會用到。
-  let cachedParts = {};
-  let remoteVersions = {};
-  try {
-    const { data: meta, error: metaErr } = await supabase.from('catalog_meta')
-      .select('drivers_version, channels_version, origins_version, drop_points_version, routes_version').eq('id', 1).maybeSingle();
-    if (!metaErr && meta) {
-      CATALOG_PARTS.forEach(part => {
-        const remoteV = meta[CATALOG_VERSION_COL[part]];
-        if (!remoteV) return;
-        remoteVersions[part] = remoteV;
-        if (remoteV === localStorage.getItem(catalogVersionKey(part))) {
-          const cachedJson = localStorage.getItem(catalogCacheKey(part));
-          if (cachedJson) { try { cachedParts[part] = JSON.parse(cachedJson); } catch (e) { /* 壞掉的快取當作沒有 */ } }
-        }
-      });
-    }
-  } catch (e) { /* 版本比對只是加速用，任何失敗都當作沒快取，退回正常整包重抓 */ }
-  __perfMark('catalog_meta版本比對查完');
 
   // 安全性修補：settings 表（含 admin_pin）依 schema.sql 設計刻意「只有 app_admin 能碰，
   // app_driver 完全不可見」，故意不 grant app_driver 任何權限，避免夥伴讀到明文主控PIN。
@@ -392,29 +363,65 @@ async function loadAllData() {
   // （全系統不到10個）而不是「夥伴」為單位累積，資料量本來就小，也不需要窗口化。
   const adjustmentsWindowStart = ymd(addDays(todayStr(), -ADJUSTMENTS_WINDOW_DAYS));
   const fuelClaimsWindowStart = ymd(addDays(todayStr(), -ADJUSTMENTS_WINDOW_DAYS));
+
+  // 2026-11-10 量到的真實數字：catalog_meta 版本比對原本自己 await 完才開始問別的，
+  // 但它跟下面這些查詢完全沒有先後依賴——唯一依賴 catalog_meta 結果的是「目錄5類要
+  // 不要用快取」，所以只把目錄那5類延後，這些完全獨立的查詢提早用 Promise.all 同時
+  // 發出去，讓 catalog_meta 的網路來回時間跟它們重疊，不要整段變成純加法。
   const queries = {
-    ...(isAdmin ? { settingsRes: __timed('settings', supabase.from('settings').select('*').eq('id', 1).maybeSingle()) } : {}),
-    ...(cachedParts.drivers ? {} : { driversRes: __timed('drivers', supabase.from('drivers').select('*').order('created_at')) }),
-    ...(cachedParts.channels ? {} : { channelsRes: __timed('channels', supabase.from('channels').select(isAdmin ? '*' : CHANNEL_COLS_PARTNER).order('created_at')) }),
-    ...(cachedParts.origins ? {} : { originsRes: __timed('origins', supabase.from('origins').select('*').order('created_at')) }),
-    ...(cachedParts.dropPoints ? {} : { dropPointsRes: __timed('dropPoints', supabase.from('drop_points').select('*').order('created_at')) }),
-    ...(cachedParts.routes ? {} : { routesRes: __timed('routes(含版本/版本店點)', supabase.from('routes').select('*, origins(address), route_versions(' + (isAdmin ? '*' : ROUTE_VERSION_COLS_PARTNER) + ', route_version_points(*))')) }),
-    assignmentsRes: __timed('assignments(含店點/媒體)', fetchAllAssignmentPages(() => supabase.from('assignments').select(assignmentSelect()).gte('trip_date', assignmentsWindowStart))),
-    adjustmentsRes: __timed('adjustments', supabase.from('adjustments').select('*').gte('adjustment_month', adjustmentsWindowStart)),
-    statementsRes: __timed('statements', supabase.from('statements').select('*')),
+    ...(isAdmin ? { settingsRes: supabase.from('settings').select('*').eq('id', 1).maybeSingle() } : {}),
+    assignmentsRes: fetchAllAssignmentPages(() => supabase.from('assignments').select(assignmentSelect()).gte('trip_date', assignmentsWindowStart)),
+    adjustmentsRes: supabase.from('adjustments').select('*').gte('adjustment_month', adjustmentsWindowStart),
+    statementsRes: supabase.from('statements').select('*'),
     // billing_adjustments 只 grant app_admin，夥伴身份查會 permission denied，只有 admin 才查。
-    ...(isAdmin ? { billingAdjustmentsRes: __timed('billingAdjustments', supabase.from('billing_adjustments').select('*').order('created_at')) } : {}),
+    ...(isAdmin ? { billingAdjustmentsRes: supabase.from('billing_adjustments').select('*').order('created_at') } : {}),
     // 公告：admin/driver 都能查，driver 只查得到 active=true 的（RLS擋掉下架的），
     // 不需要另外分身份寫兩個查詢。
-    announcementsRes: __timed('announcements', supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false })),
+    announcementsRes: supabase.from('announcements').select('*, announcement_recipients(driver_id)').order('created_at', { ascending: false }),
     // 夥伴加油申報：夥伴只查得到自己的（RLS），主控看全部。
-    fuelClaimsRes: __timed('fuelClaims', supabase.from('fuel_claims').select('*').gte('fuel_date', fuelClaimsWindowStart).order('fuel_date', { ascending: false }))
+    fuelClaimsRes: supabase.from('fuel_claims').select('*').gte('fuel_date', fuelClaimsWindowStart).order('fuel_date', { ascending: false })
   };
-  const keys = Object.keys(queries);
-  const results = await Promise.all(Object.values(queries));
-  __perfMark('全部查詢都回來了(Promise.all)');
+  const independentKeys = Object.keys(queries);
+  // 這一行讓上面那些查詢立刻同時開始送出去（Promise.all 建立當下就會對每一個觸發），
+  // 不等 catalog_meta 查完才動；metaPromise 同一時間也一起送出去，不用先後等。
+  const independentPromise = Promise.all(Object.values(queries));
+  const metaPromise = supabase.from('catalog_meta')
+    .select('drivers_version, channels_version, origins_version, drop_points_version, routes_version').eq('id', 1).maybeSingle();
+
+  // 目錄資料（drivers/channels/origins/dropPoints/routes）5 類各自獨立比對版本號、各自決定
+  // 要不要用快取——改一條路線只會讓 routes 這一類重抓，其他 4 類繼續吃本機快取。
+  // cachedParts[part] 有值＝這一類直接用快取，不用查資料庫；remoteVersions[part] 存遠端版本號，
+  // 不管有沒有用到快取都要記住，等一下決定要不要寫回本機快取時會用到。
+  let cachedParts = {};
+  let remoteVersions = {};
+  try {
+    const { data: meta, error: metaErr } = await metaPromise;
+    if (!metaErr && meta) {
+      CATALOG_PARTS.forEach(part => {
+        const remoteV = meta[CATALOG_VERSION_COL[part]];
+        if (!remoteV) return;
+        remoteVersions[part] = remoteV;
+        if (remoteV === localStorage.getItem(catalogVersionKey(part))) {
+          const cachedJson = localStorage.getItem(catalogCacheKey(part));
+          if (cachedJson) { try { cachedParts[part] = JSON.parse(cachedJson); } catch (e) { /* 壞掉的快取當作沒有 */ } }
+        }
+      });
+    }
+  } catch (e) { /* 版本比對只是加速用，任何失敗都當作沒快取，退回正常整包重抓 */ }
+
+  const catalogQueries = {
+    ...(cachedParts.drivers ? {} : { driversRes: supabase.from('drivers').select('*').order('created_at') }),
+    ...(cachedParts.channels ? {} : { channelsRes: supabase.from('channels').select(isAdmin ? '*' : CHANNEL_COLS_PARTNER).order('created_at') }),
+    ...(cachedParts.origins ? {} : { originsRes: supabase.from('origins').select('*').order('created_at') }),
+    ...(cachedParts.dropPoints ? {} : { dropPointsRes: supabase.from('drop_points').select('*').order('created_at') }),
+    ...(cachedParts.routes ? {} : { routesRes: supabase.from('routes').select('*, origins(address), route_versions(' + (isAdmin ? '*' : ROUTE_VERSION_COLS_PARTNER) + ', route_version_points(*))') })
+  };
+  const catalogKeys = Object.keys(catalogQueries);
+  const [independentResults, catalogResults] = await Promise.all([independentPromise, Promise.all(Object.values(catalogQueries))]);
+
   const byKey = {};
-  keys.forEach((k, i) => { byKey[k] = results[i]; });
+  independentKeys.forEach((k, i) => { byKey[k] = independentResults[i]; });
+  catalogKeys.forEach((k, i) => { byKey[k] = catalogResults[i]; });
   for (const [label, res] of Object.entries(byKey)) {
     if (res.error) throw new Error(`載入 ${label} 失敗：${res.error.message}`);
   }
@@ -436,7 +443,6 @@ async function loadAllData() {
     fuelClaims: (byKey.fuelClaimsRes.data || []).map(mapFuelClaim),
     fuelClaimsWindowStart
   };
-  __perfMark('資料轉換(map)完成');
 
   // 剛才真的重抓過、而且有拿到遠端版本號的那幾類，才把這次抓到的資料連同版本寫回本地快取，
   // 下次登入版本沒變就吃得到；本來就是用快取的那幾類不用重寫（內容沒變，寫了也是白工）。
@@ -449,10 +455,8 @@ async function loadAllData() {
       localStorage.setItem(catalogCacheKey(part), JSON.stringify(data[part]));
     } catch (e) { /* 忽略快取寫入失敗 */ }
   });
-  __perfMark('本機快取寫入完成');
 
   await resolveSignatureUrls(data.statements);
-  __perfMark('resolveSignatureUrls完成(loadAllData全部結束)');
   return data;
 }
 
