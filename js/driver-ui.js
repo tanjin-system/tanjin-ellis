@@ -624,9 +624,9 @@ function renderTodayDetail(todays){
   // 一個店點一列（狀態、拍照／上傳／導航按鈕、未完成原因）；readonly＝已交給支援夥伴，原夥伴只看狀態不能再動。
   const dpRow = (a, dp, readonly)=>{
     const photoCount = (dp.status==='completed'?1:0) + (dp.media||[]).filter(m=>m.type==='image').length;
-    const photoUrls = dpPhotoUrls(dp);
+    const hasPhoto = dpHasPhoto(dp);
     const statusBadge = dp.status==='completed'
-      ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
+      ? `<span class="badge completed"${hasPhoto?' data-viewphoto style="cursor:pointer;"':''}>已完成${hasPhoto?'・點擊看照片':''}</span>`
       : '<span class="badge pending">待完成</span>';
     return `
           <div class="drop-point-driver ${dp.id===nextDpId?'next-stop':''} ${dp.id===flashId?'flash':''}" data-dpid="${dp.id}">
@@ -648,7 +648,7 @@ function renderTodayDetail(todays){
               <a class="btn ghost" href="${mapLink(dp.address)}" target="_blank" style="flex:1; min-width:110px;">Google導航</a>
               <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-unloadnote="${dp.sourceDpId||''}">✏️ 卸貨備註</button>
             </div>
-            ${!dp.photo && dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
+            ${!dp.photoPath && dp.photoCleared?'<span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
             ${dp.status!=='completed' ? `<div style="margin-top:8px;">
               <label style="font-size:12px; color:var(--ink-soft); display:block; margin-bottom:3px;">若無法完成，請選擇原因：</label>
               <select data-issue="${a.id}|${dp.id}" style="width:100%;">
@@ -810,22 +810,30 @@ function wireStopPhotoControls(root, dpById, aByDpId, onDone){
   root.querySelectorAll('[data-dpid]').forEach(el=>{
     const dp = dpById[el.dataset.dpid];
     if(!dp) return;
-    const items = dpPhotoItems(dp);
     const vp = el.querySelector('[data-viewphoto]');
-    if(!items.length || !vp) return;
+    if(!dpHasPhoto(dp) || !vp) return;
     const a = aByDpId[el.dataset.dpid];
     // 任務還沒封存（status !== 'completed'）才開放夥伴自己刪除；主控（state.role==='admin'，
     // 含「主控檢視中」）不受這條限制，封存後真的傳錯也能刪——理由見
     // deleteDropPointPhoto/deleteDropPointMedia 的說明。
     const canDelete = a && (a.status!=='completed' || state.role==='admin');
-    vp.onclick = ()=> openPhotoLightbox(items.map(x=>x.url), canDelete ? {
-      onDelete: async (i)=>{
-        const item = items[i];
-        if(item.kind==='main') await deleteDropPointPhoto(a.id, dp.id);
-        else await deleteDropPointMedia(a.id, item.mediaId);
-        refresh();
-      }
-    } : null);
+    // 連結是點下去這一刻才去跟 Storage 要（見 getDropPointPhotoUrls 說明），不是登入時
+    // 就預先簽好，所以這裡要 await 一下才能把燈箱打開；失敗了就跳錯誤提示，不要讓人
+    // 點了沒反應、以為按鈕壞掉。
+    vp.onclick = async ()=>{
+      let items;
+      try{ items = await getDropPointPhotoUrls(dp); }
+      catch(e){ toast(e.message, { type:'error' }); return; }
+      if(!items.length) return;
+      openPhotoLightbox(items.map(x=>x.url), canDelete ? {
+        onDelete: async (i)=>{
+          const item = items[i];
+          if(item.kind==='main') await deleteDropPointPhoto(a.id, dp.id);
+          else await deleteDropPointMedia(a.id, item.mediaId);
+          refresh();
+        }
+      } : null);
+    };
   });
   root.querySelectorAll('[data-photo]').forEach(btn=>{
     const [aid, dpid] = btn.dataset.photo.split('|');
@@ -947,18 +955,6 @@ async function fillNextPhotoSlot(aid, dpid, dataUrl, coords){
   await thumbsAdd(dpid, dataUrl); // 上傳成功才存縮圖（只存本機，不佔流量）
 }
 
-// dpPhotoItems：跟 dpPhotoUrls 同一套順序／篩選條件，多附上每張照片對應的「怎麼刪」
-// 資訊（主要照片 vs 附加照片的哪一筆），給「傳錯刪除」功能用；dpPhotoUrls 保留原本
-// 只回傳網址的簽章，其他呼叫端（歷史任務、看圖彈窗預設行為）不用跟著改。
-function dpPhotoItems(dp){
-  const items = [];
-  if(dp.photo) items.push({ url:dp.photo, kind:'main' });
-  (dp.media||[]).filter(m=>m.type==='image' && m.url).forEach(m=> items.push({ url:m.url, kind:'media', mediaId:m.id }));
-  return items;
-}
-function dpPhotoUrls(dp){
-  return dpPhotoItems(dp).map(x=>x.url);
-}
 async function renderHistory(c){
   const dId = state.activeDriverId;
   // 夥伴自己的歷史任務想看多久以前都合理，而且夥伴端因為RLS本來就只看得到
@@ -1004,15 +1000,15 @@ async function renderHistory(c){
               <p style="margin:0 0 8px;"><strong>報酬：$${money(tripPay(a))}</strong>${Number(a.extraPay)?`<span style="font-size:12px; color:var(--ink-soft);">（車資 $${money(Number(a.payrollFareSnapshot ?? a.fare)||0)} ${Number(a.extraPay)>0?'+':'−'} 額外 $${money(Math.abs(Number(a.extraPay)))}）</span>`:''}</p>
               ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
               ${ownDropPoints(a).map(dp=>{
-                const photoUrls = dpPhotoUrls(dp);
+                const hasPhoto = dpHasPhoto(dp);
                 const statusBadge = dp.status==='completed'
-                  ? `<span class="badge completed"${photoUrls.length?' data-viewphoto style="cursor:pointer;"':''}>已完成${photoUrls.length?'・點擊看照片':''}</span>`
+                  ? `<span class="badge completed"${hasPhoto?' data-viewphoto style="cursor:pointer;"':''}>已完成${hasPhoto?'・點擊看照片':''}</span>`
                   : `<span class="badge pending">未完成${dp.issueReason?'：'+dp.issueReason:''}</span>`;
                 // 主控刪掉已封存任務的照片後，這一格的 admin_reset_at 會被寫入時間戳
                 // （見 deleteDropPointPhoto），這裡靠它判斷要不要重新長出拍照/上傳按鈕——
                 // 其他原因關閉的未完成店點（夥伴自己選的理由）維持唯讀，不會多長按鈕出來。
                 const reopened = dp.status!=='completed' && dp.adminResetAt;
-                return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photo && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
+                return `<div class="drop-point-driver" data-dpid="${dp.id}"><span class="store-name">${dpLabel(dp)}</span>（${channelName(dp.channelId)}） ${statusBadge}${!dp.photoPath && dp.photoCleared?'<br><span style="font-size:11.5px; color:var(--ink-soft);">照片已超過30天自動清除</span>':''}
                   ${reopened ? `<div style="font-size:12px; color:var(--danger); margin-top:6px;">主控已刪除這張照片，請重新拍照上傳</div>
                   <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
                     <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>

@@ -118,7 +118,7 @@ function mapAssignment(row) {
       adminResetAt: p.admin_reset_at || null,
       helperId: p.helper_id || null, helperName: p.helper_name || '', delegationId: p.delegation_id || null, completedBy: p.completed_by || null,
       // 主要送達證明照以外的附加照片/影片（見 assignment_drop_point_media）；
-      // url 要另外呼叫 resolvePhotoUrls() 才會補上簽名連結，跟 photo 欄位同一套機制。
+      // url 要另外呼叫 getDropPointPhotoUrls() 才會補上簽名連結，跟 photo 欄位同一套機制。
       media: (p.assignment_drop_point_media || []).map(m => ({ id: m.id, path: m.media_url, type: m.media_type, url: null }))
     }))
   };
@@ -208,18 +208,29 @@ async function createSignedUrlsChunked(bucket, paths, expiresIn) {
   return results;
 }
 
-async function resolvePhotoUrls(assignments) {
-  const targets = [];
-  assignments.forEach(a => a.dropPoints.forEach(dp => { if (dp.photoPath) targets.push(dp); }));
-  const mediaTargets = [];
-  assignments.forEach(a => a.dropPoints.forEach(dp => (dp.media || []).forEach(m => mediaTargets.push(m))));
-  if (mediaTargets.length) {
-    const mediaSigned = await createSignedUrlsChunked('assignment-photos', mediaTargets.map(m => m.path), 60 * 60 * 24 * 7);
-    mediaSigned.forEach((item, i) => { mediaTargets[i].url = item?.signedUrl || null; });
-  }
-  if (!targets.length) return;
-  const data = await createSignedUrlsChunked('assignment-photos', targets.map(dp => dp.photoPath), 60 * 60 * 24 * 7);
-  data.forEach((item, i) => { targets[i].photo = item?.signedUrl || null; });
+// 2026-11-10：原本這裡是「整批把傳進來的任務裡每一個店點的照片都預先簽好連結」，
+// loadAllData() 登入當下會對 14 天窗口內的全部任務呼叫一次——業務量還小的時候不明顯，
+// 但送達照片本來就幾乎每個完成的店點都有，14天窗口內的照片數會隨日常配送量直接長大，
+// 長到一定規模後，光是登入就要多等好幾秒（量出來的真實數字：2026-11-10 這天 14 天內
+// 有1,840張）。改成跟司機身分證/工會證明一樣「點開才要連結」：下面 getDropPointPhotoUrls()
+// 只在使用者真的點開某一格要看照片時才呼叫，花費只跟「這一格幾張照片」有關（最多3張），
+// 不會再隨系統整體資料量變重；原本整批預先簽好的 resolvePhotoUrls() 已經沒有呼叫端，拿掉。
+async function getDropPointPhotoUrls(dp) {
+  const items = [];
+  if (dp.photoPath) items.push({ path: dp.photoPath, kind: 'main' });
+  (dp.media || []).filter(m => m.type === 'image' && m.path).forEach(m => items.push({ path: m.path, kind: 'media', mediaId: m.id }));
+  if (!items.length) return [];
+  const supabase = getSupabase();
+  const { data, error } = await supabase.storage.from('assignment-photos').createSignedUrls(items.map(x => x.path), 300);
+  if (error) throw new Error('讀取照片失敗：' + error.message);
+  return items.map((item, i) => ({ ...item, url: data[i]?.signedUrl || null }));
+}
+
+// 「這一格有沒有照片」要能同步判斷（列表畫面決定要不要顯示「點擊看照片」樣式用），
+// 不能等上面那支 async 函式——一律看原始路徑欄位（photoPath / media.path）有沒有值，
+// 不依賴連結有沒有被簽過。
+function dpHasPhoto(dp) {
+  return !!(dp.photoPath || (dp.media || []).some(m => m.type === 'image' && m.path));
 }
 
 async function resolveSignatureUrls(statements) {
@@ -430,7 +441,6 @@ async function loadAllData() {
     } catch (e) { /* 忽略快取寫入失敗 */ }
   });
 
-  await resolvePhotoUrls(data.assignments);
   await resolveSignatureUrls(data.statements);
   return data;
 }
@@ -452,7 +462,6 @@ async function ensureAssignmentsRange(startDate) {
     .lt('trip_date', windowStart));
   if (error) throw new Error('讀取較早的任務資料失敗：' + error.message);
   const extra = (data || []).map(mapAssignment);
-  await resolvePhotoUrls(extra);
   const existingIds = new Set(state.data.assignments.map(a => a.id));
   extra.forEach(a => { if (!existingIds.has(a.id)) state.data.assignments.push(a); });
   state.data.assignments.sort((a, b) => a.date.localeCompare(b.date));
@@ -509,7 +518,6 @@ async function refreshAssignmentsRange(start, end) {
     .lte('trip_date', end));
   if (error) throw new Error('重新整理任務資料失敗：' + error.message);
   const fresh = (data || []).map(mapAssignment);
-  await resolvePhotoUrls(fresh);
   const outsideRange = state.data.assignments.filter(a => a.date < start || a.date > end);
   state.data.assignments = outsideRange.concat(fresh).sort((a, b) => a.date.localeCompare(b.date));
   if (!state.data.assignmentsWindowStart || start < state.data.assignmentsWindowStart) {
@@ -521,9 +529,7 @@ async function refreshAssignmentsRange(start, end) {
 // 編輯/指派）改成完全不碰 state.data.assignments 共用陣列，查詢當下直接跟
 // 資料庫要「這次剛好需要的那一段」，用完就丟（存在呼叫端自己的區域變數，
 // 不寫回 state）。這樣畫面停留期間不管查的區間多大，都不會拖到其他任何
-// 畫面的效能，也不需要另外用 trimAssignmentsToBaseWindow 收尾。刻意不呼叫
-// resolvePhotoUrls——這三個畫面從來不顯示送達照片，省下不必要的 Storage
-// 簽名連結請求。
+// 畫面的效能，也不需要另外用 trimAssignmentsToBaseWindow 收尾。
 async function fetchAssignmentsInRange(start, end) {
   const supabase = getSupabase();
   const { data, error } = await fetchAllAssignmentPages(() => supabase
@@ -557,7 +563,6 @@ async function fetchAssignment(id) {
   const { data, error } = await supabase.from('assignments').select(assignmentSelect()).eq('id', id).single();
   if (error) throw new Error('讀取任務失敗：' + error.message);
   const assignment = mapAssignment(data);
-  await resolvePhotoUrls([assignment]);
   return assignment;
 }
 
@@ -1785,7 +1790,6 @@ async function syncSupportStops() {
       a.isSupport = true; a.supportAmount = c.support_amount != null ? Number(c.support_amount) : null; a.originalDriverName = c.original_driver_name || '';
       return a;
     });
-    await resolvePhotoUrls(built);
   }
   state.data.assignments = state.data.assignments.filter(a => !a.isSupport).concat(built);
 }
