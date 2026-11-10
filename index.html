@@ -206,9 +206,14 @@
     body.driver-view nav.tabs button .ni{ width:auto; font-size:21px; line-height:1.2; }
     body.driver-view nav.tabs button.active{ border-bottom-color:var(--amber); border-top:none; background:var(--tint-warn); }
   }
-  /* 夥伴端「我的資料」字體大小設定：只放大/縮小內容區域，分頁列維持原大小不受影響 */
-  body.fs-small #content{ zoom:.88; }
-  body.fs-large #content{ zoom:1.2; }
+  /* 夥伴端「我的資料」字體大小設定：只放大/縮小內容區域，分頁列維持原大小不受影響。
+     driverFontSize 存在 localStorage，是「這台裝置」的偏好，不分帳號；同一支手機如果
+     曾經用夥伴視角設過大字，之後同一支手機切回主控，applyFontSizePref() 還是會無條件
+     套上 fs-large／fs-small，這裡額外要求 body 也要是 .driver-view 才生效，避免
+     zoom 誤套到主控畫面（尤其是戰情室的 .wr-dt 用 position:fixed，zoom 下 iOS Safari
+     會算錯定位，造成文字被裁到畫面外）。 */
+  body.driver-view.fs-small #content{ zoom:.88; }
+  body.driver-view.fs-large #content{ zoom:1.2; }
   .btn{ background:var(--navy); color:#fff; border:none; padding:8px 14px; border-radius:var(--radius); cursor:pointer; font-family:inherit; font-size:13px; font-weight:500; display:inline-block; text-align:center; text-decoration:none; box-sizing:border-box; }
   .btn.amber{ background:var(--amber); color:#1B2129; }
   .btn.ghost{ background:none; border:1px solid var(--border); color:var(--ink); }
