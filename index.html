@@ -555,16 +555,22 @@
   /* 開機畫面：手機打開系統到畫面真正能用之前，中間那段（載入 js/*.js、抓資料）原本是一片
      空白，看起來像當機。這塊用最前面、不依賴任何外部資源的純 HTML/CSS 畫出來，開頭就能
      馬上顯示；boot() 跑完、畫面真的準備好了才用 JS 把它移除（見檔案最下面的 hideBootSplash）。 */
-  #bootSplash{ position:fixed; inset:0; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; background:var(--paper); }
-  #bootSplash .bs-t{ font-size:17px; font-weight:800; color:var(--navy); letter-spacing:0.04em; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; }
-  #bootSplash .bs-spin{ width:28px; height:28px; border-radius:50%; border:3px solid var(--border); border-top-color:var(--amber); animation:bsSpin .8s linear infinite; }
+  #bootSplash{ position:fixed; inset:0; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px; background:var(--paper); }
+  #bootSplash .bs-mark{ position:relative; width:60px; height:60px; display:flex; align-items:center; justify-content:center; }
+  #bootSplash .bs-ring{ position:absolute; inset:0; border-radius:50%; border:3px solid var(--border); border-top-color:var(--amber); animation:bsSpin .9s linear infinite; }
+  #bootSplash .bs-dot{ width:12px; height:12px; border-radius:50%; background:var(--amber); animation:bsBreath 1.6s ease-in-out infinite; }
+  #bootSplash .bs-t{ margin:0; font-size:19px; font-weight:800; letter-spacing:0.04em; font-family:'Noto Sans TC','PingFang TC','Microsoft JhengHei',-apple-system,sans-serif; }
+  #bootSplash .bs-t .bs-xin{ color:var(--ink); }
+  #bootSplash .bs-t .bs-sep{ color:var(--ink-soft); font-weight:500; padding:0 2px; }
+  #bootSplash .bs-t .bs-tan{ color:#D4AF37; }
   #bootSplash .bs-sub{ font-size:12.5px; color:var(--ink-soft); font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif; }
   @keyframes bsSpin{ to{ transform:rotate(360deg); } }
-  @media (prefers-reduced-motion:reduce){ #bootSplash .bs-spin{ animation:none; } }
+  @keyframes bsBreath{ 0%,100%{ opacity:.45; transform:scale(.82); } 50%{ opacity:1; transform:scale(1); } }
+  @media (prefers-reduced-motion:reduce){ #bootSplash .bs-ring, #bootSplash .bs-dot{ animation:none; } }
 </style>
 </head>
 <body>
-<div id="bootSplash"><div class="bs-spin" aria-hidden="true"></div><div class="bs-t">信興｜碳金 Hub</div><div class="bs-sub">載入中…</div></div>
+<div id="bootSplash"><div class="bs-mark" aria-hidden="true"><div class="bs-ring"></div><div class="bs-dot"></div></div><h1 class="bs-t"><span class="bs-xin">信興</span><span class="bs-sep">｜</span><span class="bs-tan">碳金 Hub</span></h1><div class="bs-sub">載入中…</div></div>
 <header>
   <h1 id="appTitle"><span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金 Hub</span></h1>
   <div id="gsWrap" style="display:none;">
