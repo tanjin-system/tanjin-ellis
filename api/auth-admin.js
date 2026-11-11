@@ -108,6 +108,6 @@ module.exports = async (req, res) => {
     await sendToAdmins(supabase, { title: '主控有新裝置登入', body: describeUa(req.headers['user-agent']) + '・' + where(req) + '。如果不是你，請立刻更改密碼。', tag: 'admin-login' });
   }
 
-  const token = jwt.sign({ role: 'app_admin' }, process.env.SUPABASE_JWT_SECRET, { expiresIn: '12h' });
+  const token = jwt.sign({ role: 'app_admin' }, process.env.SUPABASE_JWT_SECRET, { expiresIn: '24h' });
   return res.status(200).json({ token, weakPin: pin.length < 8, totpEnabled: !!(st && st.totp_enabled), trustToken: newTrustToken || undefined });
 };
