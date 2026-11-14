@@ -602,7 +602,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=31"></script>
+<script defer src="js/data-layer.js?v=32"></script>
 <script defer src="js/driver-ui.js?v=15"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
@@ -6058,7 +6058,7 @@ async function renderTripPaySection(a, el){
   };
   // 區間預覽：輸入區間時即時顯示「已完成未付 N 趟、合計 $X」（只抓必要欄位，輕量）。
   const pdPreview = el.querySelector('#pdPreview');
-  let pdTimer = null, pdSeq = 0;
+  let pdTimer = null, pdSeq = 0, pdNetTotal = null;
   const updatePreview = ()=>{
     clearTimeout(pdTimer);
     pdTimer = setTimeout(async ()=>{
@@ -6071,7 +6071,10 @@ async function renderTripPaySection(a, el){
         if(mySeq!==pdSeq || !pdPreview.isConnected) return;
         const { list, total } = unpaidTripsOf(trips);
         const paidAlready = trips.filter(t=>t.status==='completed').length - list.length;
-        pdPreview.innerHTML = `區間 ${start}～${end}：已完成未付 <b>${list.length}</b> 趟，合計 <b>$${money(total)}</b>${paidAlready?`（另有 ${paidAlready} 趟已標過已付，略過）`:''}。金額留空＝全額。`;
+        const advanceTotal = advanceTotalInRange(a.driverId, start, end);
+        const netTotal = Math.max(0, total - advanceTotal);
+        pdNetTotal = netTotal;
+        pdPreview.innerHTML = `區間 ${start}～${end}：已完成未付 <b>${list.length}</b> 趟，合計 <b>$${money(total)}</b>${paidAlready?`（另有 ${paidAlready} 趟已標過已付，略過）`:''}${advanceTotal?`。預支 $${money(advanceTotal)}，實得金額 <b>$${money(netTotal)}</b>`:''}。金額留空＝全額。`;
       }catch(err){ if(mySeq===pdSeq) pdPreview.textContent = err.message; }
     }, 300);
   };
@@ -6080,7 +6083,7 @@ async function renderTripPaySection(a, el){
   el.querySelector('#pdSave').onclick = async ()=>{
     const args = { driverId:a.driverId, start: el.querySelector('#pdStart').value, end: el.querySelector('#pdEnd').value,
       payDate: el.querySelector('#pdDate').value, method: el.querySelector('#pdMethod').value, amount: el.querySelector('#pdAmt').value };
-    if(!confirm(`登記 ${driverName(a.driverId)} 於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${args.start}～${args.end} 的任務報酬${args.amount?`（金額 $${args.amount}）`:'（全額）'}嗎？`)) return;
+    if(!confirm(`登記 ${driverName(a.driverId)} 於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${args.start}～${args.end} 的任務報酬${args.amount?`（金額 $${args.amount}）`:(pdNetTotal!=null?`（全額，已扣預支，實得 $${money(pdNetTotal)}）`:'（全額）')}嗎？`)) return;
     try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}${r.skipped?`（略過 ${r.skipped} 趟已付過的）`:''}`); rerender(); }
     catch(err){ alert(err.message); }
   };

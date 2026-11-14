@@ -2399,7 +2399,10 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
   const trips = await fetchDriverTripsInRange(driverId, start, end);
   const { list, total } = unpaidTripsOf(trips);
   if (!list.length) throw new Error('這個區間內沒有「已完成、尚未標已付」的任務');
-  const paying = (amount === '' || amount == null) ? total : Number(amount);
+  await ensureAdjustmentsRange(start);
+  const advanceTotal = advanceTotalInRange(driverId, start, end);
+  const netTotal = Math.max(0, total - advanceTotal);
+  const paying = (amount === '' || amount == null) ? netTotal : Number(amount);
   if (!Number.isFinite(paying) || paying <= 0) throw new Error('付款金額要大於 0');
   if (paying > total + 0.005) throw new Error(`付款金額 $${paying} 超過區間內報酬合計 $${total}`);
   // 依各趟報酬比例攤，最後一趟補尾差，加總一定等於付款金額。
@@ -2703,6 +2706,13 @@ function findCoveringStatement(driverId, date) {
 // 調整項的有效日期：有日期用日期，舊資料沒日期的視為該月1日。
 function adjustmentEffectiveDate(a) {
   return a.date || (a.month + '-01');
+}
+// 某位夥伴在某期間內已登記的預支總額——「登記一次付款」要扣掉這筆，不然預支
+// 會被算兩次（一次在這裡的已付款，一次在月結/區間勞報單的「已預支」扣項），
+// 多扣掉的那筆會被系統當成夥伴超領，從下個月的應付金額再扣一次。
+function advanceTotalInRange(driverId, start, end) {
+  return state.data.adjustments.filter(a => a.driverId === driverId && a.type === 'advance' && adjustmentEffectiveDate(a) >= start && adjustmentEffectiveDate(a) <= end)
+    .reduce((s, a) => s + Math.abs(Number(a.amount) || 0), 0);
 }
 
 async function confirmPeriodStatement(driverId, start, end, payDate, live, payMethod) {
