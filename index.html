@@ -602,8 +602,8 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=33"></script>
-<script defer src="js/driver-ui.js?v=18"></script>
+<script defer src="js/data-layer.js?v=34"></script>
+<script defer src="js/driver-ui.js?v=19"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -6930,8 +6930,8 @@ function renderPayrollPage(c){
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
           ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
           ${ann.inRange.paidTotal ? `<tr><td>　其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 支付（已反映在上面「已付款」，這裡僅供對照）</td><td class="amount">—</td></tr>` : ''}
-          ${ann.other.pendingTotal ? `<tr><td>加：之前月份掛帳，約定本月支付（預計 ${ann.other.pendingDues.join('、')}）</td><td class="amount">+$${money(ann.other.pendingTotal)}</td></tr>` : ''}
-          ${ann.other.paidTotal ? `<tr><td>　其中 $${money(ann.other.paidTotal)} 是之前月份掛帳，已於 ${ann.other.paidDates.join('、')} 支付（僅供參考，不計入本月可領淨額）</td><td class="amount">—</td></tr>` : ''}
+          ${ann.other.total ? `<tr><td>加：之前月份掛帳，歸屬本月${ann.other.pendingTotal?`（約定 ${ann.other.pendingDues.join('、')} 支付）`:''}</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
+          ${ann.other.paidTotal ? `<tr><td>　其中 $${money(ann.other.paidTotal)} 已於 ${ann.other.paidDates.join('、')} 支付</td><td class="amount">-$${money(ann.other.paidTotal)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
         </table>
       </div>

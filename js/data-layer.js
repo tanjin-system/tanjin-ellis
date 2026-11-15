@@ -2564,11 +2564,12 @@ function deferralAnnotations(trips, start, end) {
   const pack = list => {
     const pending = list.filter(t => !(Number(t.paidAmount) > 0));
     const paid = list.filter(t => Number(t.paidAmount) > 0);
+    const pendingTotal = pending.reduce((s, t) => s + tripPay(t), 0);
+    const paidTotal = paid.reduce((s, t) => s + tripPay(t), 0);
     return {
-      pendingTotal: pending.reduce((s, t) => s + tripPay(t), 0),
-      pendingDues: [...new Set(pending.map(t => t.payDueDate))].sort(),
-      paidTotal: paid.reduce((s, t) => s + tripPay(t), 0),
-      paidDates: [...new Set(paid.map(t => t.paidDate))].sort()
+      total: pendingTotal + paidTotal,
+      pendingTotal, pendingDues: [...new Set(pending.map(t => t.payDueDate))].sort(),
+      paidTotal, paidDates: [...new Set(paid.map(t => t.paidDate))].sort()
     };
   };
   return {
