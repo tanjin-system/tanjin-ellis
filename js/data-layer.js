@@ -2457,31 +2457,35 @@ async function recordMonthlyPayment({ driverId, monthStr, payDate, method }) {
   const paying = Math.max(0, Math.round((tripGross + adjNet - advanceTotal) * 100) / 100);
   if (paying <= 0) return { count: 0, total: 0 }; // 這個月（含掛帳、加減項）沒有要付的，批次情境下當作跳過這個人，不當成錯誤中斷整批
   const group = crypto.randomUUID();
-  let writes; // { id, paid_amount }[]
+  let writes; // { id, patch }[]
   if (freshTargets.length) {
     let allocated = 0;
     writes = freshTargets.map((t, i) => {
       const part = i === freshTargets.length - 1 ? Math.round((paying - allocated) * 100) / 100 : Math.round(paying * tripPay(t) / tripGross * 100) / 100;
       allocated += part;
-      return { id: t.id, paid_amount: part };
+      return { id: t.id, patch: { paid_amount: part, paid_date: payDate, paid_method: method, paid_group: group, paid_period_start: monthStart, paid_period_end: monthEnd } };
     });
   } else {
     // 這個月任務（含掛帳）全部已經付過了，剩下的 paying 完全來自加減項——追加到該月
-    // 隨便一筆已完成任務的已付款金額上（不是覆蓋，是在既有金額上加上去）。
+    // 隨便一筆已完成任務的已付款金額上（在既有金額上加上去，不是覆蓋）。這裡刻意不改那筆
+    // 任務原本的付款日期／方式／分組——使用者實測發現，如果連日期一起覆蓋，會把那筆任務
+    // 原本「一次付清」的紀錄拆成「兩筆不同日期」，夥伴「我的報酬」的已支付紀錄會變得很亂、
+    // 看起來像分兩次付款。這筆加項金額本來就沒有自己的日期可以記，追加的金額就沿用被依附
+    // 那筆任務原本的日期，不另外產生一條新紀錄。
     const anyTrip = ownTrips.find(t => t.status === 'completed');
     if (!anyTrip) throw new Error('這個月沒有任何已完成任務可以依附登記這筆加減項，請到「報酬結算」手動確認');
-    writes = [{ id: anyTrip.id, paid_amount: Math.round((Number(anyTrip.paidAmount || 0) + paying) * 100) / 100 }];
+    writes = [{ id: anyTrip.id, patch: { paid_amount: Math.round((Number(anyTrip.paidAmount || 0) + paying) * 100) / 100 } }];
   }
   const supabase = getSupabase();
-  const results = await Promise.all(writes.map(w => supabase.from('assignments').update({
-    paid_amount: w.paid_amount, paid_date: payDate, paid_method: method,
-    paid_group: group, paid_period_start: monthStart, paid_period_end: monthEnd
-  }).eq('id', w.id)));
+  const results = await Promise.all(writes.map(w => supabase.from('assignments').update(w.patch).eq('id', w.id)));
   const failed = results.find(r => r.error);
   if (failed) throw new Error('記錄已付款失敗（部分任務可能已更新，請重新整理後檢查）：' + failed.error.message);
   writes.forEach(w => {
     const a = state.data.assignments.find(x => x.id === w.id);
-    if (a) Object.assign(a, { paidAmount: w.paid_amount, paidDate: payDate, paidMethod: method, paidGroup: group, paidPeriodStart: monthStart, paidPeriodEnd: monthEnd });
+    if (a) Object.assign(a, {
+      paidAmount: w.patch.paid_amount,
+      ...(w.patch.paid_date ? { paidDate: w.patch.paid_date, paidMethod: w.patch.paid_method, paidGroup: w.patch.paid_group, paidPeriodStart: w.patch.paid_period_start, paidPeriodEnd: w.patch.paid_period_end } : {})
+    });
   });
   state._pendingPayCache = null;
   state._carryInCache = null;
