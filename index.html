@@ -603,7 +603,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=32"></script>
-<script defer src="js/driver-ui.js?v=15"></script>
+<script defer src="js/driver-ui.js?v=16"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -6884,12 +6884,15 @@ function renderPayrollPage(c){
     // 承接前幾個月還沒扣完的超支餘額（預支/已付款超過當月賺的部分），不會自動消失，
     // 要繼續從這裡扣——見 computeCarryInMap() 旁的說明。
     const carryIn = (await computeCarryInMap(monthStr, [driverId])).get(driverId) || 0;
-    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又改選了別的夥伴/月份
-    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn;
-    // 掛帳（約好之後才付）：本月的只註明，其他月份的另外加進應付合計。
+    // 掛帳（約好之後才付）：這個月做的事、約好晚點才付的不算進這個月；別個月做的事、約好這個月
+    // 付的才併進來——2026-11-15修：以前「可領淨額」沒有真的扣掉／加上這兩塊，只在下面多一行
+    // 「應付合計（含掛帳）」當參考，主控要自己心算；現在「可領淨額」本身就是真的這個月要匯出去
+    // 的錢，跟「夥伴匯款清單」的算法一致。
     let defTrips = [];
     try{ defTrips = await fetchDeferredTrips(driverId); }catch(e){}
     const defSplit = deferredSplit(defTrips, monthStr+'-01', monthEndStr(monthStr));
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又改選了別的夥伴/月份
+    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn - defSplit.inRange.total + defSplit.other.total;
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
@@ -6921,10 +6924,9 @@ function renderPayrollPage(c){
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
           ${paidTotal ? `<tr><td>已付款（先付現金／轉帳）</td><td class="amount">-$${money(paidTotal)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
+          ${defSplit.inRange.total ? `<tr><td>已掛帳，約定 ${defSplit.inRange.dues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(defSplit.inRange.total)}</td></tr>` : ''}
+          ${defSplit.other.total ? `<tr><td>加：之前月份掛帳，約定本月支付（預計 ${defSplit.other.dues.join('、')}）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
-          ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
-          ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待付（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
-          <tr><td><strong>應付合計（含掛帳）</strong></td><td class="amount"><strong>$${money(payable+defSplit.other.total)}</strong></td></tr>` : ''}
         </table>
       </div>
       ${record ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
@@ -7030,8 +7032,9 @@ function renderPayrollPage(c){
 // 本來就只在ADMIN_TABS，夥伴端完全不會有這個分頁、也查不到別人的這些資料）。
 // 2026-11-01補：加上掛帳（延後付款）處理——computeDriverPayable()本身不管掛帳，
 // 這個月掛到以後才付的要先扣掉（不是這個月真的要匯的錢），以前月份掛到這個月付的
-// 要加回來，這樣這裡的金額才會是「這個月真的要轉出去的錢」，不只是跟報酬結算頁
-// 一致而已（報酬結算頁的「可領淨額」本身也沒扣掛帳，只在旁邊加註提醒，要人工判斷）。
+// 要加回來，這樣這裡的金額才會是「這個月真的要轉出去的錢」。
+// 2026-11-15補：報酬結算頁的「可領淨額」現在也用同一套掛帳加減邏輯了（以前只在旁邊
+// 加註提醒、要人工判斷），兩邊數字應該完全一致，不會再有「這裡扣了、那裡沒扣」的落差。
 async function renderPaymentList(c){
   const month = state._paymentListMonth || todayStr().slice(0,7);
   c.innerHTML = `

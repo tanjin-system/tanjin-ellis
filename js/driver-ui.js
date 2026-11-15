@@ -1181,16 +1181,22 @@ async function renderMyEarnings(c){
     if(state.tab!=='my-earnings' || (state._myEarningsMonth||monthStr)!==m) return; // 使用者可能已經切走這一頁或換了月份
     const isCurrent = m===todayStr().slice(0,7);
     const netNow = r.net-(r.paid||0)+carryIn;
+    // 2026-11-15修：使用者要求夥伴看到的「當月淨額」要是真的這個月會進戶頭的錢——
+    // 這個月做的事、約好晚點才付的，不算進這個月（已掛帳預計另一天撥款）；別個月做
+    // 的事、約好這個月撥款的，才併進來。以前這裡只在下面多一行「應領合計（含掛帳）」
+    // 當參考，最上面的大數字沒有跟著調整，容易讓夥伴誤會「這個月領到的錢」。
+    const trueNet = netNow - defSplit.inRange.total + defSplit.other.total;
     const byDay = new Map(); r.trips.forEach(a=>byDay.set(a.date,(byDay.get(a.date)||0)+tripPay(a)));
     const dim = Number(monthEndStr(m).slice(8));
     const dayVals = Array.from({length:dim}, (_,i)=>[i+1, byDay.get(m+'-'+String(i+1).padStart(2,'0'))||0]);
     const dayMax = Math.max(1, ...dayVals.map(x=>x[1]));
-    const paidAmt = Math.max(0, r.paid||0), unpaidAmt = Math.max(0, netNow);
+    const paidAmt = Math.max(0, r.paid||0), unpaidAmt = Math.max(0, trueNet);
     const payTotal = paidAmt + unpaidAmt;
     const hero = `<div class="earn-hero">
       <div class="eh-l">${isCurrent?'本月目前預估淨額':m+' 當月淨額'}</div>
-      <div class="eh-n">$${money(netNow)}</div>
+      <div class="eh-n">${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</div>
       <div class="eh-row"><span>已完成 ${r.trips.length} 趟</span><span>報酬 $${money(r.tripTotal)}</span>${r.adjTotal?`<span>調整 ${r.adjTotal>=0?'+':'−'}$${money(Math.abs(r.adjTotal))}</span>`:''}</div>
+      ${defSplit.inRange.total||defSplit.other.total ? `<div class="eh-row" style="color:#8A5A17;">${defSplit.inRange.total?`<span>已掛帳 $${money(defSplit.inRange.total)}，約定 ${defSplit.inRange.dues.join('、')} 撥款（不算進本月）</span>`:''}${defSplit.other.total?`<span>含之前月份掛帳撥入 $${money(defSplit.other.total)}</span>`:''}</div>` : ''}
       ${paidAmt>0 ? `<div class="eh-pay"><i class="pd" style="width:${Math.round(paidAmt*100/payTotal)}%"></i><i class="up" style="width:${100-Math.round(paidAmt*100/payTotal)}%"></i></div>
         <div class="eh-leg"><span>🟩 已付 $${money(paidAmt)}</span><span>🟧 未付 $${money(unpaidAmt)}</span></div>` : ''}
       <div class="mini-bars" title="每日報酬">${dayVals.map(([d,v])=>`<div class="mb" title="${m}-${String(d).padStart(2,'0')}：$${money(v)}"><i class="${v?'':'z'}" style="height:${v?Math.max(4,Math.round(v*100/dayMax)):4}%"></i><span>${d%5===0||d===1?d:''}</span></div>`).join('')}</div>
@@ -1211,10 +1217,9 @@ async function renderMyEarnings(c){
           ${r.reimbursement ? `<tr><td>　其中含代墊款（憑證開公司）</td><td class="amount">$${money(r.reimbursement)}</td></tr>` : ''}
           ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
-          <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>$${money(netNow)}</strong></td></tr>
-          ${defSplit.inRange.total ? `<tr><td>　其中已掛帳，預計 ${defSplit.inRange.dues.join('、')} 支付</td><td class="amount">$${money(defSplit.inRange.total)}</td></tr>` : ''}
-          ${defSplit.other.total ? `<tr><td>加：其他月份掛帳待領（預計 ${defSplit.other.dues.join('、')} 支付）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>
-          <tr><td><strong>應領合計（含掛帳）</strong></td><td class="amount"><strong>$${money(netNow+defSplit.other.total)}</strong></td></tr>` : ''}
+          ${defSplit.inRange.total ? `<tr><td>已掛帳，約定 ${defSplit.inRange.dues.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(defSplit.inRange.total)}</td></tr>` : ''}
+          ${defSplit.other.total ? `<tr><td>加：之前月份掛帳，約定本月撥款（預計 ${defSplit.other.dues.join('、')}）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>` : ''}
+          <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</strong></td></tr>
         </table>
         ${(()=>{
           const groups = new Map();
