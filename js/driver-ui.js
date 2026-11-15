@@ -1203,9 +1203,9 @@ async function renderMyEarnings(c){
     // 兩種狀態理論上可能同時存在（部分已付、部分還沒），所以分開各自判斷要不要顯示。
     const deferNotes = [
       ann.inRange.pendingTotal ? `已掛帳 $${money(ann.inRange.pendingTotal)}，約定 ${ann.inRange.pendingDues.join('、')} 撥款（不算進本月）` : '',
-      ann.inRange.paidTotal ? `已掛帳 $${money(ann.inRange.paidTotal)}，已於 ${ann.inRange.paidDates.join('、')} 撥款（不算進本月）` : '',
+      ann.inRange.paidTotal ? `其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 撥款（已反映在「已領現金／已付款」，這裡僅供對照）` : '',
       ann.other.pendingTotal ? `含之前月份掛帳撥入 $${money(ann.other.pendingTotal)}（約定本月撥款）` : '',
-      ann.other.paidTotal ? `含之前月份掛帳撥入 $${money(ann.other.paidTotal)}（已於 ${ann.other.paidDates.join('、')} 撥款）` : ''
+      ann.other.paidTotal ? `含之前月份掛帳 $${money(ann.other.paidTotal)}，已於 ${ann.other.paidDates.join('、')} 撥款（僅供參考，不計入本月淨額）` : ''
     ].filter(Boolean);
     const hero = `<div class="earn-hero">
       <div class="eh-l">${isCurrent?'本月目前預估淨額':m+' 當月淨額'}</div>
@@ -1233,9 +1233,9 @@ async function renderMyEarnings(c){
           ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
           ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
-          ${ann.inRange.paidTotal ? `<tr><td>已掛帳，已於 ${ann.inRange.paidDates.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(ann.inRange.paidTotal)}</td></tr>` : ''}
+          ${ann.inRange.paidTotal ? `<tr><td>　其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 撥款（已反映在上面「已領現金／已付款」，這裡僅供對照）</td><td class="amount">—</td></tr>` : ''}
           ${ann.other.pendingTotal ? `<tr><td>加：之前月份掛帳，約定本月撥款（預計 ${ann.other.pendingDues.join('、')}）</td><td class="amount">+$${money(ann.other.pendingTotal)}</td></tr>` : ''}
-          ${ann.other.paidTotal ? `<tr><td>加：之前月份掛帳，已於本月撥款（${ann.other.paidDates.join('、')}）</td><td class="amount">+$${money(ann.other.paidTotal)}</td></tr>` : ''}
+          ${ann.other.paidTotal ? `<tr><td>　其中 $${money(ann.other.paidTotal)} 是之前月份掛帳，已於 ${ann.other.paidDates.join('、')} 撥款（僅供參考，不計入本月淨額）</td><td class="amount">—</td></tr>` : ''}
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</strong></td></tr>
         </table>
         ${(()=>{
