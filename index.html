@@ -602,8 +602,8 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=34"></script>
-<script defer src="js/driver-ui.js?v=19"></script>
+<script defer src="js/data-layer.js?v=36"></script>
+<script defer src="js/driver-ui.js?v=21"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -6372,7 +6372,7 @@ function renderPayrollPage(c){
       </div>
       <div id="aDateField" class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
       <div id="aDeferFields" hidden>
-        <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。轉帳後在下面「待付款清單」按「已付款」即可。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+        <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。到了歸屬月份，透過「夥伴匯款清單」的「登記全部已付款」一起處理即可，不用在這裡單獨標記付款。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
         <div class="grid3">
           <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
           <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
@@ -6601,37 +6601,21 @@ function renderPayrollPage(c){
     if(!mine.length){ el.innerHTML = ''; return; }
     const dfPanel = document.getElementById('dfPanel');
     if(dfPanel) dfPanel.open = true;
+    // 2026-11-15修：拿掉這裡的「已付款」動作——使用者明確要求，掛帳一律合併到歸屬月份
+    // 一起處理，透過「夥伴匯款清單」的「全月付清」批次登記，不要讓掛帳可以在這裡單獨
+    // 標記付款（兩條路可以處理同一筆錢，容易搞混、也可能重複登記）。這裡純粹保留「誰有
+    // 掛帳在等、預計哪個月付、有沒有逾期」的清單跟「取消掛帳」，不再有「已付款」按鈕。
     el.innerHTML = `<div class="panel no-print" ${mine.some(g=>deferredStatus(g.due)==='overdue')?'style="border-color:var(--danger); border-width:2px;"':''}>
       <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
+      <p class="section-sub" style="margin-top:0;">這些掛帳會合併到各自的歸屬月份，透過「夥伴匯款清單」的「登記全部已付款」一起處理，這裡不能單獨標記已付款。</p>
       <table><thead><tr><th>區間</th><th>趟報酬合計</th><th>歸屬月份</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
-        <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.dueMonth||'—'}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn amber" data-dfpay="${i}">已付款</button> <button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
-      <div id="dfPayForm"></div>
+        <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.dueMonth||'—'}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
     </div>`;
     el.querySelectorAll('[data-dfcancel]').forEach(b=>{
       b.onclick = async ()=>{
         const g = mine[Number(b.dataset.dfcancel)];
         if(!confirm(`取消 ${driverName(driverId)} ${g.start}${g.start===g.end?'':'～'+g.end} 的掛帳嗎？（任務回到一般狀態，不會刪除任何資料）`)) return;
         try{ await cancelDeferredPayment(g.ids); renderDeferredPanel(); }catch(err){ alert(err.message); }
-      };
-    });
-    el.querySelectorAll('[data-dfpay]').forEach(b=>{
-      b.onclick = ()=>{
-        const g = mine[Number(b.dataset.dfpay)];
-        const f = el.querySelector('#dfPayForm');
-        f.innerHTML = `<div style="border:1px dashed var(--border); padding:8px; border-radius:8px; margin-top:8px;">
-          <div style="font-size:12.5px; margin-bottom:6px;">登記 ${escapeHtml(driverName(driverId))} 的付款：${g.start}${g.start===g.end?'':'～'+g.end}，趟報酬合計 <b>$${money(g.total)}</b></div>
-          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-            <label style="font-size:12px;">付款日期</label><input id="dfpDate" type="date" value="${todayStr()}">
-            <select id="dfpMethod" style="width:auto;"><option value="transfer">轉帳</option><option value="cash">現金</option></select>
-            <input id="dfpAmt" type="number" placeholder="金額（空白＝全額）" style="width:160px;">
-            <button class="btn amber" id="dfpSave" style="padding:5px 10px; font-size:12px;">確認已付款</button>
-          </div></div>`;
-        f.querySelector('#dfpSave').onclick = async ()=>{
-          const args = { driverId, start:g.start, end:g.end, payDate:f.querySelector('#dfpDate').value, method:f.querySelector('#dfpMethod').value, amount:f.querySelector('#dfpAmt').value };
-          if(!confirm(`確定已於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${driverName(driverId)} ${g.start}～${g.end} 的任務報酬${args.amount?`（$${args.amount}）`:`（全額 $${money(g.total)}）`}嗎？`)) return;
-          try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}`); renderContent(); }
-          catch(err){ alert(err.message); }
-        };
       };
     });
   }
@@ -6896,7 +6880,10 @@ function renderPayrollPage(c){
     try{ defHistory = await fetchDeferralHistory(driverId); }catch(e){}
     const ann = deferralAnnotations(defHistory, monthStr+'-01', monthEndStr(monthStr));
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又改選了別的夥伴/月份
-    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn - ann.inRange.pendingTotal + ann.other.pendingTotal;
+    // 2026-11-15三修：使用者明確要求——掛帳就是「合併到歸屬月份一起撥款」，之前月份掛帳
+    // 歸屬本月的金額一律直接併進本月總額，不管那幾趟本身有沒有登記過付款，不再另外判斷、
+    // 扣回去（不是兩筆分開的錢，是同一筆合併處理）。
+    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn - ann.inRange.pendingTotal + ann.other.total;
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
@@ -6930,8 +6917,7 @@ function renderPayrollPage(c){
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
           ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
           ${ann.inRange.paidTotal ? `<tr><td>　其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 支付（已反映在上面「已付款」，這裡僅供對照）</td><td class="amount">—</td></tr>` : ''}
-          ${ann.other.total ? `<tr><td>加：之前月份掛帳，歸屬本月${ann.other.pendingTotal?`（約定 ${ann.other.pendingDues.join('、')} 支付）`:''}</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
-          ${ann.other.paidTotal ? `<tr><td>　其中 $${money(ann.other.paidTotal)} 已於 ${ann.other.paidDates.join('、')} 支付</td><td class="amount">-$${money(ann.other.paidTotal)}</td></tr>` : ''}
+          ${ann.other.total ? `<tr><td>加：${monthsLabel(ann.other.sourceMonths)}掛帳合併至本月</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
         </table>
       </div>
@@ -7073,7 +7059,7 @@ async function renderPaymentList(c){
     try{
       monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr));
       await ensureAdjustmentsRange(monthStr+'-01');
-      allDeferred = await fetchDeferredTrips();
+      allDeferred = await fetchDeferralHistory();
     }catch(err){ box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; return; }
     if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能已經切走這一頁或換了月份
     // 同一家銀行的排在一起，方便去那家銀行網銀/APP時一次處理完；銀行內再依姓名排序；沒填銀行的排最後。
@@ -7089,13 +7075,17 @@ async function renderPaymentList(c){
     // 分別查快很多（每個回溯月份只需要查一次整批資料，不用每位夥伴各查一次）。
     const carryMap = await computeCarryInMap(monthStr, drivers.map(d=>d.id));
     if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又切走或換月份
+    // 2026-11-15三修：使用者明確要求——掛帳就是「合併到歸屬月份一起撥款」，之前月份掛帳
+    // 歸屬本月的金額（ann.other.total）一律直接併進本月匯款金額，不管那幾趟本身有沒有
+    // 登記過付款，不再另外扣回去（這裡只是顯示；真的要登記付款時，recordMonthlyPayment()
+    // 自己會跳過已經登記過的部分，不會重複付）。
     const allRows = drivers.map(d=>{
       const base = computeDriverPayable(d.id, monthStr, monthAssignments);
       const carryIn = carryMap.get(d.id) || 0;
-      const defSplit = deferredSplit(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
-      // 這個月做的事有一部分約好晚點付（inRange），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來。
-      const payable = base.payable + carryIn - defSplit.inRange.total + defSplit.other.total;
-      return { driver:d, payable, defSplit, advanceTotal: base.advanceTotal, paidTotal: base.paidTotal, carryIn };
+      const ann = deferralAnnotations(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
+      // 這個月做的事有一部分約好晚點付（inRange，還沒撥款的部分），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來。
+      const payable = base.payable + carryIn - ann.inRange.pendingTotal + ann.other.total;
+      return { driver:d, payable, ann, advanceTotal: base.advanceTotal, paidTotal: base.paidTotal, carryIn };
     });
     // 本月淨額為0（或負）的不用匯款，清單裡不列出，去銀行轉帳時不用看到一堆$0的人。
     const rows = allRows.filter(x=>Math.round(x.payable)>0);
@@ -7128,24 +7118,34 @@ async function renderPaymentList(c){
         </div>
       </div>` : ''}
       ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;"><button class="btn ghost" data-plfixdriver="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} → 前往夥伴資料補齊</button></div>`).join('')}</div>` : ''}
+      ${rows.length ? `<div class="panel no-print" id="plBatchPanel">
+        <div class="toolbar"><h3 style="margin:0;">登記全部已付款</h3><span id="plBatchCount" style="font-size:12.5px; color:var(--ink-soft);"></span></div>
+        <p class="section-sub" style="margin-top:0;">把下面勾選的夥伴，這個月（含之前月份掛帳合併進來的部分）還沒登記過的錢，一次登記成已付款——已經登記過的部分會自動跳過，不會重複付。登記後無法整批復原，要取消要到各自的「週期任務清單」逐一取消。</p>
+        <div class="grid2">
+          <div class="field"><label>付款日期</label><input id="plBatchDate" type="date" value="${todayStr()}"></div>
+          <div class="field"><label>付款方式</label><select id="plBatchMethod"><option value="transfer">轉帳</option><option value="cash">現金</option></select></div>
+        </div>
+        <button class="btn amber" id="plBatchGo" style="width:100%;">登記已選取夥伴的已付款</button>
+      </div>` : ''}
       <div class="panel">
         ${skipped ? `<p class="note" style="margin-top:0;">另有 ${skipped} 位在職夥伴本月淨額為 $0（或以下），免匯款，未列在下面清單。</p>` : ''}
         <table id="plTable">
-          <thead><tr><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
-          <tbody>${rows.map(({driver:d, payable, defSplit, carryIn}, i)=>{
+          <thead><tr><th class="no-print"><input type="checkbox" id="plSelAll" checked title="全選/取消全選"></th><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
+          <tbody>${rows.map(({driver:d, payable, ann, carryIn}, i)=>{
             const newBank = i>0 && (d.bank.bankName||'')!==(rows[i-1].driver.bank.bankName||'');
             const baseStyle = !d.bank.account||!d.idNumber ? 'background:rgba(214,69,69,.08);' : '';
             return `<tr style="${baseStyle}${newBank?' border-top:2px solid var(--border);':''}">
+            <td class="no-print"><input type="checkbox" class="plSelRow" data-plid="${d.id}" data-plamt="${payable}" checked></td>
             <td><button class="btn ghost" data-plgopayroll="${d.id}" style="padding:2px 8px; font-size:12.5px;" title="前往這位夥伴的報酬結算明細">${escapeHtml(d.name)}</button></td>
             <td>${escapeHtml(d.bank.holder||'—')}</td>
             <td>${escapeHtml(d.bank.bankName||'—')}</td>
             <td>${escapeHtml(d.bank.branch||'—')}</td>
             <td class="mono">${escapeHtml(d.bank.account||'—')}</td>
             <td class="mono">${escapeHtml(d.idNumber||'—')}</td>
-            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${defSplit.inRange.total||defSplit.other.total||carryIn?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${defSplit.inRange.total?`已扣掛帳待${defSplit.inRange.dues.join('、')}付 $${money(defSplit.inRange.total)}`:''}${defSplit.other.total?`${defSplit.inRange.total?'；':''}含上期掛帳 $${money(defSplit.other.total)}`:''}${carryIn?`${defSplit.inRange.total||defSplit.other.total?'；':''}<span style="color:var(--danger);">已扣承接前期超支 $${money(Math.abs(carryIn))}</span>`:''}</div>`:''}</td>
+            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${ann.inRange.pendingTotal||ann.other.total||carryIn?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${ann.inRange.pendingTotal?`已扣掛帳待${ann.inRange.pendingDues.join('、')}付 $${money(ann.inRange.pendingTotal)}`:''}${ann.other.total?`${ann.inRange.pendingTotal?'；':''}含${monthsLabel(ann.other.sourceMonths)}掛帳合併 $${money(ann.other.total)}`:''}${carryIn?`${ann.inRange.pendingTotal||ann.other.total?'；':''}<span style="color:var(--danger);">已扣承接前期超支 $${money(Math.abs(carryIn))}</span>`:''}</div>`:''}</td>
           </tr>`;
-          }).join('') || `<tr><td colspan="7"><div class="empty">${allRows.length?'這個月所有在職夥伴淨額都是$0（或以下），沒有人需要匯款':'沒有在職夥伴'}</div></td></tr>`}</tbody>
-          <tfoot><tr><td colspan="6" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
+          }).join('') || `<tr><td colspan="8"><div class="empty">${allRows.length?'這個月所有在職夥伴淨額都是$0（或以下），沒有人需要匯款':'沒有在職夥伴'}</div></td></tr>`}</tbody>
+          <tfoot><tr><td colspan="7" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
         </table>
       </div>`;
     box.querySelectorAll('[data-plgopayroll]').forEach(btn=>{
@@ -7154,6 +7154,46 @@ async function renderPaymentList(c){
     box.querySelectorAll('[data-plfixdriver]').forEach(btn=>{
       btn.onclick = ()=>{ const d = state.data.drivers.find(x=>x.id===btn.dataset.plfixdriver); if(d) driverListSearch = d.name; switchTab('drivers'); };
     });
+    // 2026-11-15：全部登記已付款——使用者要求跟網銀批次轉帳一樣，不要一個個夥伴點，
+    // 一次選取、一次登記。每位夥伴各自獨立登記一筆（不是合併成一筆），之後要取消某一位
+    // 可以單獨取消，不會牽連其他人。
+    const updateBatchCount = ()=>{
+      const countEl = document.getElementById('plBatchCount');
+      if(!countEl) return;
+      const checked = [...box.querySelectorAll('.plSelRow:checked')];
+      const sum = checked.reduce((s,el)=>s+Number(el.dataset.plamt||0), 0);
+      countEl.textContent = `已選 ${checked.length} 位，合計 $${money(sum)}`;
+    };
+    box.querySelectorAll('.plSelRow').forEach(el=>{ el.onchange = updateBatchCount; });
+    const selAll = document.getElementById('plSelAll');
+    if(selAll) selAll.onchange = ()=>{ box.querySelectorAll('.plSelRow').forEach(el=>{ el.checked = selAll.checked; }); updateBatchCount(); };
+    updateBatchCount();
+    const batchGo = document.getElementById('plBatchGo');
+    if(batchGo) batchGo.onclick = async ()=>{
+      const payDate = document.getElementById('plBatchDate').value;
+      const method = document.getElementById('plBatchMethod').value;
+      if(!payDate){ alert('請選擇付款日期'); return; }
+      const checked = [...box.querySelectorAll('.plSelRow:checked')];
+      if(!checked.length){ alert('請至少勾選一位夥伴'); return; }
+      const names = checked.map(el=>driverName(el.dataset.plid));
+      const estTotal = checked.reduce((s,el)=>s+Number(el.dataset.plamt||0), 0);
+      if(!confirm(`確定要登記 ${checked.length} 位夥伴 ${monthStr} 的已付款嗎？\n${names.slice(0,8).join('、')}${names.length>8?` 等共${names.length}位`:''}\n畫面上合計約 $${money(estTotal)}（實際登記金額以當下查到的還沒登記過的部分為準，已經登記過的會自動跳過、不重複付）。\n付款日期：${payDate}，方式：${method==='cash'?'現金':'轉帳'}。\n登記後無法整批復原，需要的話要逐一到「週期任務清單」取消。`)) return;
+      batchGo.disabled = true; batchGo.textContent = '登記中…';
+      const results = [];
+      for(const el of checked){
+        const did = el.dataset.plid;
+        try{ const r = await recordMonthlyPayment({ driverId: did, monthStr, payDate, method }); results.push({ name: driverName(did), ok:true, total: r.total }); }
+        catch(err){ results.push({ name: driverName(did), ok:false, error: err.message }); }
+      }
+      const okRows = results.filter(r=>r.ok && r.total>0);
+      const zeroRows = results.filter(r=>r.ok && !r.total);
+      const failRows = results.filter(r=>!r.ok);
+      let msg = `登記完成：${okRows.length} 位成功，合計 $${money(okRows.reduce((s,r)=>s+r.total,0))}。`;
+      if(zeroRows.length) msg += `\n${zeroRows.length} 位沒有可登記的金額（可能已經處理過）：${zeroRows.map(r=>r.name).join('、')}`;
+      if(failRows.length) msg += `\n${failRows.length} 位登記失敗：${failRows.map(r=>`${r.name}（${r.error}）`).join('；')}`;
+      alert(msg);
+      refresh();
+    };
   }
 }
 

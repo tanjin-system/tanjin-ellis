@@ -2429,6 +2429,50 @@ async function recordPeriodPayment({ driverId, start, end, payDate, method, amou
   return { count: list.length, total: paying, skipped: trips.filter(t => t.status === 'completed').length - list.length };
 }
 
+// 2026-11-15：全月付清——使用者要求「夥伴匯款清單」要能一次把一整個月（含之前月份掛帳、
+// 歸屬這個月的部分）登記成已付款，不用像 recordPeriodPayment() 那樣自己填區間、也不用
+// 掛帳跟本月分兩次登記。已經有 paid_amount 的任務（不管是本月自己標過，還是掛帳那邊已經
+// 登記過）一律跳過，不會重複寫入——這樣才能讓「夥伴匯款清單」上可以放心一次點很多人一起付，
+// 不用擔心某個人裡面有一部分其實已經處理過。
+async function recordMonthlyPayment({ driverId, monthStr, payDate, method }) {
+  if (!/^\d{4}-\d{2}$/.test(monthStr || '')) throw new Error('月份格式錯誤');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(payDate || '')) throw new Error('請選擇付款日期');
+  if (method !== 'cash' && method !== 'transfer') throw new Error('請選擇付款方式');
+  const monthStart = monthStr + '-01', monthEnd = monthEndStr(monthStr);
+  const ownTrips = await fetchDriverTripsInRange(driverId, monthStart, monthEnd);
+  const { list: ownUnpaid } = unpaidTripsOf(ownTrips);
+  const history = await fetchDeferralHistory(driverId);
+  const deferredInUnpaid = history.filter(t => (t.date < monthStart || t.date > monthEnd) && t.payDueMonth === monthStr && !(Number(t.paidAmount) > 0));
+  const allUnpaid = [...ownUnpaid, ...deferredInUnpaid];
+  if (!allUnpaid.length) return { count: 0, total: 0 }; // 這個月（含掛帳歸屬本月的部分）沒有要付的，批次情境下當作跳過這個人，不當成錯誤中斷整批
+  await ensureAdjustmentsRange(monthStart);
+  const advanceTotal = advanceTotalInRange(driverId, monthStart, monthEnd);
+  const grossTotal = allUnpaid.reduce((s, t) => s + tripPay(t), 0);
+  const paying = Math.max(0, Math.round((grossTotal - advanceTotal) * 100) / 100);
+  if (paying <= 0) return { count: 0, total: 0 }; // 扣掉預支後沒有要付的
+  const group = crypto.randomUUID();
+  let allocated = 0;
+  const parts = allUnpaid.map((t, i) => {
+    const part = i === allUnpaid.length - 1 ? Math.round((paying - allocated) * 100) / 100 : Math.round(paying * tripPay(t) / grossTotal * 100) / 100;
+    allocated += part;
+    return { id: t.id, part };
+  });
+  const supabase = getSupabase();
+  const results = await Promise.all(parts.map(p => supabase.from('assignments').update({
+    paid_amount: p.part, paid_date: payDate, paid_method: method,
+    paid_group: group, paid_period_start: monthStart, paid_period_end: monthEnd
+  }).eq('id', p.id)));
+  const failed = results.find(r => r.error);
+  if (failed) throw new Error('記錄已付款失敗（部分任務可能已更新，請重新整理後檢查）：' + failed.error.message);
+  parts.forEach(p => {
+    const a = state.data.assignments.find(x => x.id === p.id);
+    if (a) Object.assign(a, { paidAmount: p.part, paidDate: payDate, paidMethod: method, paidGroup: group, paidPeriodStart: monthStart, paidPeriodEnd: monthEnd });
+  });
+  state._pendingPayCache = null;
+  state._carryInCache = null;
+  return { count: allUnpaid.length, total: paying };
+}
+
 // 取消整次付款（同一個 paid_group 的所有任務一起取消）。
 async function cancelPaymentGroup(groupId) {
   const supabase = getSupabase();
@@ -2559,6 +2603,11 @@ async function fetchDeferralHistory(driverId) {
 // 兩種，才能分別顯示「已掛帳，預計X撥款」或「已掛帳，已於X撥款」。財務計算（可領淨額／當月淨額）
 // 只能用 pendingTotal（還沒撥款的部分）——已經撥款的部分，driverMonthly() 早就透過那幾趟任務
 // 自己的 paid_amount 算進「已付款」扣掉了，不能在這裡用 paidTotal 再扣一次，不然會變成重複扣款。
+// ['2026-09'] -> '9月'；['2026-08','2026-09'] -> '8月、9月'——顯示掛帳來源月份用，
+// 不能寫「之前月份」這種含糊字眼。
+function monthsLabel(months) {
+  return months.map(m => Number(m.slice(5, 7)) + '月').join('、');
+}
 function deferralAnnotations(trips, start, end) {
   const monthStr = start.slice(0, 7);
   const pack = list => {
@@ -2569,7 +2618,10 @@ function deferralAnnotations(trips, start, end) {
     return {
       total: pendingTotal + paidTotal,
       pendingTotal, pendingDues: [...new Set(pending.map(t => t.payDueDate))].sort(),
-      paidTotal, paidDates: [...new Set(paid.map(t => t.paidDate))].sort()
+      paidTotal, paidDates: [...new Set(paid.map(t => t.paidDate))].sort(),
+      // 這幾趟實際是哪個月做的事（不是歸屬月份）——顯示「X月掛帳合併至本月」要用具體月份，
+      // 不能寫「之前月份」這種含糊字眼（使用者明確要求：財務數字不能寫得敷衍）。
+      sourceMonths: [...new Set(list.map(t => t.date.slice(0, 7)))].sort()
     };
   };
   return {
