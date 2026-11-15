@@ -2533,6 +2533,49 @@ function deferredSplit(trips, start, end) {
     other: pack(trips.filter(t => (t.date < start || t.date > end) && t.payDueMonth === monthStr))
   };
 }
+// 2026-11-15：掛帳的「歷史」——不像 fetchDeferredTrips() 只抓還沒付的（那個是「待付款清單」
+// 專用，付完就該消失，合理）。這支連已經付過的也一起抓，給「我的報酬」「報酬結算」畫面用來
+// 顯示「這筆曾經掛過帳」的永久註記：使用者反饋，一旦實際撥款，畫面上「已掛帳」的痕跡就整個
+// 消失、變成普通的「已付款」，夥伴/主控看不出這筆錢原本是9月做的事、10月才算、11月才撥款，
+// 這段故事應該留著讓人看得懂，不是付完就清空不留紀錄。
+async function fetchDeferralHistory(driverId) {
+  const supabase = getSupabase();
+  let q = supabase.from('assignments')
+    .select('id, trip_date, driver_id, fare, payroll_fare_snapshot, extra_pay, pay_due_date, pay_due_month, pay_due_note, paid_amount, paid_date')
+    .not('pay_due_date', 'is', null).order('pay_due_date').limit(1000);
+  if (driverId) q = q.eq('driver_id', driverId);
+  const { data, error } = await q;
+  if (error) throw new Error('讀取掛帳歷史失敗：' + error.message);
+  return (data || []).map(r => ({
+    id: r.id, date: r.trip_date, driverId: r.driver_id, fare: Number(r.fare),
+    payrollFareSnapshot: r.payroll_fare_snapshot != null ? Number(r.payroll_fare_snapshot) : null,
+    extraPay: Number(r.extra_pay || 0), payDueDate: r.pay_due_date,
+    payDueMonth: r.pay_due_month || shiftMonth(r.pay_due_date.slice(0, 7), -1),
+    payDueNote: r.pay_due_note || '',
+    paidAmount: Number(r.paid_amount || 0), paidDate: r.paid_date || null
+  }));
+}
+// 跟 deferredSplit() 同一種 inRange／other 分法，但不只算金額——還要分「已撥款」跟「還沒撥款」
+// 兩種，才能分別顯示「已掛帳，預計X撥款」或「已掛帳，已於X撥款」。財務計算（可領淨額／當月淨額）
+// 只能用 pendingTotal（還沒撥款的部分）——已經撥款的部分，driverMonthly() 早就透過那幾趟任務
+// 自己的 paid_amount 算進「已付款」扣掉了，不能在這裡用 paidTotal 再扣一次，不然會變成重複扣款。
+function deferralAnnotations(trips, start, end) {
+  const monthStr = start.slice(0, 7);
+  const pack = list => {
+    const pending = list.filter(t => !(Number(t.paidAmount) > 0));
+    const paid = list.filter(t => Number(t.paidAmount) > 0);
+    return {
+      pendingTotal: pending.reduce((s, t) => s + tripPay(t), 0),
+      pendingDues: [...new Set(pending.map(t => t.payDueDate))].sort(),
+      paidTotal: paid.reduce((s, t) => s + tripPay(t), 0),
+      paidDates: [...new Set(paid.map(t => t.paidDate))].sort()
+    };
+  };
+  return {
+    inRange: pack(trips.filter(t => t.date >= start && t.date <= end)),
+    other: pack(trips.filter(t => (t.date < start || t.date > end) && t.payDueMonth === monthStr))
+  };
+}
 // 首頁用：5 分鐘內共用同一份結果，付款／掛帳動作會清掉快取。
 async function getDeferredCached() {
   const c = state._pendingPayCache;

@@ -1171,9 +1171,16 @@ async function renderMyEarnings(c){
       withholdNhi: documentedNhi>0, nhiRate: PAYROLL_NHI_RATE, nhiAmount: documentedNhi,
       actualNet: documentedActual + undocCalc.net
     };
-    let defTrips = [];
-    try{ defTrips = await fetchDeferredTrips(dId); }catch(e){}
-    const defSplit = deferredSplit(defTrips, m+'-01', monthEndStr(m));
+    let defHistory = [];
+    try{ defHistory = await fetchDeferralHistory(dId); }catch(e){}
+    // 2026-11-15修：改用 fetchDeferralHistory()（連已撥款的掛帳也一起抓）＋
+    // deferralAnnotations()，讓「已經撥款」的掛帳不會一付完就從畫面上消失，而是
+    // 留下「已於X撥款」的永久註記——使用者反饋，付完之後夥伴/主控應該還要看得懂
+    // 這筆錢原本是哪個月做的事、掛到哪個月、最後哪天撥款，不是付完就清空不留痕跡。
+    // 財務計算仍然只用 pendingTotal（還沒撥款的部分）——已撥款的部分，driverMonthly()
+    // 早就透過那幾趟任務自己的 paid_amount 算進「已領現金／已付款」扣掉了，這裡不能
+    // 再用 paidTotal 重複扣一次。
+    const ann = deferralAnnotations(defHistory, m+'-01', monthEndStr(m));
     // 承接前幾個月還沒扣完的超支餘額（預支/區間勞報單先付超過當月賺的部分），不會自動消失，
     // 要繼續從這裡扣——見 index.html 的 computeCarryInMap() 旁的說明。
     let carryIn = 0;
@@ -1185,18 +1192,26 @@ async function renderMyEarnings(c){
     // 這個月做的事、約好晚點才付的，不算進這個月（已掛帳預計另一天撥款）；別個月做
     // 的事、約好這個月撥款的，才併進來。以前這裡只在下面多一行「應領合計（含掛帳）」
     // 當參考，最上面的大數字沒有跟著調整，容易讓夥伴誤會「這個月領到的錢」。
-    const trueNet = netNow - defSplit.inRange.total + defSplit.other.total;
+    const trueNet = netNow - ann.inRange.pendingTotal + ann.other.pendingTotal;
     const byDay = new Map(); r.trips.forEach(a=>byDay.set(a.date,(byDay.get(a.date)||0)+tripPay(a)));
     const dim = Number(monthEndStr(m).slice(8));
     const dayVals = Array.from({length:dim}, (_,i)=>[i+1, byDay.get(m+'-'+String(i+1).padStart(2,'0'))||0]);
     const dayMax = Math.max(1, ...dayVals.map(x=>x[1]));
     const paidAmt = Math.max(0, r.paid||0), unpaidAmt = Math.max(0, trueNet);
     const payTotal = paidAmt + unpaidAmt;
+    // 掛帳註記文字：還沒撥款的講「約定X撥款」，已經撥款的講「已於X撥款」——同一個月份
+    // 兩種狀態理論上可能同時存在（部分已付、部分還沒），所以分開各自判斷要不要顯示。
+    const deferNotes = [
+      ann.inRange.pendingTotal ? `已掛帳 $${money(ann.inRange.pendingTotal)}，約定 ${ann.inRange.pendingDues.join('、')} 撥款（不算進本月）` : '',
+      ann.inRange.paidTotal ? `已掛帳 $${money(ann.inRange.paidTotal)}，已於 ${ann.inRange.paidDates.join('、')} 撥款（不算進本月）` : '',
+      ann.other.pendingTotal ? `含之前月份掛帳撥入 $${money(ann.other.pendingTotal)}（約定本月撥款）` : '',
+      ann.other.paidTotal ? `含之前月份掛帳撥入 $${money(ann.other.paidTotal)}（已於 ${ann.other.paidDates.join('、')} 撥款）` : ''
+    ].filter(Boolean);
     const hero = `<div class="earn-hero">
       <div class="eh-l">${isCurrent?'本月目前預估淨額':m+' 當月淨額'}</div>
       <div class="eh-n">${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</div>
       <div class="eh-row"><span>已完成 ${r.trips.length} 趟</span><span>報酬 $${money(r.tripTotal)}</span>${r.adjTotal?`<span>調整 ${r.adjTotal>=0?'+':'−'}$${money(Math.abs(r.adjTotal))}</span>`:''}</div>
-      ${defSplit.inRange.total||defSplit.other.total ? `<div class="eh-row" style="color:#8A5A17;">${defSplit.inRange.total?`<span>已掛帳 $${money(defSplit.inRange.total)}，約定 ${defSplit.inRange.dues.join('、')} 撥款（不算進本月）</span>`:''}${defSplit.other.total?`<span>含之前月份掛帳撥入 $${money(defSplit.other.total)}</span>`:''}</div>` : ''}
+      ${deferNotes.length ? `<div class="eh-row" style="color:#8A5A17;">${deferNotes.map(t=>`<span>${t}</span>`).join('')}</div>` : ''}
       ${paidAmt>0 ? `<div class="eh-pay"><i class="pd" style="width:${Math.round(paidAmt*100/payTotal)}%"></i><i class="up" style="width:${100-Math.round(paidAmt*100/payTotal)}%"></i></div>
         <div class="eh-leg"><span>🟩 已付 $${money(paidAmt)}</span><span>🟧 未付 $${money(unpaidAmt)}</span></div>` : ''}
       <div class="mini-bars" title="每日報酬">${dayVals.map(([d,v])=>`<div class="mb" title="${m}-${String(d).padStart(2,'0')}：$${money(v)}"><i class="${v?'':'z'}" style="height:${v?Math.max(4,Math.round(v*100/dayMax)):4}%"></i><span>${d%5===0||d===1?d:''}</span></div>`).join('')}</div>
@@ -1217,8 +1232,10 @@ async function renderMyEarnings(c){
           ${r.reimbursement ? `<tr><td>　其中含代墊款（憑證開公司）</td><td class="amount">$${money(r.reimbursement)}</td></tr>` : ''}
           ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
-          ${defSplit.inRange.total ? `<tr><td>已掛帳，約定 ${defSplit.inRange.dues.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(defSplit.inRange.total)}</td></tr>` : ''}
-          ${defSplit.other.total ? `<tr><td>加：之前月份掛帳，約定本月撥款（預計 ${defSplit.other.dues.join('、')}）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>` : ''}
+          ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
+          ${ann.inRange.paidTotal ? `<tr><td>已掛帳，已於 ${ann.inRange.paidDates.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(ann.inRange.paidTotal)}</td></tr>` : ''}
+          ${ann.other.pendingTotal ? `<tr><td>加：之前月份掛帳，約定本月撥款（預計 ${ann.other.pendingDues.join('、')}）</td><td class="amount">+$${money(ann.other.pendingTotal)}</td></tr>` : ''}
+          ${ann.other.paidTotal ? `<tr><td>加：之前月份掛帳，已於本月撥款（${ann.other.paidDates.join('、')}）</td><td class="amount">+$${money(ann.other.paidTotal)}</td></tr>` : ''}
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</strong></td></tr>
         </table>
         ${(()=>{

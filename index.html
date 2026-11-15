@@ -602,8 +602,8 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=32"></script>
-<script defer src="js/driver-ui.js?v=16"></script>
+<script defer src="js/data-layer.js?v=33"></script>
+<script defer src="js/driver-ui.js?v=17"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -6888,11 +6888,15 @@ function renderPayrollPage(c){
     // 付的才併進來——2026-11-15修：以前「可領淨額」沒有真的扣掉／加上這兩塊，只在下面多一行
     // 「應付合計（含掛帳）」當參考，主控要自己心算；現在「可領淨額」本身就是真的這個月要匯出去
     // 的錢，跟「夥伴匯款清單」的算法一致。
-    let defTrips = [];
-    try{ defTrips = await fetchDeferredTrips(driverId); }catch(e){}
-    const defSplit = deferredSplit(defTrips, monthStr+'-01', monthEndStr(monthStr));
+    // 2026-11-15再補：改用 fetchDeferralHistory()（連已撥款的掛帳也一起抓）＋
+    // deferralAnnotations()，讓「已經撥款」的掛帳不會一付完就從畫面上消失，留下「已於X支付」
+    // 的永久註記，方便主控事後回頭查這筆錢原本是哪個月做的事、掛到哪個月、哪天撥款——財務
+    // 計算仍然只用 pendingTotal，已撥款的部分已經透過「已付款」那行扣過了，不能再扣一次。
+    let defHistory = [];
+    try{ defHistory = await fetchDeferralHistory(driverId); }catch(e){}
+    const ann = deferralAnnotations(defHistory, monthStr+'-01', monthEndStr(monthStr));
     if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又改選了別的夥伴/月份
-    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn - defSplit.inRange.total + defSplit.other.total;
+    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn - ann.inRange.pendingTotal + ann.other.pendingTotal;
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
@@ -6924,8 +6928,10 @@ function renderPayrollPage(c){
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
           ${paidTotal ? `<tr><td>已付款（先付現金／轉帳）</td><td class="amount">-$${money(paidTotal)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
-          ${defSplit.inRange.total ? `<tr><td>已掛帳，約定 ${defSplit.inRange.dues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(defSplit.inRange.total)}</td></tr>` : ''}
-          ${defSplit.other.total ? `<tr><td>加：之前月份掛帳，約定本月支付（預計 ${defSplit.other.dues.join('、')}）</td><td class="amount">+$${money(defSplit.other.total)}</td></tr>` : ''}
+          ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
+          ${ann.inRange.paidTotal ? `<tr><td>已掛帳，已於 ${ann.inRange.paidDates.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(ann.inRange.paidTotal)}</td></tr>` : ''}
+          ${ann.other.pendingTotal ? `<tr><td>加：之前月份掛帳，約定本月支付（預計 ${ann.other.pendingDues.join('、')}）</td><td class="amount">+$${money(ann.other.pendingTotal)}</td></tr>` : ''}
+          ${ann.other.paidTotal ? `<tr><td>加：之前月份掛帳，已於本月支付（${ann.other.paidDates.join('、')}）</td><td class="amount">+$${money(ann.other.paidTotal)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
         </table>
       </div>
