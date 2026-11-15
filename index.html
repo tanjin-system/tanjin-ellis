@@ -603,7 +603,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=38"></script>
-<script defer src="js/driver-ui.js?v=21"></script>
+<script defer src="js/driver-ui.js?v=22"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -6883,7 +6883,14 @@ function renderPayrollPage(c){
     // 2026-11-15三修：使用者明確要求——掛帳就是「合併到歸屬月份一起撥款」，之前月份掛帳
     // 歸屬本月的金額一律直接併進本月總額，不管那幾趟本身有沒有登記過付款，不再另外判斷、
     // 扣回去（不是兩筆分開的錢，是同一筆合併處理）。
-    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn - ann.inRange.pendingTotal + ann.other.total;
+    // 2026-11-16修：上面那段「不管有沒有撥款都併進來」只對了一半——併進來的金額，一旦真的
+    // 撥款了，還是要從「可領淨額」扣掉，不然會變成這筆錢永遠卡在畫面上，即使詹予呈這種
+    // 10月、9月掛帳都已經全部付清的情況，也會一直顯示還欠$2,310（使用者實測發現）。做法：
+    // 把掛帳已撥款的部分（ann.other.paidTotal）併進「已付款」那一行一起扣掉，不再單獨處理；
+    // 這樣「+X月掛帳合併」還是會完整顯示（滿足「要看到這筆錢」的需求），但已經付清的部分
+    // 會透過「已付款」自然歸零，不會卡住。
+    const paidCombined = paidTotal + ann.other.paidTotal;
+    const payable = ded.actualNet - advanceTotal - paidCombined + carryIn - ann.inRange.pendingTotal + ann.other.total;
     document.getElementById('payrollResult').innerHTML = `
       <div class="panel no-print">
         <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
@@ -6912,12 +6919,12 @@ function renderPayrollPage(c){
         <table style="margin-top:10px;">
           <tr><td>報酬總額（任務＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
           ${r.reimbursement ? `<tr><td>　其中代墊款（憑證開公司，非所得，不扣稅）</td><td class="amount">$${money(r.reimbursement)}</td></tr><tr><td>　所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-r.reimbursement)}</td></tr>` : ''}
+          ${ann.other.total ? `<tr><td>加：${monthsLabel(ann.other.sourceMonths)}掛帳合併至本月</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
           ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
-          ${paidTotal ? `<tr><td>已付款（先付現金／轉帳）</td><td class="amount">-$${money(paidTotal)}</td></tr>` : ''}
+          ${paidCombined ? `<tr><td>已付款（先付現金／轉帳${ann.other.paidTotal?`，含${monthsLabel(ann.other.sourceMonths)}掛帳已撥款部分`:''}）</td><td class="amount">-$${money(paidCombined)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
           ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
           ${ann.inRange.paidTotal ? `<tr><td>　其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 支付（已反映在上面「已付款」，這裡僅供對照）</td><td class="amount">—</td></tr>` : ''}
-          ${ann.other.total ? `<tr><td>加：${monthsLabel(ann.other.sourceMonths)}掛帳合併至本月</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
           <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
         </table>
       </div>
@@ -7079,12 +7086,15 @@ async function renderPaymentList(c){
     // 歸屬本月的金額（ann.other.total）一律直接併進本月匯款金額，不管那幾趟本身有沒有
     // 登記過付款，不再另外扣回去（這裡只是顯示；真的要登記付款時，recordMonthlyPayment()
     // 自己會跳過已經登記過的部分，不會重複付）。
+    // 2026-11-16修：上面那段只對了一半——併進來的金額一旦真的撥款了，還是要扣掉，不然像
+    // 詹予呈這種10月、9月掛帳都已經全部付清的情況，這裡會一直顯示還要匯$2,310（使用者
+    // 實測發現）。已撥款的部分（ann.other.paidTotal）要跟其他「已付款」一樣扣掉。
     const allRows = drivers.map(d=>{
       const base = computeDriverPayable(d.id, monthStr, monthAssignments);
       const carryIn = carryMap.get(d.id) || 0;
       const ann = deferralAnnotations(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
-      // 這個月做的事有一部分約好晚點付（inRange，還沒撥款的部分），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來。
-      const payable = base.payable + carryIn - ann.inRange.pendingTotal + ann.other.total;
+      // 這個月做的事有一部分約好晚點付（inRange，還沒撥款的部分），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來，已經撥款的部分要扣掉。
+      const payable = base.payable + carryIn - ann.inRange.pendingTotal + ann.other.total - ann.other.paidTotal;
       return { driver:d, payable, ann, advanceTotal: base.advanceTotal, paidTotal: base.paidTotal, carryIn };
     });
     // 本月淨額為0（或負）的不用匯款，清單裡不列出，去銀行轉帳時不用看到一堆$0的人。
@@ -7142,7 +7152,7 @@ async function renderPaymentList(c){
             <td>${escapeHtml(d.bank.branch||'—')}</td>
             <td class="mono">${escapeHtml(d.bank.account||'—')}</td>
             <td class="mono">${escapeHtml(d.idNumber||'—')}</td>
-            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${ann.inRange.pendingTotal||ann.other.total||carryIn?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${ann.inRange.pendingTotal?`已扣掛帳待${ann.inRange.pendingDues.join('、')}付 $${money(ann.inRange.pendingTotal)}`:''}${ann.other.total?`${ann.inRange.pendingTotal?'；':''}含${monthsLabel(ann.other.sourceMonths)}掛帳合併 $${money(ann.other.total)}`:''}${carryIn?`${ann.inRange.pendingTotal||ann.other.total?'；':''}<span style="color:var(--danger);">已扣承接前期超支 $${money(Math.abs(carryIn))}</span>`:''}</div>`:''}</td>
+            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${ann.inRange.pendingTotal||ann.other.total||carryIn?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${ann.inRange.pendingTotal?`已扣掛帳待${ann.inRange.pendingDues.join('、')}付 $${money(ann.inRange.pendingTotal)}`:''}${ann.other.total?`${ann.inRange.pendingTotal?'；':''}含${monthsLabel(ann.other.sourceMonths)}掛帳合併 $${money(ann.other.total)}${ann.other.paidTotal?`（其中 $${money(ann.other.paidTotal)} 已撥款，不重複列入）`:''}`:''}${carryIn?`${ann.inRange.pendingTotal||ann.other.total?'；':''}<span style="color:var(--danger);">已扣承接前期超支 $${money(Math.abs(carryIn))}</span>`:''}</div>`:''}</td>
           </tr>`;
           }).join('') || `<tr><td colspan="8"><div class="empty">${allRows.length?'這個月所有在職夥伴淨額都是$0（或以下），沒有人需要匯款':'沒有在職夥伴'}</div></td></tr>`}</tbody>
           <tfoot><tr><td colspan="7" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>

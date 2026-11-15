@@ -1187,7 +1187,6 @@ async function renderMyEarnings(c){
     try{ carryIn = (await computeCarryInMap(m, [dId])).get(dId) || 0; }catch(e){}
     if(state.tab!=='my-earnings' || (state._myEarningsMonth||monthStr)!==m) return; // 使用者可能已經切走這一頁或換了月份
     const isCurrent = m===todayStr().slice(0,7);
-    const netNow = r.net-(r.paid||0)+carryIn;
     // 2026-11-15修：使用者要求夥伴看到的「當月淨額」要是真的這個月會進戶頭的錢——
     // 這個月做的事、約好晚點才付的，不算進這個月（已掛帳預計另一天撥款）；別個月做
     // 的事、約好這個月撥款的，才併進來。以前這裡只在下面多一行「應領合計（含掛帳）」
@@ -1196,12 +1195,17 @@ async function renderMyEarnings(c){
     // 掛帳歸屬本月的金額，不管那幾趟本身有沒有登記過付款，一律直接併進本月總額，不要
     // 再另外判斷、扣回去（之前「+total再-paidTotal」的寫法，使用者認為沒必要，因為
     // 掛帳本來就是跟歸屬月份一起處理，不是兩筆分開的錢）。
-    const trueNet = netNow - ann.inRange.pendingTotal + ann.other.total;
+    // 2026-11-16修：上面那段只對了一半——併進來的金額一旦真的撥款了，還是要從「當月淨額」
+    // 扣掉，不然會變成即使這個月跟掛帳來源月份全部都已經付清，畫面也會一直顯示還欠這筆錢
+    // （使用者實測詹予呈的案例發現）。把掛帳已撥款的部分併進「已領現金／已付款」一起扣，
+    // 「+X月掛帳合併」還是完整顯示金額，只是已經付清的部分會透過已付款自然歸零。
+    const paidCombined = (r.paid||0) + ann.other.paidTotal;
+    const trueNet = r.net - paidCombined + carryIn - ann.inRange.pendingTotal + ann.other.total;
     const byDay = new Map(); r.trips.forEach(a=>byDay.set(a.date,(byDay.get(a.date)||0)+tripPay(a)));
     const dim = Number(monthEndStr(m).slice(8));
     const dayVals = Array.from({length:dim}, (_,i)=>[i+1, byDay.get(m+'-'+String(i+1).padStart(2,'0'))||0]);
     const dayMax = Math.max(1, ...dayVals.map(x=>x[1]));
-    const paidAmt = Math.max(0, r.paid||0), unpaidAmt = Math.max(0, trueNet);
+    const paidAmt = Math.max(0, paidCombined), unpaidAmt = Math.max(0, trueNet);
     const payTotal = paidAmt + unpaidAmt;
     // 掛帳註記文字：還沒撥款的講「約定X撥款」，已經撥款的講「已於X撥款」——同一個月份
     // 兩種狀態理論上可能同時存在（部分已付、部分還沒），所以分開各自判斷要不要顯示。
@@ -1237,11 +1241,11 @@ async function renderMyEarnings(c){
           <tr><td>報酬合計</td><td class="amount">$${money(r.tripTotal)}</td></tr>
           <tr><td>${m}調整項</td><td class="amount">${r.adjTotal>=0?'+':''}$${money(r.adjTotal)}</td></tr>
           ${r.reimbursement ? `<tr><td>　其中含代墊款（憑證開公司）</td><td class="amount">$${money(r.reimbursement)}</td></tr>` : ''}
-          ${r.paid ? `<tr><td>已領現金／已付款</td><td class="amount">-$${money(r.paid)}</td></tr>` : ''}
+          ${ann.other.total ? `<tr><td>加：${monthsLabel(ann.other.sourceMonths)}掛帳合併至本月</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
+          ${paidCombined ? `<tr><td>已領現金／已付款${ann.other.paidTotal?`（含${monthsLabel(ann.other.sourceMonths)}掛帳已撥款部分）`:''}</td><td class="amount">-$${money(paidCombined)}</td></tr>` : ''}
           ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
           ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 撥款（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
           ${ann.inRange.paidTotal ? `<tr><td>　其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 撥款（已反映在上面「已領現金／已付款」，這裡僅供對照）</td><td class="amount">—</td></tr>` : ''}
-          ${ann.other.total ? `<tr><td>加：${monthsLabel(ann.other.sourceMonths)}掛帳合併至本月</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</strong></td></tr>
         </table>
         ${(()=>{
