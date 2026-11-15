@@ -7095,7 +7095,11 @@ async function renderPaymentList(c){
       const ann = deferralAnnotations(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
       // 這個月做的事有一部分約好晚點付（inRange，還沒撥款的部分），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來，已經撥款的部分要扣掉。
       const payable = base.payable + carryIn - ann.inRange.pendingTotal + ann.other.total - ann.other.paidTotal;
-      return { driver:d, payable, ann, advanceTotal: base.advanceTotal, paidTotal: base.paidTotal, carryIn };
+      // 2026-11-16修：「已付款總額」面板原本只看 base.paidTotal（本月自己任務的部分），
+      // 沒算進掛帳合併進來、已經撥款的部分——詹予呈這種案例，面板會只顯示10月自己的
+      // $22,110，漏掉9月掛帳已撥款的$2,310，讓人誤以為那筆沒被算到（使用者實測發現）。
+      const paidTotal = base.paidTotal + ann.other.paidTotal;
+      return { driver:d, payable, ann, advanceTotal: base.advanceTotal, paidTotal, carryIn };
     });
     // 本月淨額為0（或負）的不用匯款，清單裡不列出，去銀行轉帳時不用看到一堆$0的人。
     const rows = allRows.filter(x=>Math.round(x.payable)>0);
