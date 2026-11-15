@@ -2604,7 +2604,7 @@ function deferredSplit(trips, start, end) {
 async function fetchDeferralHistory(driverId) {
   const supabase = getSupabase();
   let q = supabase.from('assignments')
-    .select('id, trip_date, driver_id, fare, payroll_fare_snapshot, extra_pay, pay_due_date, pay_due_month, pay_due_note, paid_amount, paid_date')
+    .select('id, trip_date, driver_id, fare, payroll_fare_snapshot, extra_pay, pay_due_date, pay_due_month, pay_due_note, paid_amount, paid_date, paid_method, paid_group, paid_period_start, paid_period_end')
     .not('pay_due_date', 'is', null).order('pay_due_date').limit(1000);
   if (driverId) q = q.eq('driver_id', driverId);
   const { data, error } = await q;
@@ -2615,7 +2615,9 @@ async function fetchDeferralHistory(driverId) {
     extraPay: Number(r.extra_pay || 0), payDueDate: r.pay_due_date,
     payDueMonth: r.pay_due_month || shiftMonth(r.pay_due_date.slice(0, 7), -1),
     payDueNote: r.pay_due_note || '',
-    paidAmount: Number(r.paid_amount || 0), paidDate: r.paid_date || null
+    paidAmount: Number(r.paid_amount || 0), paidDate: r.paid_date || null,
+    paidMethod: r.paid_method || null, paidGroup: r.paid_group || null,
+    paidPeriodStart: r.paid_period_start || null, paidPeriodEnd: r.paid_period_end || null
   }));
 }
 // 跟 deferredSplit() 同一種 inRange／other 分法，但不只算金額——還要分「已撥款」跟「還沒撥款」

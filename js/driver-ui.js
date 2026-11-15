@@ -1249,15 +1249,22 @@ async function renderMyEarnings(c){
           <tr><td><strong>${isCurrent?'目前預估淨額':'當月淨額'}</strong></td><td class="amount"><strong>${trueNet<0?'-':''}$${money(Math.abs(trueNet))}</strong></td></tr>
         </table>
         ${(()=>{
+          const monthStart = m+'-01', monthEnd = monthEndStr(m);
           const groups = new Map();
-          r.trips.filter(a=>(Number(a.paidAmount)||0)>0).forEach(a=>{
+          const addToGroup = a => {
             const k = a.paidGroup || ('single-'+a.id);
             const g = groups.get(k) || { date:a.paidDate, method:a.paidMethod, ps:a.paidPeriodStart, pe:a.paidPeriodEnd, amount:0 };
             g.amount += Number(a.paidAmount)||0; groups.set(k, g);
-          });
+          };
+          r.trips.filter(a=>(Number(a.paidAmount)||0)>0).forEach(addToGroup);
+          // 2026-11-16修：之前這裡只看本月自己日期的任務，掛帳合併進來、已經撥款的部分
+          // （來源月份是別個月）完全不會出現在「已支付紀錄」裡——使用者實測詹予呈的案例
+          // 發現，明明上面「已領現金／已付款」已經含了9月掛帳撥款的$2,310，下面卻看不到
+          // 那筆撥款紀錄，像是沒算到。這裡把掛帳來源那幾趟也一併加進同一份分組清單。
+          defHistory.filter(t => (t.date<monthStart || t.date>monthEnd) && t.payDueMonth===m && Number(t.paidAmount)>0)
+            .forEach(t => addToGroup({ paidGroup:t.paidGroup||('single-'+t.id), paidAmount:t.paidAmount, paidDate:t.paidDate, paidMethod:t.paidMethod, paidPeriodStart:t.paidPeriodStart||t.date, paidPeriodEnd:t.paidPeriodEnd||t.date }));
           if(!groups.size) return '';
-          const monthStart = m+'-01', monthEnd = monthEndStr(m);
-          return `<div style="margin:10px 0 0;"><div style="font-size:12.5px; font-weight:600; margin-bottom:4px;">已支付紀錄</div>${[...groups.values()].sort((x,y)=>(x.date||'').localeCompare(y.date||'')).map(g=>`<div style="font-size:12.5px; padding:2px 0;">✅ ${g.date||'—'} 以${g.method==='cash'?'現金':'轉帳'}支付${g.ps?`　區間 ${g.ps}～${g.pe}`:''}　<b>$${money(g.amount)}</b>${g.ps && (g.ps<monthStart || g.pe>monthEnd) ? '<span style="color:var(--ink-soft);">（本月部分）</span>' : ''}</div>`).join('')}</div>`;
+          return `<div style="margin:10px 0 0;"><div style="font-size:12.5px; font-weight:600; margin-bottom:4px;">已支付紀錄</div>${[...groups.values()].sort((x,y)=>(x.date||'').localeCompare(y.date||'')).map(g=>`<div style="font-size:12.5px; padding:2px 0;">✅ ${g.date||'—'} 以${g.method==='cash'?'現金':'轉帳'}支付${g.ps?`　區間 ${g.ps}～${g.pe}`:''}　<b>$${money(g.amount)}</b>${g.ps && (g.ps<monthStart || g.pe>monthEnd) ? '<span style="color:var(--ink-soft);">（掛帳合併，不屬於本月任務）</span>' : ''}</div>`).join('')}</div>`;
         })()}
         ${r.reimbursement ? `<p class="note" style="margin:8px 0 0;">代墊款（例如油資）已包含在上面的報酬裡一起付給您，不屬於所得，勞報單的扣稅／補充保費只用「報酬 − 代墊款」計算，所以扣的稅會比較少。</p>` : ''}
       </div>
