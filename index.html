@@ -602,7 +602,7 @@
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
-<script defer src="js/data-layer.js?v=39"></script>
+<script defer src="js/data-layer.js?v=40"></script>
 <script defer src="js/driver-ui.js?v=23"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
@@ -3782,9 +3782,9 @@ function renderCoveragePanel(){
         try{
           const results = await suggestRouteInsertion(originId, shift, dpId);
           if(!results.length){ resultArea.innerHTML = '這個起點＋班次目前沒有可用的現有路線。'; return; }
-          resultArea.innerHTML = `<div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:4px;">僅供參考，不會自動修改任何路線；覺得合適的話，到上面選單選這條路線、按「加到草稿」，再自己去路線管理調整順序。</div>
-            <table style="font-size:12px;"><thead><tr><th>路線</th><th>插入在</th><th>多跑</th><th>新車趟時間</th><th>新店數</th></tr></thead>
-            <tbody>${results.map(r=>`<tr${r.overTimeLimit?' style="color:var(--danger);"':''}><td>${escapeHtml(r.routeName)}</td><td>${escapeHtml(r.insertAfterStopCode)}之後</td><td>${r.addedKm}km／${r.addedMin}分</td><td>${r.newTotalMin}分${r.overTimeLimit?'　⚠️超過上限':''}</td><td>${r.newStopCount}</td></tr>`).join('')}</tbody></table>`;
+          resultArea.innerHTML = `<div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:4px;">僅供參考，不會自動修改任何路線；覺得合適的話，到上面選單選這條路線、按「加到草稿」，再自己去路線管理調整順序。預估送完時間已含每店3分鐘下貨時間，${shift==='PM'?'下午班須17:30前送完':'上午班須11:30前送完'}。</div>
+            <table style="font-size:12px;"><thead><tr><th>路線</th><th>插入在</th><th>多跑</th><th>新車趟時間</th><th>預估送完</th><th>新店數</th></tr></thead>
+            <tbody>${results.map(r=>`<tr${r.overTimeLimit?' style="color:var(--danger);"':''}><td>${escapeHtml(r.routeName)}</td><td>${escapeHtml(r.insertAfterStopCode)}之後</td><td>${r.addedKm}km／${r.addedMin}分</td><td>${r.newTotalMin}分</td><td>${r.finishClock}${r.overTimeLimit?'　⚠️超時':''}</td><td>${r.newStopCount}</td></tr>`).join('')}</tbody></table>`;
         }catch(err){ resultArea.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`; }
       };
     };
@@ -4010,13 +4010,14 @@ function renderDpListBody(){
           <div class="field"><label>代號</label><input id="edpCode" value="${dp.code||''}"></div>
         </div>
         <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:4px 0 8px;"><input type="checkbox" id="edpAllowDup" ${dp.allowDuplicate?'checked':''} style="width:auto;"> 允許重複（刻意同一班次排進多條路線，涵蓋檢查不警示）</label>
+        <div class="field"><label>卸貨備註（司機排到這個店也會看到／能補寫）</label><textarea id="edpUnloadNote" rows="2" placeholder="例：從後門進，警衛室收件">${escapeHtml(dp.unloadNote||'')}</textarea></div>
         <button class="btn amber" data-savedp="${dp.id}">儲存</button>
         <button class="btn ghost" data-canceldp="${dp.id}">取消</button>
       </td></tr>`;
     }
     const inactive = dp.status==='inactive';
     const hasPos = dp.lat!=null && dp.lng!=null;
-    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}${hasPos?'':' <span class="badge pending">沒有位置</span>'}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
+    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}${hasPos?'':' <span class="badge pending">沒有位置</span>'}${dp.unloadNote?`<div style="font-size:12px; background:#FFF6E0; border-radius:6px; padding:3px 7px; margin-top:4px; display:inline-block;">📝 ${escapeHtml(dp.unloadNote)}</div>`:''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
     <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn ghost" data-locdp="${dp.id}" title="在地圖上檢查或修正這家店的位置">${hasPos?'修正位置':'指定位置'}</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} ${dropPointInUse(dp.id)?'':`<button class="btn danger" data-del="${dp.id}" title="這家店從來沒被路線或任務用過，可以直接刪除">刪除</button>`}</td></tr>`;
   };
   const head = '<thead><tr><th>代號</th><th>地址</th><th>目前排在哪些路線</th><th>狀態</th><th></th></tr></thead>';
@@ -4064,6 +4065,8 @@ function renderDpListBody(){
         await updateDropPoint(dp.id, { address: newAddr, channelId: document.getElementById('edpChannel').value, code: document.getElementById('edpCode').value.trim() });
         const allowDup = document.getElementById('edpAllowDup').checked;
         if(allowDup !== !!dp.allowDuplicate) await setDropPointAllowDuplicate(dp.id, allowDup);
+        const newNote = document.getElementById('edpUnloadNote').value.trim();
+        if(newNote !== (dp.unloadNote||'')) await saveUnloadNote(dp.id, newNote);
         editingDpId = null;
         renderContent();
       }catch(err){ alert(err.message); }

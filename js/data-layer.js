@@ -963,7 +963,8 @@ async function fetchRoadRoute(coords) {
 
 // 單店新增/停配排線建議（2026-10-28，PART 44規則資料表的第一個使用者）：給定要新增的
 // 店點，在某個起點＋班別底下的所有現有路線裡，算出插入每條路線的最佳位置與多跑的
-// 里程/時間，依route_planning_rules的規則標出哪些會超過最長車趟時間，其餘依多跑里程
+// 里程/時間，依route_planning_rules的規則（含每店3分鐘下貨時間）推算從起跑時間算起
+// 幾點能送完，標出哪些會超過送完時間門檻（上午11:30／下午17:30），其餘依多跑里程
 // 由小到大排序。只讀資料、完全不會寫入或修改任何路線，建議結果給主控自己決定要不要
 // 採用、手動調整——這是2026-10-27用橙泰橙早班實測驗證過的同一套方法（OSRM table API
 // 一次算距離矩陣＋純數學算插入成本），不是重新發明的邏輯。
@@ -982,17 +983,32 @@ async function suggestRouteInsertion(originId, shift, newDropPointId) {
 
   // 規則：有這個起點專屬設定就用，沒有就用全系統預設(origin_id is null)；資料表還沒建立
   // 時（PART 44尚未在這個資料庫執行），沿用2026-10-27實測討論出的預設值，功能不中斷。
-  let rule = { min_stops: 6, min_pay: 600, max_duration_min: 90, dwell_min_per_stop: 4 };
+  // 2026-11-16：改用「幾點前要送完」的時鐘門檻（上午11:30、下午17:30）取代抽象的車趟
+  // 時間上限，下貨時間每店3分鐘；起跑時間沿用戰情室「預計出發時間」的黃色門檻設定。
+  let rule = { min_stops: 6, min_pay: 600, dwell_min_per_stop: 3, am_deadline: '11:30', pm_deadline: '17:30' };
   try {
     const { data: rules } = await supabase.from('route_planning_rules').select('*').or(`origin_id.eq.${originId},origin_id.is.null`);
     if (rules && rules.length) {
       const own = rules.find(r => r.origin_id === originId) || rules.find(r => r.origin_id === null);
       if (own) rule = {
         min_stops: own.min_stops ?? rule.min_stops, min_pay: own.min_pay ?? rule.min_pay,
-        max_duration_min: own.max_duration_min ?? rule.max_duration_min, dwell_min_per_stop: own.dwell_min_per_stop ?? rule.dwell_min_per_stop
+        dwell_min_per_stop: own.dwell_min_per_stop ?? rule.dwell_min_per_stop,
+        am_deadline: own.am_deadline ?? rule.am_deadline, pm_deadline: own.pm_deadline ?? rule.pm_deadline
       };
     }
   } catch (e) { /* 資料表還沒建立或查詢失敗，沿用上面寫死的預設值 */ }
+
+  // 起跑時間：沿用戰情室「預計出發時間」的黃色門檻（上午/下午），查不到就用戰情室同一套預設值
+  let startClock = shift === 'PM' ? '14:30' : '09:30';
+  try {
+    const { data: settingsRow } = await supabase.from('settings').select('warroom_config').eq('id', 1).maybeSingle();
+    const wc = settingsRow?.warroom_config;
+    if (wc) startClock = (shift === 'PM' ? wc.pmYellow : wc.amYellow) || startClock;
+  } catch (e) { /* 查詢失敗，沿用上面的預設值 */ }
+  const clockToMin = (hhmm) => { const [h, m] = (hhmm || '0:0').split(':').map(Number); return h * 60 + m; };
+  const minToClock = (min) => { const h = Math.floor(min / 60) % 24, m = Math.round(min % 60); return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0'); };
+  const startMin = clockToMin(startClock);
+  const deadlineMin = clockToMin(shift === 'PM' ? rule.pm_deadline : rule.am_deadline);
 
   try {
     const { data: pickupRule } = await supabase.from('drop_point_pickup_rules').select('id').eq('pickup_drop_point_id', newDropPointId).eq('active', true).maybeSingle();
@@ -1033,7 +1049,7 @@ async function suggestRouteInsertion(originId, shift, newDropPointId) {
   if (matrix.code !== 'Ok') throw new Error('路網距離查詢失敗：' + (matrix.message || matrix.code));
   const D = matrix.distances, T = matrix.durations;
   const oIdx = idToIdx['__origin__'], nIdx = idToIdx['__new__'];
-  const dwellMin = rule.dwell_min_per_stop ?? 4;
+  const dwellMin = rule.dwell_min_per_stop ?? 3;
 
   const results = [];
   routes.forEach(route => {
@@ -1048,16 +1064,19 @@ async function suggestRouteInsertion(originId, shift, newDropPointId) {
       const addedS = next === null ? T[prev][nIdx] : T[prev][nIdx] + T[nIdx][next] - T[prev][next];
       if (!best || addedM < best.addedM) best = { pos, addedM, addedS };
     }
-    // 這條路線目前（含卸貨估計）的總時間，加上插入後的增量，判斷插入後會不會超過門檻
+    // 這條路線目前（含卸貨估計）的總時間，加上插入後的增量，推算從起跑時間算起會幾點送完，
+    // 判斷插入後是否還能在門檻時間（上午11:30／下午17:30）前送完
     let curSec = T[oIdx][stopIdx[0]];
     for (let i = 0; i < stopIdx.length - 1; i++) curSec += T[stopIdx[i]][stopIdx[i + 1]];
     const newTotalMin = (curSec + best.addedS) / 60 + (stops.length + 1) * dwellMin;
+    const finishMin = startMin + newTotalMin;
     results.push({
       routeId: route.id, routeName: route.name,
       currentStopCount: stops.length, newStopCount: stops.length + 1,
       addedKm: Math.round(best.addedM / 10) / 100, addedMin: Math.round(best.addedS / 6) / 10,
       newTotalMin: Math.round(newTotalMin * 10) / 10,
-      overTimeLimit: rule.max_duration_min != null && newTotalMin > rule.max_duration_min,
+      finishClock: minToClock(finishMin),
+      overTimeLimit: finishMin > deadlineMin,
       insertAfterStopCode: best.pos === 0 ? '（起點後第一站）' : stops[best.pos - 1].code,
     });
   });
