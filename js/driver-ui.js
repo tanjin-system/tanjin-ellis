@@ -637,7 +637,7 @@ function renderTodayDetail(todays){
             ${(()=>{ const th = thumbsGet(dp.id); return th.length ? `<div class="thms">${th.map(x=>`<img class="thm" src="${x.u}" alt="" loading="lazy">`).join('')}</div>` : ''; })()}
             ${readonly ? `<span class="badge" style="background:#E3EEF7; color:#2F6EA5;">由${escapeHtml(dp.helperName||'支援夥伴')}支援</span>` : ''}
             ${dp.status!=='completed' && dp.issueReason ? `<span class="badge" style="background:#F4E3C1; color:#7A5A00;">未完成：${dp.issueReason}</span>` : ''}
-            ${(()=>{ const note = state.data.dropPoints.find(x=>x.id===dp.sourceDpId)?.unloadNote; return note ? `<div style="font-size:12.5px; background:#FFF6E0; border-radius:6px; padding:5px 8px; margin-top:6px;">📝 卸貨備註：${escapeHtml(note)}</div>` : ''; })()}
+            ${(()=>{ const note = state.data.dropPoints.find(x=>x.id===dp.sourceDpId)?.unloadNote; return note ? `<div style="font-size:12.5px; background:#FFF6E0; color:#5b4500; border-radius:6px; padding:5px 8px; margin-top:6px;">📝 卸貨備註：${escapeHtml(note)}</div>` : ''; })()}
             ${readonly ? '' : `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
               ${photoCount<3 ? `
               <button type="button" class="btn ghost" style="flex:1; min-width:110px; margin:0;" data-photo="${a.id}|${dp.id}">拍照上傳</button>

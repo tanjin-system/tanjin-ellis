@@ -603,7 +603,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=40"></script>
-<script defer src="js/driver-ui.js?v=23"></script>
+<script defer src="js/driver-ui.js?v=24"></script>
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
@@ -4017,7 +4017,7 @@ function renderDpListBody(){
     }
     const inactive = dp.status==='inactive';
     const hasPos = dp.lat!=null && dp.lng!=null;
-    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}${hasPos?'':' <span class="badge pending">沒有位置</span>'}${dp.unloadNote?`<div style="font-size:12px; background:#FFF6E0; border-radius:6px; padding:3px 7px; margin-top:4px; display:inline-block;">📝 ${escapeHtml(dp.unloadNote)}</div>`:''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
+    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}${hasPos?'':' <span class="badge pending">沒有位置</span>'}${dp.unloadNote?`<div style="font-size:12px; background:#FFF6E0; color:#5b4500; border-radius:6px; padding:3px 7px; margin-top:4px; display:inline-block;">📝 ${escapeHtml(dp.unloadNote)}</div>`:''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
     <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn ghost" data-locdp="${dp.id}" title="在地圖上檢查或修正這家店的位置">${hasPos?'修正位置':'指定位置'}</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} ${dropPointInUse(dp.id)?'':`<button class="btn danger" data-del="${dp.id}" title="這家店從來沒被路線或任務用過，可以直接刪除">刪除</button>`}</td></tr>`;
   };
   const head = '<thead><tr><th>代號</th><th>地址</th><th>目前排在哪些路線</th><th>狀態</th><th></th></tr></thead>';
