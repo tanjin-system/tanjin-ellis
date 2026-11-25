@@ -1283,8 +1283,8 @@ async function renderMyEarnings(c){
           return `
           <h3>${m}調整項明細</h3>
           <table>
-            <thead><tr><th>項目</th><th>備註</th><th>金額</th></tr></thead>
-            <tbody>${shown.map(adj=>`<tr><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='reimbursement'?'':adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
+            <thead><tr><th>日期</th><th>項目</th><th>備註</th><th>金額</th></tr></thead>
+            <tbody>${shown.map(adj=>`<tr><td>${adjustmentEffectiveDate(adj)}${adj.date?'':'（無日期）'}</td><td>${adjTypeLabel(adj.type)}</td><td>${adj.note||'—'}</td><td class="amount">${adj.type==='reimbursement'?'':adj.type==='add'?'+':'-'}$${money(Math.abs(adj.amount))}</td></tr>`).join('')}</tbody>
           </table>
         `;
         })()}
