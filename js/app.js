@@ -8240,13 +8240,14 @@ async function bootApp(){
 }
 
 function hideBootSplash(){ const el = document.getElementById('bootSplash'); if(el) el.remove(); }
-// defer 的 4 支外部 script（supabase SDK／supabase-client.js／data-layer.js／auth.js／push.js）
-// 保證會在 DOMContentLoaded 之前就全部執行完畢；這支 inline script 本身不是 defer（defer 對
-// 沒有 src 的 inline script 沒有效果），所以用這個事件確保真正呼叫 bootApp() 之前，auth.js 的
-// getStoredAuth 這些函式都已經就緒，不會出現「用到還沒載入的函式」的錯誤。
+// 這支 app.js 本身也是用 <script defer> 載入（而且排在最前面，因為下面幾個函式庫的頂層
+// 程式碼要用到最上面的 state），所以它執行的當下，document.readyState 一定已經不是
+// 'loading'——但 DOMContentLoaded 這個事件保證一定還沒發生（因為它要等包括 app.js 在內的
+// 所有 defer script 都執行完才會觸發，而這裡正是 app.js 自己執行到一半）。所以不能用
+// readyState 判斷要不要「立刻執行」，一律掛 DOMContentLoaded 監聽，確保 auth.js 的
+// getStoredAuth 這些排在後面的函式庫都已經就緒，才真正呼叫 bootApp()。
 function whenDomReady(fn){
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
-  else fn();
+  document.addEventListener('DOMContentLoaded', fn, { once:true });
 }
 whenDomReady(async function init(){
   try{
