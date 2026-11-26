@@ -601,6 +601,10 @@
      （一年、immutable），平常開系統可以完全跳過「跟伺服器確認有沒有更新」這個來回，但代價是
      瀏覽器會把同一個網址的內容快取到天荒地老——所以之後只要改了下面任何一個 js/*.js 檔案，
      一定要把對應的 ?v= 數字 +1，不然使用者的瀏覽器會繼續用快取住的舊版本，改了也不會生效。 -->
+<!-- js/app.js（原本的大 inline script）必須排第一個：它同步定義 state 跟所有函式，下面幾個
+     外部函式庫的頂層程式碼會直接用到 state（例如 driver-ui.js），執行順序對調就會變成
+     「用到還沒定義的東西」而報錯。 -->
+<script defer src="js/app.js?v=1"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script defer src="js/supabase-client.js?v=1"></script>
 <script defer src="js/data-layer.js?v=40"></script>
@@ -608,6 +612,5 @@
 <script defer src="js/auth.js?v=1"></script>
 <script defer src="js/push.js?v=3"></script>
 <script defer src="js/voice.js?v=39"></script>
-<script defer src="js/app.js?v=1"></script>
 </body>
 </html>
