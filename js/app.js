@@ -1,0 +1,8259 @@
+
+let state = { role:'admin', activeDriverId:null, tab:null, weekOffset:0, data:null };
+
+function todayStr(){ return ymd(new Date()); }
+function money(n){ return (Number(n)||0).toLocaleString('zh-Hant-TW'); }
+function pad(n){ return String(n).padStart(2,'0'); }
+function ymd(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function addDays(dateStr, days){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+days); return d; }
+function monthEndStr(monthStr){ const [y,m] = monthStr.split('-').map(Number); return ymd(new Date(y,m,0)); }
+// 安全性修補：夥伴端可自由輸入的文字（目前是 issueNote 異常備註）在塞進 innerHTML 前
+// 一定要先跳脫，否則夥伴可以在備註裡放 <img onerror=...> 之類的內容，主控端打開該筆
+// 任務時就會在主控瀏覽器執行，偷走主控的登入token（有全庫存取權）。
+function escapeHtml(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- 通用查找 ----------
+function driverName(id){ const d=state.data.drivers.find(x=>x.id===id); return d?d.name:'未指派'; }
+function channelName(id){ const c=state.data.channels.find(x=>x.id===id); return c?c.name:'—'; }
+// 路線顯示名稱：「第一車…第九車」一律顯示成 R1～R9，前面接任務起點名稱、不留空格，例如
+// 「橙泰橙 第一車 上午」→「橙泰橙R1上午」。只改畫面顯示，資料庫裡存的路線名稱不動。
+function seqToR(text){
+  return (text||'').replace(/第([一二三四五六七八九十]+)車/g, (m, c)=>{ const n = seqSortKey('第'+c+'車'); return n<9999 ? 'R'+n : m; });
+}
+function routeDisplayName(name){
+  if(!/第[一二三四五六七八九十]+車/.test(name||'')) return name||'';
+  return seqToR(name).replace(/\s+/g, '');
+}
+function routeName(id){ const r=state.data.routes.find(x=>x.id===id); return r?routeDisplayName(r.name):'—'; }
+function mapLink(addr){ return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(addr); }
+// 路線規劃用的多點導航連結：任務起點固定當起點，停靠站依「我們給的順序」
+// 依序放進waypoints。原本有加optimize:true想交給Google自動排出最順的
+// 行車順序，但實測手機上的Google地圖App根本不認得這個網址參數（那是
+// 舊版Directions URL API網頁版才吃的語法），結果整串"optimize:true"被
+// 當成一個真的停靠站字面文字塞進行程裡，變成一個假地點——所以拿掉，
+// 順序完全照我們路線管理裡人工排好的順序（up/down鈕調整過的那個順序）
+// 給Google，Google純粧照著跑，不會也不能自動幫忙重排。
+// 每個停靠站的文字用「代號 地址」（例如"A店 台中市西屯區..."）而不是
+// 只用地址：Google地圖的行程列表上顯示的就是我們傳進去的這串文字，
+// 帶代號可以讓夥伴/主控一眼看出是哪間店，地址還留著確保能查到正確地
+// 點（單純店名容易撞名、查到別的地方去）。
+function buildMultiStopMapsLink(originAddr, stops){
+  const items = (stops||[]).filter(s=>s && s.address);
+  if(!items.length) return '';
+  const label = s => s.code ? `${s.code} ${s.address}` : s.address;
+  const destination = label(items[items.length-1]);
+  const waypoints = items.slice(0, -1).map(label);
+  let url = 'https://www.google.com/maps/dir/?api=1&origin='+encodeURIComponent(originAddr||'')+'&destination='+encodeURIComponent(destination)+'&travelmode=driving';
+  if(waypoints.length) url += '&waypoints='+waypoints.map(encodeURIComponent).join('|');
+  return url;
+}
+function lineShareLink(text){ return 'https://line.me/R/msg/text/?'+encodeURIComponent(text); }
+// 手機相簿選出來的照片常常是HEIC格式（iPhone拍照預設格式）——瀏覽器
+// 內建的<img>/canvas在iOS Safari可以解開HEIC，但Android的Chrome等瀏覽器
+// 幾乎都解不開，會整個decode失敗。單純瀏覽器內建功能沒辦法把HEIC轉成
+// 一般圖片，所以另外載入heic2any這個函式庫（在瀏覽器端把HEIC真的解碼
+// 轉成JPEG），這樣才能真正做到縮圖壓縮，不會佔用太多Storage空間；
+// 不是HEIC的檔案完全不受影響，一樣走原本的<img>/canvas流程。
+// 這三個函式庫只有「產生PDF」（主控）與「HEIC照片轉檔」（夥伴上傳照片）才用得到，以前每次開任何頁面都同步載入（合計約 1.9MB，
+// 載完才會開始畫畫面），夥伴手機尤其慢；改成要用才載入，主控登入後閒置時先預載好 PDF 用的兩個，按下去不用等。
+// 外部程式庫一律鎖定版本＋完整性雜湊（SRI）：CDN 上的檔案只要有任何一個位元組不同，瀏覽器就拒絕執行。
+// 更新程式庫版本時，要同步重新計算雜湊（openssl dgst -sha384 -binary 檔案 | openssl base64 -A）。
+const LIB_SRI = {"https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js": "sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H", "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js": "sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk", "https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js": "sha384-OTofQ0MEeiSgh62havBcemCIK0gqj809wX6UA0uPISNMRnR6NZyCdGzX3SbLrgwL", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css": "sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js": "sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH", "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js": "sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz", "https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js": "sha384-KrOocIA+lZcNUz2MDavnT/FuX+CbTREJihUi0bp8QUSwhE2AkGTNpv2b7yMbBkx5", "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js": "sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx"};
+const _libP = {};
+function loadLib(url){
+  if(_libP[url]) return _libP[url];
+  _libP[url] = new Promise((res, rej)=>{
+    const sc = document.createElement('script'); sc.src = url; if(LIB_SRI[url]){ sc.integrity = LIB_SRI[url]; sc.crossOrigin = 'anonymous'; }
+    sc.onload = ()=>res(); sc.onerror = ()=>{ delete _libP[url]; rej(new Error('元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _libP[url];
+}
+const PDF_LIBS = ['https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'];
+const HEIC_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js';
+const JSQR_LIB = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+function loadPdfLibs(){ return Promise.all(PDF_LIBS.map(loadLib)); }
+function looksLikeHeic(file){
+  const type = (file.type||'').toLowerCase();
+  if(type.includes('heic') || type.includes('heif')) return true;
+  return /\.(heic|heif)$/i.test(file.name||'');
+}
+// 縮圖/重新編碼失敗時（HEIC轉檔本身失敗，或<img>解不開其他格式），退回
+// 直接用「原始檔案」的data URL上傳（不縮圖、檔案較大，但至少傳得上去，
+// dataUrlToBytesAndType()那邊也已經改成不管data URL頭部長什麼樣子都
+// 收），只有連FileReader讀檔案本身都失敗才真的視為失敗。
+async function compressImageFile(file, maxDim=1000, quality=0.6){
+  let workingFile = file;
+  if(looksLikeHeic(file)){ try{ await loadLib(HEIC_LIB); }catch(e){ console.error('HEIC 轉檔元件載入失敗，改用原始檔案', e); } }
+  if(looksLikeHeic(file) && typeof heic2any === 'function'){
+    try{
+      const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality });
+      workingFile = Array.isArray(converted) ? converted[0] : converted;
+    }catch(e){ console.error('HEIC轉檔失敗，改用原始檔案', e); }
+  }
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const rawDataUrl = reader.result;
+      const img = new Image();
+      img.onload = ()=>{
+        try{
+          let width = img.width, height = img.height;
+          if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
+          else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        }catch(e){ resolve(rawDataUrl); }
+      };
+      img.onerror = ()=> resolve(rawDataUrl);
+      img.src = rawDataUrl;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(workingFile);
+  });
+}
+// input[capture]屬性在Android上非常不可靠——很多系統版本/瀏覽器（尤其是
+// Android 13+內建的「相片選擇器」）即使有 capture="environment" 還是會
+// 直接跳相簿，不會真的開相機，這是瀏覽器/系統本身的行為，不是屬性寫錯。
+// 唯一能100%保證「一定開相機、不會跳相簿」的做法是自己用 getUserMedia
+// 拉即時影像流、畫面上疊一顆「拍照」鍵，使用者按了才用canvas擷取當前
+// 畫面那一格，整個過程完全不經過系統的檔案/相片選擇器。
+// 回傳 {dataUrl} 表示拍到照片；{cancelled:true} 表示使用者自己按取消；
+// {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
+// 相機權限），呼叫端應該退回原本 <input capture> 的方式讓使用者至少還能
+// 選一張既有的照片，不會整個功能卡死。
+// 拍完第一張後，緊接著再拍第二張、第三張——先前試過「把鏡頭串流留著、
+// 下次直接重用」，實測發現這樣反而在部分手機上拍出全黑照片（懷疑是
+// 串流被移到新的<video>元素時，部分瀏覽器沒有正確重新啟動畫面，變成
+// 定格在黑畫面）；也試過「每次都重新getUserMedia」，部分手機（尤其
+// Android）連續呼叫第二次直接失敗。兩種做法都繞不開——所以改成根本
+// 不要有「關閉再重開」這個動作：一次要拍幾張，鏡頭視窗開著不關，讓
+// 使用者在同一個畫面裡連續拍完全部幾張（每拍一張畫面上會多一個縮圖、
+// 「拍照」鍵可以一直按到拍滿張數為止），只有整批拍完按「完成」或「取消」
+// 才會真的關閉鏡頭、停止串流——全程只呼叫一次getUserMedia、視訊畫面
+// 從頭到尾是同一個<video>元素，不會有「重新接上串流」這個環節，理論上
+// 兩種bug都碰不到。
+// 回傳 {dataUrls:[...]} 表示拍到至少一張（可能小於maxShots，使用者可以
+// 提前按完成）；{cancelled:true} 表示一張都沒拍、使用者按取消；
+// {fallback:true} 表示這台裝置/瀏覽器不支援相機串流（或使用者拒絕授權
+// 相機權限），呼叫端應該退回原本 <input capture multiple> 的方式讓
+// 使用者至少還能選現成的照片，不會整個功能卡死。
+// 浮水印用的座標：疊層一開啟就先要一次定位（不是每拍一張才要，避免拖慢
+// 連續拍照），抓不到或夥伴拒絕授權也不擋住拍照——那浮水印就只疊時間、
+// 註明「GPS 未取得」，不會讓整個拍照功能卡住。改用高精度定位（真正的GPS衛星
+// 定位，不是WiFi/基地台粗估），逾時時間也拉長到15秒讓它有足夠機會拿到準確
+// 定位——因為這段本來就是背景跑、不卡快門，拉長逾時不影響拍照速度，只是讓
+// 「抓得到的話,抓到的會更準」這件事機率更高；店家在室內/騎樓收訊不好時，
+// 高精度定位本來就可能逾時仍抓不到，照舊顯示「GPS 未取得」，不會卡住拍照。
+function openCameraCapture(maxShots, storeName){
+  return new Promise((resolve)=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      resolve({ fallback:true });
+      return;
+    }
+    let geoCoords = null;
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(
+        pos=>{ geoCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; },
+        ()=>{},
+        { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
+      );
+    }
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <video autoplay playsinline muted style="flex:1; width:100%; height:100%; object-fit:cover; background:#000;"></video>
+      <div data-camthumbs style="display:flex; gap:6px; padding:8px; background:#111; overflow-x:auto;"></div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-camcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-camshoot disabled style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700; opacity:0.5;">拍照（<span data-camcount>0</span>/${maxShots}）</button>
+        <button type="button" data-camdone style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#2C6B44; color:#fff; font-size:15px; font-weight:700; display:none;">完成</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const video = overlay.querySelector('video');
+    const shootBtn = overlay.querySelector('[data-camshoot]');
+    const doneBtn = overlay.querySelector('[data-camdone]');
+    const countEl = overlay.querySelector('[data-camcount]');
+    const thumbsEl = overlay.querySelector('[data-camthumbs]');
+    let stream = null;
+    let settled = false;
+    const shots = [];
+    function cleanup(){
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+      if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function settle(result){
+      if(settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+    // 快門鍵先停用，等video元素真的畫出第一格畫面（loadeddata）才開放拍照——
+    // videoWidth/videoHeight在畫面實際有內容之前就可能已經有值了，只看尺寸
+    // 不夠，夥伴手快的話會拍到還沒真正接上影像串流的黑畫面。loadeddata理論上
+    // 一定會觸發，但還是留一個3秒逾時保險，避免極少數裝置不發這個事件時
+    // 快門被永久卡死。
+    let frameReady = false;
+    function markFrameReady(){
+      if(frameReady) return;
+      frameReady = true;
+      shootBtn.disabled = false;
+      shootBtn.style.opacity = '';
+    }
+    video.addEventListener('loadeddata', markFrameReady);
+    setTimeout(markFrameReady, 3000);
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
+      stream = s;
+      video.srcObject = s;
+      video.play().catch(()=>{}); // 部分裝置的autoplay政策較嚴格，明確呼叫一次play()避免畫面停在黑屏
+    }).catch(()=>{ settle({ fallback:true }); });
+    overlay.querySelector('[data-camcancel]').onclick = ()=> settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { cancelled:true });
+    doneBtn.onclick = ()=> settle({ dataUrls: shots, coords:geoCoords });
+    shootBtn.onclick = ()=>{
+      // videoWidth/Height還是0代表鏡頭串流根本沒真的接上（畫面看起來可能
+      // 是黑的），這種情況直接當作失敗退回檔案選擇，不要硬拍出一張空白
+      // 照片讓夥伴以為拍成功了。快門鍵本來就要等frameReady才會被啟用，這裡
+      // 是最後一道防線。
+      if(!video.videoWidth || !video.videoHeight){ settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { fallback:true }); return; }
+      const maxDim = 1000;
+      let width = video.videoWidth, height = video.videoHeight;
+      if(width > height){ if(width > maxDim){ height = Math.round(height*maxDim/width); width = maxDim; } }
+      else { if(height > maxDim){ width = Math.round(width*maxDim/height); height = maxDim; } }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, width, height);
+      drawPhotoWatermark(ctx, width, height, geoCoords, storeName);
+      let dataUrl;
+      try{ dataUrl = canvas.toDataURL('image/jpeg', 0.7); }
+      catch(e){ settle(shots.length ? { dataUrls:shots, coords:geoCoords } : { fallback:true }); return; }
+      shots.push(dataUrl);
+      countEl.textContent = shots.length;
+      const thumb = document.createElement('img');
+      thumb.src = dataUrl;
+      thumb.style.cssText = 'width:48px; height:48px; object-fit:cover; border-radius:4px; border:2px solid #fff;';
+      thumbsEl.appendChild(thumb);
+      doneBtn.style.display = 'block';
+      if(shots.length>=maxShots) settle({ dataUrls:shots, coords:geoCoords });
+    };
+  });
+}
+// ---------------- 夥伴自拍身分證正反面（勞報單用途，2026-11） ----------------
+// 跟openCameraCapture()同一套鏡頭開關/串流處理方式，但多了三件事：
+// 1) 畫面疊一個身分證比例（ISO/IEC 7810 ID-1，85.6×54mm≈1.586）的導引框，只裁切框內
+//    範圍、不是整個鏡頭畫面——不是真正的電腦視覺邊緣偵測，但不用額外載入任何函式庫，
+//    使用者對齊框線拍就能裁出乾淨的證件照，符合這個專案一貫輕量vanilla JS的風格；身分
+//    證照片用途是留底給記帳士看，不是要做OCR辨識，不需要做到更重的自動偵測。
+// 2) 拍完正面、反面各一張後，自動合成一張A4直式版面的單張圖片（正面在上、反面在下），
+//    整張燒進「僅限信興行銷有限公司勞報使用」浮水印文字（跟drawPhotoWatermark一樣直接
+//    畫進canvas像素，不是疊圖層，事後沒辦法無痛裁掉），只上傳合成後的這一張，不保留
+//    未浮水印的原始裁切圖。
+// 3) 每拍一張都做兩個簡單的品質檢查，裁切範圍內死白像素佔比（反光）、拉普拉斯變異數
+//    （模糊，業界常見的"Laplacian variance"土法，變異數越低代表邊緣越不銳利、畫面
+//    越糊）——兩個都只是經驗法則，不是真正的電腦視覺偵測，證件本身是亮面塑膠、手持
+//    拍攝難免有點手震，有誤判空間，所以設計成「提醒＋讓使用者自己選重拍或仍要使用」，
+//    不是強制擋下重拍。證件有沒有被切到框外（切邊）沒有做偵測——那需要先知道證件
+//    實際邊界在哪，等同於要做到真正的邊緣偵測，跟「自動去背」是同一個技術門檻，目前
+//    選擇不做（見openIdCardCapture()最上面的說明），改用框四角加角標，用更清楚的視覺
+//    引導降低使用者自己對不準切到邊的機率。
+// 回傳 {dataUrl}＝合成完成；{cancelled:true}＝使用者中途取消；{fallback:true}＝裝置
+// 不支援相機串流，呼叫端應退回檔案選擇（見captureIdCardPhoto）。
+const ID_CARD_RATIO = 85.6/54;
+function detectGlareRatio(ctx, w, h){
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const total = w*h;
+  const step = 4 * Math.max(1, Math.round(total/200000)); // 抽樣，避免百萬像素逐一掃太慢
+  let bright = 0, sampled = 0;
+  for(let i=0; i<data.length; i+=step){
+    if(data[i]>250 && data[i+1]>250 && data[i+2]>250) bright++;
+    sampled++;
+  }
+  return sampled ? bright/sampled : 0;
+}
+// 灰階化後取樣格點算簡化版拉普拉斯（上下左右四鄰居減自己的4倍），再算這些值的變異數。
+// 閾值（30）是拿一張模擬證件文字的測試圖、用canvas filter:blur()疊不同程度模糊實測
+// 校正過的起始值（0px清晰約38000分、1px模糊約5100分、2px約390分、4px約25分、8px
+// 約7分——30分大致落在「清晰」跟「2px以上明顯模糊」中間），不是精確科學的數字，之後
+// 如果常常誤判（太容易判成模糊，或明明很糊卻沒抓到），需要再依實測結果調整。
+function computeBlurScore(ctx, w, h){
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const step = Math.max(2, Math.round(Math.sqrt((w*h)/40000))); // 抽樣控制在約4萬個取樣點內
+  const gray = (x,y)=>{ const i=(y*w+x)*4; return 0.299*data[i]+0.587*data[i+1]+0.114*data[i+2]; };
+  let sum=0, sumSq=0, n=0;
+  for(let y=step; y<h-step; y+=step){
+    for(let x=step; x<w-step; x+=step){
+      const lap = gray(x,y-step)+gray(x,y+step)+gray(x-step,y)+gray(x+step,y) - 4*gray(x,y);
+      sum += lap; sumSq += lap*lap; n++;
+    }
+  }
+  if(!n) return 999; // 取樣失敗（裁切範圍太小等異常情況）時不要誤判成模糊，直接當作過關
+  const mean = sum/n;
+  return sumSq/n - mean*mean;
+}
+function confirmQualityDialog(overlay, issues, retakeLabel){
+  retakeLabel = retakeLabel || '重拍';
+  return new Promise(resolve=>{
+    const dlg = document.createElement('div');
+    dlg.style.cssText = 'position:absolute; inset:0; background:rgba(0,0,0,.75); z-index:10; display:flex; align-items:center; justify-content:center; padding:24px;';
+    dlg.innerHTML = `<div style="background:#1a1a1a; border-radius:12px; padding:20px; max-width:320px; text-align:center; color:#fff;">
+      <div style="font-size:15px; font-weight:700; margin-bottom:8px;">這張照片可能${issues.join('、')}</div>
+      <div style="font-size:13px; color:#ccc; margin-bottom:16px;">可能有部分文字看不清楚；建議${retakeLabel}，或確認清晰可辨後繼續使用。</div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" data-qretake style="flex:1; padding:12px; border-radius:8px; border:none; background:#444; color:#fff;">${retakeLabel}</button>
+        <button type="button" data-quse style="flex:1; padding:12px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-weight:700;">仍要使用</button>
+      </div>
+    </div>`;
+    overlay.appendChild(dlg);
+    dlg.querySelector('[data-qretake]').onclick = ()=>{ dlg.remove(); resolve(false); };
+    dlg.querySelector('[data-quse]').onclick = ()=>{ dlg.remove(); resolve(true); };
+  });
+}
+function loadImg(dataUrl){
+  return new Promise((resolve,reject)=>{
+    const im = new Image();
+    im.onload = ()=> resolve(im);
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+}
+// 上傳既有照片時的「合理切邊」：這種情況沒有即時鏡頭畫面可以疊導引框引導使用者對齊
+// 拍攝，改成讓使用者在自己選好的照片上，用同一個身分證比例（ID_CARD_RATIO）的框，
+// 自己拖曳／縮放把證件對準框內，按確認後裁切框內範圍——跟拍照流程用同一套四角角標
+// 視覺、同一套反光/模糊品質檢查，兩條路徑（拍照／上傳）最後處理結果一致。最小縮放
+// 卡在「剛好蓋滿框」（不能縮小到框外露出黑邊），可以放大、拖曳調整想要的範圍。
+// 回傳裁切後的dataUrl，使用者取消則回傳null。
+function openIdCardCropUI(imgDataUrl, label){
+  return new Promise(async (resolve)=>{
+    const img = await loadImg(imgDataUrl);
+    const frameW = Math.round(Math.min(window.innerWidth*0.82, window.innerHeight*0.5));
+    const frameH = Math.round(frameW / ID_CARD_RATIO);
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div data-cropstage style="position:relative; flex:1; overflow:hidden; touch-action:none; background:#000;">
+        <img data-cropimg src="${imgDataUrl}" style="position:absolute; left:0; top:0; transform-origin:0 0; user-select:none; -webkit-user-drag:none; pointer-events:none;">
+        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.6); pointer-events:none;">
+          <div style="position:absolute; top:-3px; left:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-left:4px solid #E0902E; border-top-left-radius:10px;"></div>
+          <div style="position:absolute; top:-3px; right:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-right:4px solid #E0902E; border-top-right-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; left:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-left:4px solid #E0902E; border-bottom-left-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; right:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-right:4px solid #E0902E; border-bottom-right-radius:10px;"></div>
+        </div>
+        <div style="position:absolute; top:0; left:0; right:0; text-align:center; color:#fff; font-size:18px; font-weight:700; line-height:1.5; padding:14px 16px; background:rgba(224,144,46,.95); pointer-events:none;">拖曳調整位置、下方滑桿縮放<br>對準「${label}」</div>
+      </div>
+      <div style="padding:10px 16px; background:#111; display:flex; align-items:center; gap:10px;">
+        <span style="color:#ccc; font-size:18px;">🔍</span>
+        <input type="range" data-cropzoom min="100" max="300" value="100" style="flex:1;">
+      </div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-cropcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-cropok style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">確認</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const stage = overlay.querySelector('[data-cropstage]');
+    const imEl = overlay.querySelector('[data-cropimg]');
+    const zoomEl = overlay.querySelector('[data-cropzoom]');
+    let settled = false;
+    function cleanup(){ if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    function settle(result){ if(settled) return; settled = true; cleanup(); resolve(result); }
+
+    const stageW = stage.clientWidth, stageH = stage.clientHeight;
+    const frameLeft = (stageW-frameW)/2, frameTop = (stageH-frameH)/2;
+    const srcRatio = img.width/img.height, frameRatio = frameW/frameH;
+    // baseScale＝縮放100%時圖片剛好蓋滿框（跟object-fit:cover同一個算法），滑桿100~300%
+    // 都是從這個基準再放大，不會縮到比「剛好蓋滿」更小、不會露出框外黑邊。
+    const baseScale = srcRatio > frameRatio ? frameH/img.height : frameW/img.width;
+    let scale = baseScale;
+    let tx = frameLeft + frameW/2 - (img.width*scale)/2;
+    let ty = frameTop + frameH/2 - (img.height*scale)/2;
+    function clamp(){
+      const imgW = img.width*scale, imgH = img.height*scale;
+      const minTx = frameLeft+frameW-imgW, maxTx = frameLeft;
+      const minTy = frameTop+frameH-imgH, maxTy = frameTop;
+      tx = Math.min(maxTx, Math.max(minTx, tx));
+      ty = Math.min(maxTy, Math.max(minTy, ty));
+    }
+    function applyTransform(){ imEl.style.width = img.width+'px'; imEl.style.height = img.height+'px'; imEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
+    clamp(); applyTransform();
+
+    let dragging = false, lastX=0, lastY=0;
+    stage.addEventListener('pointerdown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; stage.setPointerCapture(e.pointerId); });
+    stage.addEventListener('pointermove', e=>{
+      if(!dragging) return;
+      tx += e.clientX-lastX; ty += e.clientY-lastY;
+      lastX=e.clientX; lastY=e.clientY;
+      clamp(); applyTransform();
+    });
+    const endDrag = ()=>{ dragging=false; };
+    stage.addEventListener('pointerup', endDrag);
+    stage.addEventListener('pointercancel', endDrag);
+    zoomEl.oninput = ()=>{
+      const newScale = baseScale*(Number(zoomEl.value)/100);
+      // 縮放時保持框中心對應的圖片位置不變，不要整張圖跳來跳去。
+      const cx = frameLeft+frameW/2, cy = frameTop+frameH/2;
+      const localX = (cx-tx)/scale, localY = (cy-ty)/scale;
+      scale = newScale;
+      tx = cx-localX*scale; ty = cy-localY*scale;
+      clamp(); applyTransform();
+    };
+    overlay.querySelector('[data-cropcancel]').onclick = ()=> settle(null);
+    overlay.querySelector('[data-cropok]').onclick = async ()=>{
+      const sx = (frameLeft-tx)/scale, sy = (frameTop-ty)/scale;
+      const sw = frameW/scale, sh = frameH/scale;
+      const maxDim = 1100;
+      const outScale = Math.min(1, maxDim/Math.max(sw,sh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw*outScale); canvas.height = Math.round(sh*outScale);
+      const ctx = canvas.getContext('2d', { willReadFrequently:true });
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const glare = detectGlareRatio(ctx, canvas.width, canvas.height);
+      const blurScore = computeBlurScore(ctx, canvas.width, canvas.height);
+      const issues = [];
+      if(glare>0.22) issues.push('反光');
+      if(blurScore<30) issues.push('模糊');
+      if(issues.length && !(await confirmQualityDialog(overlay, issues, '重新調整'))) return; // 留在裁切畫面，使用者可以重新拖曳/縮放
+      settle(canvas.toDataURL('image/jpeg', 0.85));
+    };
+  });
+}
+// 最後確認畫面：合成好的A4＋浮水印圖先讓使用者看過，按「完成」才真的回傳去上傳，
+// 「取消」則整個放棄（不是「重新選擇其中一張」，要重來請重新點「拍攝」或「上傳現有照片」
+// ——不做部分重試是為了保持流程簡單，使用者兩張都要重選的情況本來就不常見）。
+// 拍照／上傳兩條路徑都共用這一步，確保使用者送出前都看過最終結果長什麼樣子。
+function confirmIdCardComposite(dataUrl){
+  return new Promise(resolve=>{
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div style="flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; align-items:center;">
+        <div style="color:#fff; font-size:19px; font-weight:700; line-height:1.5; text-align:center; padding:14px 16px; margin:-16px -16px 16px; background:rgba(224,144,46,.95); width:calc(100% + 32px);">請確認正反面都清楚可辨<br>沒問題再按「完成」</div>
+        <img src="${dataUrl}" style="max-width:100%; border-radius:8px;">
+      </div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-composecancel style="flex:1; max-width:160px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-composeok style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700;">完成</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = ()=>{ if(overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+    overlay.querySelector('[data-composecancel]').onclick = ()=>{ cleanup(); resolve(null); };
+    overlay.querySelector('[data-composeok]').onclick = ()=>{ cleanup(); resolve(dataUrl); };
+  });
+}
+// 上傳既有照片的統一入口（跟拍照是平行的兩條路，使用者自己選）：依序選正面、反面照片，
+// 各自用openIdCardCropUI()手動裁切，裁完送進composeIdCardImage()合成＋燒浮水印，最後
+// 用confirmIdCardComposite()給使用者看過結果再確認——跟拍照流程殊途同歸，最後產生的
+// 檔案格式/品質要求/確認步驟完全一致。每一步之前都用alert()明確提示現在要選哪一張，
+// 避免使用者選完正面後不知道接下來系統選圖視窗是要選反面、以為卡住了。
+async function uploadIdCardPhotos(){
+  const pick = ()=> new Promise(resolve=>{
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*';
+    input.onchange = ()=> resolve(input.files[0] || null);
+    input.click();
+  });
+  alert('請選擇身分證正面照片');
+  const frontFile = await pick();
+  if(!frontFile) return null;
+  const frontRaw = await compressImageFile(frontFile, 2000, 0.9);
+  const frontCropped = await openIdCardCropUI(frontRaw, '身分證正面');
+  if(!frontCropped) return null;
+  alert('正面完成，接著請選擇身分證反面照片');
+  const backFile = await pick();
+  if(!backFile) return null;
+  const backRaw = await compressImageFile(backFile, 2000, 0.9);
+  const backCropped = await openIdCardCropUI(backRaw, '身分證反面');
+  if(!backCropped) return null;
+  const composed = await composeIdCardImage(frontCropped, backCropped);
+  return await confirmIdCardComposite(composed);
+}
+// 浮水印斜向滿版重複、燒進canvas像素（不是疊圖層，事後沒辦法無痛裁掉／去背）——身分證
+// 影本外流風險高，這行字提醒任何拿到這張圖的人用途僅限於此；不是防盜用的技術手段，
+// 只是多一層嚇阻跟限縮誤用空間。
+function drawIdCardWatermark(ctx, w, h){
+  const text = '僅限信興行銷有限公司勞報使用';
+  ctx.save();
+  ctx.font = `bold ${Math.round(w*0.034)}px -apple-system, "Microsoft JhengHei", sans-serif`;
+  ctx.fillStyle = 'rgba(200,40,40,0.22)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.translate(w/2, h/2);
+  ctx.rotate(-Math.PI/6);
+  const stepY = Math.round(h*0.11);
+  const rows = Math.ceil((h*1.6)/stepY);
+  for(let i=-rows; i<=rows; i++) ctx.fillText(text, 0, i*stepY);
+  ctx.restore();
+}
+// 正反面合成一張A4直式比例的圖片（正面在上、反面在下），各自用cover方式填滿框（置中裁切
+// 超出部分，不拉伸變形），最後燒浮水印。只回傳這一張合成圖。
+async function composeIdCardImage(frontDataUrl, backDataUrl){
+  const [front, back] = await Promise.all([loadImg(frontDataUrl), loadImg(backDataUrl)]);
+  const pageW = 1240, pageH = 1754; // A4直式比例（約1:1.414），解析度夠印出來清楚
+  const canvas = document.createElement('canvas');
+  canvas.width = pageW; canvas.height = pageH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, pageW, pageH);
+  const margin = 60, gap = 40, labelH = 36;
+  const slotW = pageW - margin*2;
+  const slotH = Math.round(slotW / ID_CARD_RATIO);
+  const drawCard = (img, y, label)=>{
+    ctx.fillStyle = '#333';
+    ctx.font = `bold ${labelH-10}px -apple-system, "Microsoft JhengHei", sans-serif`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(label, margin, y);
+    const imgY = y + labelH;
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 2;
+    ctx.strokeRect(margin, imgY, slotW, slotH);
+    const srcRatio = img.width/img.height, dstRatio = slotW/slotH;
+    let sx=0, sy=0, sw=img.width, sh=img.height;
+    if(srcRatio > dstRatio){ sw = img.height*dstRatio; sx = (img.width-sw)/2; }
+    else { sh = img.width/dstRatio; sy = (img.height-sh)/2; }
+    ctx.drawImage(img, sx, sy, sw, sh, margin, imgY, slotW, slotH);
+    return imgY + slotH;
+  };
+  let y = margin;
+  y = drawCard(front, y, '身分證正面') + gap;
+  drawCard(back, y, '身分證反面');
+  drawIdCardWatermark(ctx, pageW, pageH);
+  return canvas.toDataURL('image/jpeg', 0.88);
+}
+function openIdCardCapture(){
+  return new Promise((resolve)=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve({ fallback:true }); return; }
+    const sides = [{ key:'front', label:'身分證正面' }, { key:'back', label:'身分證反面' }];
+    let sideIdx = 0;
+    const shots = {};
+    // 導引框尺寸直接用JS算好固定px、不是交給CSS的aspect-ratio屬性——部分裝置內建瀏覽器
+    // （例如LINE內建瀏覽器這類比較舊的WebView）不支援aspect-ratio，框的高度會直接變成0，
+    // 底下裁切計算讀到frameRect.height=0就會整個失效、改用整格鏡頭畫面，裁切形同沒做，
+    // 連帶反光偵測也因為量到的是整個畫面（背景稀釋掉證件本身的反光比例）而幾乎不會觸發。
+    // 用window.innerWidth/innerHeight算這種基本屬性沒有瀏覽器相容性疑慮。
+    const frameW = Math.round(Math.min(window.innerWidth*0.82, window.innerHeight*0.82));
+    const frameH = Math.round(frameW / ID_CARD_RATIO);
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div style="position:relative; flex:1; overflow:hidden;">
+        <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
+        <div data-idframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:${frameW}px; height:${frameH}px; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.55); pointer-events:none;">
+          <div style="position:absolute; top:-3px; left:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-left:4px solid #E0902E; border-top-left-radius:10px;"></div>
+          <div style="position:absolute; top:-3px; right:-3px; width:28px; height:28px; border-top:4px solid #E0902E; border-right:4px solid #E0902E; border-top-right-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; left:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-left:4px solid #E0902E; border-bottom-left-radius:10px;"></div>
+          <div style="position:absolute; bottom:-3px; right:-3px; width:28px; height:28px; border-bottom:4px solid #E0902E; border-right:4px solid #E0902E; border-bottom-right-radius:10px;"></div>
+        </div>
+        <div data-idlabel style="position:absolute; top:0; left:0; right:0; text-align:center; color:#fff; font-size:19px; font-weight:700; padding:14px 16px; background:rgba(224,144,46,.95);"></div>
+      </div>
+      <div style="padding:10px 16px; background:#111; color:#eee; font-size:14px; line-height:1.5; text-align:center;">請把證件四個角對齊四個角標、整張貼滿框線拍攝；避免使用閃光燈、避免強光直射證件表面，減少反光</div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-idcancel style="flex:1; max-width:140px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消</button>
+        <button type="button" data-idshoot disabled style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#E0902E; color:#fff; font-size:15px; font-weight:700; opacity:0.5;">拍照</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const video = overlay.querySelector('video');
+    const frameEl = overlay.querySelector('[data-idframe]');
+    const labelEl = overlay.querySelector('[data-idlabel]');
+    const shootBtn = overlay.querySelector('[data-idshoot]');
+    let stream = null, settled = false;
+    function cleanup(){
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+      if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function settle(result){
+      if(settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+    function updateLabel(){ labelEl.textContent = `請拍攝${sides[sideIdx].label}（${sideIdx+1}/2）`; }
+    updateLabel();
+    let frameReady = false;
+    function markFrameReady(){
+      if(frameReady) return;
+      frameReady = true;
+      shootBtn.disabled = false;
+      shootBtn.style.opacity = '';
+    }
+    video.addEventListener('loadeddata', markFrameReady);
+    setTimeout(markFrameReady, 3000);
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
+      stream = s;
+      video.srcObject = s;
+      video.play().catch(()=>{});
+    }).catch(err=>{
+      // 退回檔案選擇前先留下實際失敗原因（例如使用者拒絕相機權限、這台裝置找不到
+      // 符合的鏡頭），不是靜悄悄切換模式——不然使用者會以為自己用的就是導引裁切
+      // 模式，實際上已經是完全沒有裁切/反光偵測的陽春檔案選擇流程。
+      console.error('身分證相機開啟失敗，改用檔案選擇', err && err.name, err && err.message);
+      settle({ fallback:true, reason: err && (err.name + '：' + err.message) });
+    });
+    overlay.querySelector('[data-idcancel]').onclick = ()=> settle({ cancelled:true });
+    // 正面拍完後，畫面上疊一個醒目的✓提示（不只是悄悄換掉上面那行小字），讓使用者清楚
+    // 知道「鏡頭還開著，接下來換拍反面」，不會誤以為拍完一張就結束了。
+    function flashSideDone(){
+      const flash = document.createElement('div');
+      flash.style.cssText = 'position:absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:rgba(44,107,68,.92); color:#fff; font-size:22px; font-weight:700; z-index:5; pointer-events:none;';
+      flash.textContent = '✓ 正面拍攝完成，請翻到反面';
+      overlay.firstElementChild.appendChild(flash);
+      setTimeout(()=>{ if(flash.parentNode) flash.parentNode.removeChild(flash); }, 1100);
+    }
+    shootBtn.onclick = async ()=>{
+      // 拍第一張（正面）之前鏡頭畫面真的還沒準備好，才當作裝置不支援、整個結束；拍完
+      // 第一張之後如果偶爾讀到暫時的0（部分裝置在忙著處理上一張canvas運算時可能發生），
+      // 不能直接關鏡頭、放棄已經拍到的正面照——只是這一次按鍵沒反應，讓使用者再按一次
+      // 「拍照」就好，拍到一半的進度不會不見。
+      if(!video.videoWidth || !video.videoHeight){
+        if(sideIdx===0){ settle({ fallback:true }); }
+        return;
+      }
+      shootBtn.disabled = true;
+      const frameRect = frameEl.getBoundingClientRect();
+      const videoRect = video.getBoundingClientRect();
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const scale = Math.max(videoRect.width/vw, videoRect.height/vh);
+      const dispW = vw*scale, dispH = vh*scale;
+      const offX = (videoRect.width-dispW)/2, offY = (videoRect.height-dispH)/2;
+      const sx = Math.max(0, (frameRect.left-videoRect.left-offX)/scale);
+      const sy = Math.max(0, (frameRect.top-videoRect.top-offY)/scale);
+      let sw = Math.min(vw-sx, frameRect.width/scale);
+      let sh = Math.min(vh-sy, frameRect.height/scale);
+      if(!(sw>0) || !(sh>0)){
+        console.warn('身分證導引框裁切失效，改用整格鏡頭畫面', { frameRect, videoRect, vw, vh });
+        sw = vw; sh = vh;
+      }
+      const maxDim = 1100;
+      const outScale = Math.min(1, maxDim/Math.max(sw,sh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw*outScale); canvas.height = Math.round(sh*outScale);
+      const ctx = canvas.getContext('2d', { willReadFrequently:true });
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const glare = detectGlareRatio(ctx, canvas.width, canvas.height);
+      const blurScore = computeBlurScore(ctx, canvas.width, canvas.height);
+      // 身分證常是亮面塑膠材質，正常拍攝下本來就容易偏亮，反光門檻放寬一點，減少正常
+      // 照片被誤判。兩項都只是經驗法則，有問題就列出來一次問，不逐項分開問。
+      const issues = [];
+      if(glare > 0.22) issues.push('反光');
+      if(blurScore < 30) issues.push('模糊');
+      if(issues.length && !(await confirmQualityDialog(overlay, issues))){ shootBtn.disabled = false; return; }
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      shots[sides[sideIdx].key] = dataUrl;
+      sideIdx++;
+      if(sideIdx >= sides.length){
+        labelEl.textContent = '處理中…';
+        let composed;
+        try{ composed = await composeIdCardImage(shots.front, shots.back); }
+        catch(e){ settle({ fallback:true }); return; }
+        // 先收掉鏡頭畫面再疊確認畫面，不要兩層全螢幕黑畫面疊在一起；跟上傳既有照片
+        // 那條路徑共用同一個confirmIdCardComposite()，使用者送出前都會看過最終結果。
+        cleanup();
+        const confirmed = await confirmIdCardComposite(composed);
+        settle(confirmed ? { dataUrl: confirmed } : { cancelled: true });
+        return;
+      }
+      flashSideDone();
+      updateLabel();
+      shootBtn.disabled = false;
+    };
+  });
+}
+// 拍身分證的統一入口：先試自建相機導引裁切流程，裝置不支援鏡頭串流時退回「依序選兩張
+// 既有照片（正面/反面）」，一樣會自動合成＋燒浮水印，只是沒有導引框、沒有反光檢查。
+async function captureIdCardPhoto(){
+  const result = await openIdCardCapture();
+  if(result.dataUrl) return result.dataUrl;
+  if(!result.fallback) return null; // 使用者自己取消，什麼都不做
+  // 退回檔案選擇時明確告知失敗原因（result.reason，例如相機權限被拒、找不到鏡頭），
+  // 避免使用者誤以為自己用的是完整的導引拍攝流程；接下來改走uploadIdCardPhotos()同一套
+  // 選照片＋手動裁切流程，兩條路徑最後的裁切/品質檢查/合成都一致，不用再維護兩份邏輯。
+  alert(`無法開啟導引拍攝相機（${result.reason||'不明原因'}），改用選照片的方式，請依序選擇正反面。`);
+  return await uploadIdCardPhotos();
+}
+// 台灣財政部電子發票QR Code（左邊那個）固定格式：冒號分隔，第一段(前77碼)依序是
+// 發票字軌(2)+發票號碼(8)+發票日期民國年月日(7＝年3+月2+日2)+隨機碼(4)+銷售額16進位(8)+
+// 總計金額16進位(8)+買方統編(8)+賣方統編(8)+加密驗證(24)。
+// 2026-11-11：日期原本以為只有「民國年＋月」5碼，少算了「日」2碼，導致後面所有欄位
+// （含金額）位移錯位——用使用者實測發票的原始掃描字串核對過：FK78126879 + 1150923
+// （115年09月23日）+ 4350（隨機碼）+ 00000039（銷售額57）+ 0000003c（總計金額60，跟
+// 發票印的「總計：60」一致）+ 00000000（買方統編，個人消費沒有）+ 42519913（賣方統編，
+// 跟發票印的一致）——位置完全對上，7碼才是對的。日期現在信心足夠，一併自動帶入。
+function parseTaiwanInvoiceQR(text){
+  const head = (text||'').split(':')[0] || '';
+  if(head.length<77) return null;
+  const invoiceNo = head.slice(0,10);
+  if(!/^[A-Z]{2}\d{8}$/.test(invoiceNo)) return null;
+  const dateDigits = head.slice(10,17);
+  if(!/^\d{7}$/.test(dateDigits)) return null;
+  const rocYear = Number(dateDigits.slice(0,3)), mm = dateDigits.slice(3,5), dd = dateDigits.slice(5,7);
+  if(Number(mm)<1 || Number(mm)>12 || Number(dd)<1 || Number(dd)>31) return null;
+  const date = `${rocYear+1911}-${mm}-${dd}`;
+  const amountHex = head.slice(29,37);
+  const amount = parseInt(amountHex,16);
+  if(!Number.isFinite(amount) || amount<=0) return null;
+  return { invoiceNo, date, amount };
+}
+// 掃發票QR：跟openCameraCapture()同一套鏡頭開關/串流處理方式，差別是這裡不是等
+// 使用者按快門，而是用requestAnimationFrame連續把目前畫面丟給jsQR辨識，掃到
+// 符合格式的發票QR就自動結束，不用使用者手動按。回傳{invoiceNo,amount}成功、
+// {cancelled:true}使用者自己取消、{fallback:true}裝置不支援相機或QR函式庫載入失敗。
+function openInvoiceScanner(){
+  return new Promise(async (resolve)=>{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ resolve({ fallback:true }); return; }
+    try{ await loadLib(JSQR_LIB); }catch(e){ resolve({ fallback:true }); return; }
+    if(typeof jsQR!=='function'){ resolve({ fallback:true }); return; }
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; background:#000; z-index:9999; display:flex; flex-direction:column;';
+    overlay.innerHTML = `
+      <div style="position:relative; flex:1; overflow:hidden;">
+        <video autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#000;"></video>
+        <div data-invframe style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:min(70vw,70vh); height:min(70vw,70vh); border:3px solid #E0902E; border-radius:12px; box-shadow:0 0 0 2000px rgba(0,0,0,.45); pointer-events:none;"></div>
+      </div>
+      <div style="padding:10px 16px; background:#111; color:#fff; font-size:13px; text-align:center;">把發票左邊的QR Code對準框框，盡量貼近鏡頭、對焦後再拿穩</div>
+      <div style="display:flex; gap:10px; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); background:#111; justify-content:center;">
+        <button type="button" data-invcancel style="flex:1; max-width:200px; padding:14px; border-radius:8px; border:none; background:#444; color:#fff; font-size:15px;">取消，改手動輸入</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const video = overlay.querySelector('video');
+    const frameEl = overlay.querySelector('[data-invframe]');
+    let stream = null, settled = false, raf = null;
+    function cleanup(){
+      if(raf) cancelAnimationFrame(raf);
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+      if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function settle(result){
+      if(settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+    overlay.querySelector('[data-invcancel]').onclick = ()=> settle({ cancelled:true });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    // 只裁切畫面中間的取景框那一塊來辨識（不是整個鏡頭畫面）：範圍更小、兩張QR Code不會
+    // 互相干擾，使用者看得到框框知道要對準哪裡；辨識前先縮到最多900px寬，原始相機畫面
+    // 動輒1920px以上，整張丟給jsQR逐格辨識非常慢，是「很難掃、要對很久」的主因。
+    // inversionAttempts設dontInvert：發票都是白底黑字，不需要嘗試反相，可以再省一半運算。
+    function tick(){
+      if(settled) return;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if(vw && vh){
+        const frameRect = frameEl.getBoundingClientRect();
+        const videoRect = video.getBoundingClientRect();
+        // object-fit:cover時，video顯示畫面跟實際影像畫素的縮放比例跟裁切量要自己算。
+        const scale = Math.max(videoRect.width/vw, videoRect.height/vh);
+        const dispW = vw*scale, dispH = vh*scale;
+        const offX = (videoRect.width-dispW)/2, offY = (videoRect.height-dispH)/2;
+        const sx = Math.max(0, (frameRect.left-videoRect.left-offX)/scale);
+        const sy = Math.max(0, (frameRect.top-videoRect.top-offY)/scale);
+        let sw = Math.min(vw-sx, frameRect.width/scale);
+        let sh = Math.min(vh-sy, frameRect.height/scale);
+        // 版面還沒量到尺寸（極少數第一格就跑到這裡）時sw/sh會是0或NaN，退回整張畫面，
+        // 不要整個卡死辨識不到東西。
+        if(!(sw>0) || !(sh>0)){ sw = vw; sh = vh; }
+        const maxDim = 900;
+        const outScale = Math.min(1, maxDim/Math.max(sw,sh));
+        canvas.width = Math.round(sw*outScale); canvas.height = Math.round(sh*outScale);
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+        try{
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(img.data, img.width, img.height, { inversionAttempts:'dontInvert' });
+          if(code && code.data){
+            const parsed = parseTaiwanInvoiceQR(code.data);
+            if(parsed){ settle(parsed); return; }
+          }
+        }catch(e){ /* 解碼失敗就繼續等下一格，不中斷 */ }
+      }
+      raf = requestAnimationFrame(tick);
+    }
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(s=>{
+      if(settled){ s.getTracks().forEach(t=>t.stop()); return; }
+      stream = s;
+      video.srcObject = s;
+      video.play().catch(()=>{});
+      raf = requestAnimationFrame(tick);
+    }).catch(()=>{ settle({ fallback:true }); });
+  });
+}
+// 浮水印直接畫進canvas像素（燒錄在圖片上），不是寫EXIF——EXIF可以被工具
+// 清掉，燒進畫面才能當送達時間/地點的證明，事後沒辦法無痛抽換時間或地點。
+function drawPhotoWatermark(ctx, width, height, coords, storeName){
+  // GPS那行文字本來就長（"GPS 25.04203, 121.56502"），放大3倍後整行比照片
+  // 寬度還長，會被畫面邊界切掉——GPS這行維持原本字級，店名/時間才放大3倍。
+  const bigSize = Math.max(39, Math.round(width*0.096));
+  const smallSize = Math.max(13, Math.round(width*0.032));
+  const lines = [
+    ...(storeName ? [{ text: storeName, size: bigSize }] : []),
+    { text: new Date().toLocaleString('zh-TW', { hour12:false }), size: bigSize },
+    { text: coords ? `GPS ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : 'GPS 未取得', size: smallSize }
+  ];
+  const lineHeights = lines.map(l => Math.round(l.size*1.35));
+  const padding = Math.round(bigSize*0.6);
+  const boxHeight = lineHeights.reduce((a,b)=>a+b,0) + padding*2;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, height-boxHeight, width, boxHeight);
+  ctx.fillStyle = '#fff';
+  ctx.textBaseline = 'top';
+  let y = height-boxHeight+padding;
+  lines.forEach((line,i)=>{
+    ctx.font = `${line.size}px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif`;
+    ctx.fillText(line.text, padding, y);
+    y += lineHeights[i];
+  });
+}
+// 從相簿選的照片檔案本身讀EXIF GPS（手機相機拍照當下、有開定位的話會寫進檔案裡）。
+// 刻意不是「上傳那一刻重新定位」——夥伴可能拍完照才離開現場好幾百公尺才想到要上傳，
+// 那樣抓到的會是「上傳時人在哪」不是「拍照時站在哪」，兩者可能差很多，比低精度GPS
+// 本身的誤差還嚴重。讀不到EXIF GPS（例如手機相機定位權限沒開、或照片本身就沒有）
+// 就老實回傳null，讓浮水印顯示「GPS未取得」，不要拿上傳位置冒充。
+// 用exifr這個函式庫而不是自己手刻解析——iPhone預設拍照存的是HEIC格式，GPS資訊
+// 存在跟JPEG完全不同的容器結構裡（ISOBMFF box，不是JPEG的markers），自己刻一個
+// JPEG-only的簡易解析器在iPhone夥伴身上會整批讀不到GPS，這也是之前版本上線後
+// 「少數GPS無法定位」的其中一個真正原因。exifr同時支援JPEG跟HEIC，實測兩種格式
+// 都能正確讀出GPS，比自己刻的更可靠。
+const EXIFR_LIB = 'https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js';
+function readExifGps(file){
+  return (async ()=>{
+    if(!file) return null;
+    try{
+      await loadLib(EXIFR_LIB);
+      const gps = await exifr.gps(file);
+      if(!gps || gps.latitude == null || gps.longitude == null) return null;
+      return { lat: gps.latitude, lng: gps.longitude };
+    }catch(e){ console.error('讀取照片GPS失敗，改標示GPS未取得', e); return null; }
+  })();
+}
+// 自建相機（openCameraCapture）在拍照當下已經疊過浮水印；但「上傳照片」
+// 走相簿選現成檔案，沒有經過那段流程，另外在這裡補疊一次，兩條路徑最後
+// 看到的都是已經燒好浮水印的照片，不會因為上傳方式不同而有的有、有的沒有。
+// coords由呼叫端傳入（見readExifGps），不在這裡重新定位。
+function watermarkDataUrl(dataUrl, storeName, coords){
+  return new Promise((resolve)=>{
+    const im = new Image();
+    im.onload = ()=>{
+      const c = document.createElement('canvas');
+      c.width = im.width; c.height = im.height;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(im, 0, 0);
+      drawPhotoWatermark(ctx, im.width, im.height, coords||null, storeName);
+      try{ resolve({ dataUrl: c.toDataURL('image/jpeg', 0.75), coords:coords||null }); }catch(e){ resolve({ dataUrl, coords:coords||null }); }
+    };
+    im.onerror = ()=> resolve({ dataUrl, coords:null });
+    im.src = dataUrl;
+  });
+}
+// 拍照按鈕的統一入口：先試自建相機（一定是相機，不會跳相簿），拿不到
+// 鏡頭權限或裝置不支援時才退回原本的 <input capture multiple> 檔案選擇
+// （fallbackInput）。onDataUrls收到的是陣列，即使maxShots是1也一樣。
+async function capturePhoto(fallbackInput, maxShots, onDataUrls, storeName){
+  const result = await openCameraCapture(maxShots, storeName);
+  if(result.dataUrls && result.dataUrls.length){ onDataUrls(result.dataUrls, result.coords||null); }
+  else if(result.fallback){ fallbackInput.click(); }
+  // cancelled：使用者自己取消，什麼都不做。
+}
+// 附加照片（「新增照片」按鈕，跟主要送達照片是分開的兩件事，見
+// uploadDropPointPhoto）：全部進 assignment_drop_point_media，不影響
+// 店點的完成狀態。dataUrls 是呼叫端已經處理好（相機直接擷取或
+// compressImageFile壓縮過）的圖片dataURL陣列——影片拍攝功能已關閉。
+async function handleExtraMediaUpload(assignmentId, dropPointId, dataUrls){
+  const items = dataUrls.map(dataUrl => ({ ...dataUrlToBytesAndType(dataUrl), mediaType:'image' }));
+  if(items.length) await uploadDropPointMedia(assignmentId, dropPointId, items);
+}
+// 直接產生真正的PDF檔案（不再是HTML檔案要求使用者自己用瀏覽器列印另存），
+// 用 html2pdf.js（內部是 html2canvas 把畫面截成圖＋jsPDF 排版成PDF）。
+// PDF 實際做好是非同步的（要等畫面渲染成圖片），很多瀏覽器（尤其手機版）會擋掉
+// 「非同步觸發的檔案下載」或根本沒反應，所以改成：點擊當下先同步開一個空白分頁
+// （這個動作跟使用者點擊是同一時間，不會被瀏覽器當成不明來源的彈出視窗擋掉），
+// PDF做好後把內容放進那個分頁，用瀏覽器內建的PDF檢視器開啟，使用者自己用瀏覽器
+// 的分享／下載功能存檔即可，比強制觸發下載在各平台上都穩定。
+// heading省略時預設沿用title當PDF內文最上面顯示的標題（原本的行為，
+// 大部分報表就是要顯示自己的標題，例如「週期任務清單_xxx」）；title本身永遠
+// 只拿去當下載檔名用（已經有做過檔名安全字元替換），跟heading是兩件
+// 事——請款單特別傳空字串heading，因為請款單內文最上面已經自己放了
+// 「信興行銷有限公司」，不需要再重複顯示一次跟檔名一樣的標題。
+// opts（選填，請款單用）：fixedWidth＝固定頁面寬度（不讓寬表格撐大、字被縮小）、repeatHeader＝跨頁的表格
+// 每一頁都重複表頭、pageNumbers＝頁尾加頁碼；內容裡有 .pdf-break 的元素會強制從那裡換頁。
+function exportPrintable(title, bodyHtml, heading, opts){
+  if(!(window.html2canvas && window.jspdf)){ loadPdfLibs().then(()=>exportPrintable(title, bodyHtml, heading, opts)).catch(e=>alert(e.message)); return; }
+  opts = opts || {};
+  if(heading===undefined) heading = title;
+  const previewWin = window.open('', '_blank');
+  if(previewWin){
+    previewWin.document.write('<title>PDF 產生中...</title><body style="font-family:-apple-system,sans-serif;padding:60px;text-align:center;color:#666;">PDF 產生中，請稍候…</body>');
+  }
+  // 開新分頁通常會讓它變成最前面/作用中的分頁，實際在跑html2canvas運算的這個分頁反而
+  // 被推到背景——Safari對背景分頁會刻意降速，大量運算在背景跑可能慢到像當機。搶回
+  // 焦點讓運算留在前景跑，跑完才讓新分頁顯示結果（下面canPreview那段會focus回去）。
+  try{ window.focus(); }catch(e){}
+  // 注意：wrap 不能用 position:fixed/absolute——html2canvas 對離版面定位元素
+  // 會量到高度0，截出全空白PDF。維持一般文件流（直接接在body最後面），但給
+  // 明確寬度，避免受周圍版面影響。
+  // 另外 html2canvas 實際上會受目前捲動位置影響——如果使用者是把頁面往下捲動
+  // 之後才點擊「產生PDF」，擷取出來的畫面會整個往下位移、甚至整張全空白。下面
+  // 用 scrollX/scrollY 明確告訴 html2canvas 目前捲動了多少、要扣掉，才能穩定
+  // 截到 wrap 這個元素本身的內容，不受點擊當下頁面捲到哪裡影響。
+  const scrollX = window.scrollX || window.pageXOffset || 0;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  const wrap = document.createElement('div');
+  // min-width 1050px 讓一般內容（例如請款單）維持原本習慣的寬度；width:max-content
+  // 讓內容本來就比較寬的表格（例如週期任務清單，一週7天x早晚班共15欄，本來就設計成
+  // 用 white-space:nowrap 讓每一欄不擠字）可以自然撐開到實際需要的寬度，不會被
+  // 硬性限制在1050px內導致最右邊的欄位（例如週六、週日）被截斷看不到。
+  wrap.setAttribute('data-force-light','');
+  wrap.style.cssText = opts.fixedWidth
+    ? `width:${opts.fixedWidth}px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;`
+    : 'min-width:1050px; width:max-content; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+  wrap.innerHTML = `
+    <style>
+      @page { size: A4 landscape; margin: 10mm; }
+      table{ width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+      th,td{ padding:7px 9px; border:1px solid #999; text-align:left; }
+      h1,h3{ margin:0 0 10px; }
+      .amount{ font-family:monospace; font-weight:700; }
+      /* 畫面上用深色格子表示「這個班次不存在」（例如週期任務清單的 grid-black），
+         但印成PDF時大片純黑會像是壞掉，改成跟標籤格一致的淺灰。 */
+      .grid-black{ background:#E7E9EC !important; }
+      /* 防斷頁：表格列、面板區塊、標題都不允許被硬切成兩半 */
+      table, tr, thead, tbody, .panel, .version-block, .date-group{ break-inside: avoid; page-break-inside: avoid; }
+      h1, h2, h3, h4{ break-after: avoid; page-break-after: avoid; }
+    </style>
+    ${heading ? `<h1>${heading}</h1>` : ''}
+    ${bodyHtml}
+  `;
+  document.body.appendChild(wrap);
+  const filename = title.replace(/[\\/:*?"<>|]/g,'_') + '.pdf';
+  // 改直接用 html2canvas + jsPDF 自己組頁，不再透過 html2pdf.js 這個包裝套件——
+  // 那個套件版本的 from(element).toCanvas() 內部會重新量測/複製元素，量出來的
+  // 尺寸經常對不上實際內容（這正是一直反覆出現空白/跑版的根本原因），改成
+  // 自己控制每一步，才能穩定重現。
+  // 分頁邏輯：先整段截成一張完整長圖，再依照畫面上「不能被硬切」的最小單位
+  // （表格的每一列、標題）的實際位置，找出安全的分頁斷點，避免一列表格被
+  // 硬生生切成兩半、分散在兩頁。注意：這裡只能列「真的不可再分割」的最小
+  // 單位（單一列tr、標題），不能列 table/.panel 這種可能包住幾十列的大容器
+  // ——否則演算法為了不切到「這個大容器中間」，會把整個容器硬推到下一頁，
+  // 前一頁反而留下一大片空白（實測過，這正是分頁邏輯最初的bug）。
+  const AVOID_BREAK_SELECTOR = 'tr, thead, h1, h2, h3, h4';
+  const wrapRect = wrap.getBoundingClientRect();
+  const wrapTop = wrapRect.top;
+  const wrapWidthPx = wrapRect.width;
+  const avoidZones = Array.from(wrap.querySelectorAll(AVOID_BREAK_SELECTOR)).map(el=>{
+    const r = el.getBoundingClientRect();
+    return { top: r.top - wrapTop, bottom: r.bottom - wrapTop };
+  }).filter(z=> z.bottom > z.top);
+  // 請款單：標題不能孤零零留在頁底（跟後面表格的表頭＋第一列綁在一起），匯款資訊方塊也不能被切開
+  if(opts.repeatHeader){
+    wrap.querySelectorAll('h2').forEach(h=>{
+      const t = h.nextElementSibling;
+      const firstRow = t && t.tagName==='TABLE' && t.tBodies[0] && t.tBodies[0].rows[0];
+      if(firstRow){ const a = h.getBoundingClientRect(), b = firstRow.getBoundingClientRect(); avoidZones.push({ top:a.top-wrapTop, bottom:b.bottom-wrapTop }); }
+    });
+    wrap.querySelectorAll('.remit').forEach(el=>{ const r = el.getBoundingClientRect(); avoidZones.push({ top:r.top-wrapTop, bottom:r.bottom-wrapTop }); });
+  }
+  // 強制換頁位置、跨頁表格的表頭位置（都是相對 wrap 頂端的 CSS px）
+  const forcedCss = Array.from(wrap.querySelectorAll('.pdf-break')).map(el=> el.getBoundingClientRect().top - wrapTop);
+  const tablesCss = opts.repeatHeader ? Array.from(wrap.querySelectorAll('table')).filter(t=>t.tHead).map(t=>{
+    const tr = t.getBoundingClientRect(), hr = t.tHead.getBoundingClientRect();
+    return { top: tr.top - wrapTop, bottom: tr.bottom - wrapTop, headTop: hr.top - wrapTop, headBottom: hr.bottom - wrapTop, left: tr.left - wrapRect.left, right: tr.right - wrapRect.left };
+  }) : [];
+  html2canvas(wrap, { scale: 2, useCORS: true, scrollX: -scrollX, scrollY: -scrollY, windowWidth: document.documentElement.scrollWidth, windowHeight: document.documentElement.scrollHeight }).then(canvas=>{
+    document.body.removeChild(wrap);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit:'mm', format:'a4', orientation:'landscape' });
+    const marginMm = 10;
+    const pageWmm = pdf.internal.pageSize.getWidth() - marginMm*2;
+    const pageHmm = pdf.internal.pageSize.getHeight() - marginMm*2;
+    // canvasScale：canvas像素 相對於 wrap本身的CSS像素寬度的倍數，用來把前面用
+    // getBoundingClientRect 量到的 avoidZones（CSS px）換算成canvas像素座標。
+    const canvasScale = canvas.width / wrapWidthPx;
+    // pxPerMm：canvas像素 相對於 PDF頁面mm 的倍數（圖片會被等比縮放貼滿頁寬 pageWmm）。
+    const pxPerMm = canvas.width / pageWmm;
+    const pageHeightPx = pageHmm * pxPerMm;
+    const avoidZonesPx = avoidZones.map(z=>({ top: z.top*canvasScale, bottom: z.bottom*canvasScale }));
+    // 找出安全的分頁斷點：從目前累積高度開始，往前找最後一個「不會切到區塊中間」
+    // 的座標；找不到（單一區塊本身就比一整頁還高）就只好照原訂高度硬切。
+    function findBreakPoint(idealBreakPx, cursorPx){
+      let safe = idealBreakPx;
+      for(const z of avoidZonesPx){
+        if(z.top < idealBreakPx && z.bottom > idealBreakPx && z.top >= cursorPx){
+          safe = Math.min(safe, z.top);
+        }
+      }
+      return safe > cursorPx ? safe : idealBreakPx;
+    }
+    const totalHeightPx = canvas.height;
+    const forcedPx = forcedCss.map(y=>y*canvasScale).sort((a,b)=>a-b);
+    const tablesPx = tablesCss.map(t=>({ top:t.top*canvasScale, bottom:t.bottom*canvasScale, headTop:t.headTop*canvasScale, headBottom:t.headBottom*canvasScale, left:t.left*canvasScale, right:t.right*canvasScale }));
+    let cursorPx = 0, pageIndex = 0;
+    while(cursorPx < totalHeightPx - 1){
+      // 這一頁是不是從某張表格的中間開始：是的話，先在頁首補上那張表的表頭
+      const hdr = tablesPx.find(t=> t.headBottom <= cursorPx + 1 && t.top < cursorPx && t.bottom > cursorPx + 8);
+      const hdrPx = hdr ? Math.round(hdr.headBottom - hdr.headTop) : 0;
+      const idealBreakPx = Math.min(cursorPx + pageHeightPx - hdrPx, totalHeightPx);
+      const forced = forcedPx.find(y=> y > cursorPx + 2 && y < idealBreakPx);
+      const breakPx = forced !== undefined ? forced : (idealBreakPx >= totalHeightPx ? totalHeightPx : findBreakPoint(idealBreakPx, cursorPx));
+      const sliceHeightPx = Math.max(1, Math.round(breakPx - cursorPx));
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = sliceHeightPx + hdrPx;
+      const pctx = pageCanvas.getContext('2d');
+      pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+      if(hdr) pctx.drawImage(canvas, 0, Math.round(hdr.headTop), canvas.width, hdrPx, 0, 0, canvas.width, hdrPx);
+      pctx.drawImage(canvas, 0, Math.round(cursorPx), canvas.width, sliceHeightPx, 0, hdrPx, canvas.width, sliceHeightPx);
+      // 這一頁的結尾如果落在某張表格中間，表格底部補一條實線收尾（不然表格像被切斷、沒有底線）
+      const cutTable = tablesPx.find(t=> t.top < breakPx - 4 && t.bottom > breakPx + 4);
+      if(cutTable){ pctx.fillStyle = '#777'; pctx.fillRect(Math.round(cutTable.left), pageCanvas.height - 3, Math.round(cutTable.right - cutTable.left), 3); }
+      const imgData = pageCanvas.toDataURL('image/jpeg', 0.95);
+      if(pageIndex>0) pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', marginMm, marginMm, pageWmm, (sliceHeightPx + hdrPx) / pxPerMm);
+      cursorPx = breakPx;
+      pageIndex++;
+      if(pageIndex > 200) break; // 保險絲，避免斷點邏輯出錯陷入無限迴圈
+    }
+    // 用data URI而不是blob URL：blob URL是綁在「產生它的那個分頁」的物件登記表裡，
+    // Safari（尤其iPhone）常常沒辦法在另一個分頁（我們另外開的預覽分頁）打開別的
+    // 分頁建立的blob URL，PDF因此看起來像「打不開」。data URI是自帶完整內容的
+    // 字串，不受這個限制，用<embed>嵌入＋<a download>都能穩定運作。
+    if(opts.pageNumbers){
+      const n = pdf.getNumberOfPages();
+      for(let i=1; i<=n; i++){ pdf.setPage(i); pdf.setFontSize(9); pdf.setTextColor(120); pdf.text(`${i} / ${n}`, pdf.internal.pageSize.getWidth()/2, pdf.internal.pageSize.getHeight()-4, { align:'center' }); }
+    }
+    const dataUri = pdf.output('datauristring');
+    // 電腦版Chrome桌機曾回報「另存PDF都無法顯示」：實測發現這裡的 window.open('', '_blank')
+    // 常常被瀏覽器的彈出視窗封鎖直接回傳 null——程式碼原本雖然有 fallback（改成
+    // 直接觸發<a download>下載），但下載是完全無聲無息的，畫面上什麼提示都沒有，
+    // 使用者以為「PDF功能整個壞掉」，其實檔案已經默默存進下載資料夾。另外資料
+    // 量大的班表/請款單，data URI 常常超過幾MB，部分瀏覽器的<embed>對超大 data URI
+    // 會整個顯示空白（一樣看起來像「無法顯示」）。這裡統一處理：只要預覽視窗打不開，
+    // 或內容大到embed容易顯示空白，就直接觸發下載＋跳出明確提示，不要讓使用者
+    // 猜「到底有沒有成功」。
+    const EMBED_SIZE_LIMIT = 6 * 1024 * 1024; // data URI 字元數，超過就不冒險用embed預覽
+    const canPreview = previewWin && !previewWin.closed && dataUri.length <= EMBED_SIZE_LIMIT;
+    if(canPreview){
+      previewWin.document.open();
+      previewWin.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title></head>
+        <body style="margin:0; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',sans-serif;">
+          <div style="padding:10px 14px; background:#F5F5F2; border-bottom:1px solid #D9DCE1; display:flex; align-items:center; justify-content:space-between;">
+            <span style="font-size:13px; color:#5B6472;">${filename}</span>
+            <a href="${dataUri}" download="${filename}" style="color:#E0902E; font-weight:600; text-decoration:none; font-size:13.5px;">⬇ 下載PDF</a>
+          </div>
+          <embed src="${dataUri}" type="application/pdf" style="width:100%; height:calc(100vh - 44px); border:none; display:block;">
+        </body></html>`);
+      previewWin.document.close();
+      try{ previewWin.focus(); }catch(e){}
+    } else {
+      if(previewWin && !previewWin.closed) previewWin.close();
+      const a = document.createElement('a');
+      a.href = dataUri; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      alert(`PDF已下載：${filename}\n（瀏覽器封鎖了預覽視窗彈出，或檔案較大不適合直接預覽，已改為直接下載，請到「下載項目」查看。）`);
+    }
+  }).catch(err=>{
+    if(wrap.parentNode) document.body.removeChild(wrap);
+    if(previewWin && !previewWin.closed) previewWin.close();
+    alert('產生PDF失敗：' + err.message);
+  });
+}
+function exportPanelPrint(panelEl, title, heading, opts){
+  if(!panelEl){ alert('找不到可列印的內容'); return; }
+  const clone = panelEl.cloneNode(true);
+  clone.querySelectorAll('.no-print').forEach(el=>el.remove());
+  exportPrintable(title, clone.innerHTML, heading, opts);
+}
+// 勞報單專用的直式PDF：每份 slipHtml（payrollSlipHtml() 產生的字串）固定佔
+// 「一整頁」，內容整體等比縮小塞進A4直式一頁（不像請款單/週期任務清單那樣允許
+// 跨頁），符合「一位夥伴只能呈現一張直式勞報單」的規定；slipHtmls 傳多筆
+// 時，每筆各自佔一頁，組成同一份合併PDF，方便一次下載全體夥伴的勞報單。
+// 有代墊款的夥伴，第2頁是 payrollAttachmentHtml() 的明細附件，緊接在該夥伴
+// 勞報單後面（也是各自佔一頁）。
+// 2026-11-11：開新分頁預覽（window.open+embed）這條路一直在補洞——先是時機太晚被
+// 悄悄擋掉，修了之後又換成新分頁搶走焦點、運算所在的分頁被瀏覽器降速到像當機，使用者
+// 實測在自己的iMac Safari多位夥伴合併時還是卡很久。使用者要求乾脆比照請款單，不要
+// 預覽，做完直接觸發下載——這樣完全不需要開任何新分頁/視窗，上面兩種問題的根本原因
+// （多一個分頁）直接不存在，運算也還是在原本這個分頁跑，不會被降速。
+async function exportPayrollPortraitPdf(slipHtmls, filename){
+  if(!slipHtmls || !slipHtmls.length){ alert('沒有可產生的勞報單內容'); return; }
+  try{ await loadPdfLibs(); }catch(e){ alert(e.message); return; }
+  const scrollX = window.scrollX || window.pageXOffset || 0;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  try{
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
+    const marginMm = 10;
+    const pageWmm = pdf.internal.pageSize.getWidth() - marginMm*2;
+    const pageHmm = pdf.internal.pageSize.getHeight() - marginMm*2;
+    console.log(`[勞報單PDF] 開始，共 ${slipHtmls.length} 張`);
+    for(let i=0;i<slipHtmls.length;i++){
+      console.log(`[勞報單PDF] 第 ${i+1}/${slipHtmls.length} 張開始渲染`);
+      const wrap = document.createElement('div');
+      wrap.setAttribute('data-force-light','');
+      wrap.style.cssText = 'width:700px; font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif; padding:16px; color:#1B2129; background:#fff;';
+      wrap.innerHTML = `<style>
+        table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-top:8px; }
+        th,td{ padding:6px 8px; border:1px solid #999; text-align:left; }
+        h3,h4{ margin:0 0 8px; }
+        .amount{ font-family:monospace; font-weight:700; }
+      </style>${slipHtmls[i]}`;
+      document.body.appendChild(wrap);
+      let canvas;
+      try{
+        canvas = await Promise.race([
+          html2canvas(wrap, { scale:2, useCORS:true, scrollX:-scrollX, scrollY:-scrollY, windowWidth:document.documentElement.scrollWidth, windowHeight:document.documentElement.scrollHeight }),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('第 '+(i+1)+' 張畫面渲染逾時（超過20秒無反應），請重新整理頁面後再試一次')), 20000))
+        ]);
+      }finally{
+        document.body.removeChild(wrap);
+      }
+      console.log(`[勞報單PDF] 第 ${i+1}/${slipHtmls.length} 張渲染完成，尺寸 ${canvas.width}x${canvas.height}`);
+      // 整張畫布等比縮放塞進一頁（寧可留白，也不允許溢出到第二頁）。
+      const ratio = canvas.height / canvas.width;
+      let drawWmm = pageWmm, drawHmm = pageWmm*ratio;
+      if(drawHmm > pageHmm){ drawHmm = pageHmm; drawWmm = pageHmm/ratio; }
+      const xOffset = marginMm + (pageWmm-drawWmm)/2;
+      if(i>0) pdf.addPage();
+      pdf.addImage(canvas.toDataURL('image/jpeg',0.95), 'JPEG', xOffset, marginMm, drawWmm, drawHmm);
+      console.log(`[勞報單PDF] 第 ${i+1}/${slipHtmls.length} 張已加入PDF`);
+    }
+    console.log('[勞報單PDF] 全部完成，開始儲存檔案');
+    pdf.save(filename+'.pdf');
+  }catch(err){
+    console.error('[勞報單PDF] 失敗：', err);
+    alert('產生PDF失敗：' + err.message);
+  }
+}
+
+// 請款單上不需要標註星期幾（例如同一車次因為停靠站不同分成「星期一」跟
+// 「週二到週五」兩條路線，對客戶來說都叫同一個車次名稱）。這裡只是把
+// 路線名稱最後面的「（...）」拿掉做顯示用，不影響實際金額計算。
+function stripWeekdayLabel(name){
+  return (name||'').replace(/[（(][^）)]*[）)]/g, '').replace(/\s+/g, ' ').trim();
+}
+function getActiveVersion(route, dateStr){
+  return (route.versions||[]).find(v=> dateStr>=v.start && (!v.end || dateStr<=v.end));
+}
+// saveRouteVersion()/recomputeRouteVersionEnds() 的實作已搬到 js/data-layer.js
+// （原本是純記憶體物件操作，現在要寫回 Supabase，簽名也改成
+// saveRouteVersion(routeId, newStart, dropPointIds) 並回傳 Promise）。
+
+function tripBilling(dropPoints, distanceKm, channelsList){
+  const channels = channelsList || (state.data && state.data.channels) || [];
+  const points = dropPoints||[];
+  const countByChannel = {};
+  points.forEach(p=>{ countByChannel[p.channelId] = (countByChannel[p.channelId]||0) + 1; });
+  const byChannel = {};
+  let totalAmount = 0;
+
+  // 共配拆分：所有「依里程+店點數」公式的通路，共用同一套里程/點數費率，
+  // 先算出整趟共同總額，再依各通路店點數比例分攤（同一任務共配多個通路時使用）。
+  const pooledIds = Object.keys(countByChannel).filter(chId=>{
+    const ch = channels.find(c=>c.id===chId);
+    return ch && ch.formulaType !== 'flat_per_trip';
+  });
+  const poolPoints = pooledIds.reduce((s,chId)=> s+countByChannel[chId], 0);
+  if(poolPoints > 0){
+    const rateChannel = channels.find(c=>c.id===pooledIds[0]);
+    const rateKm = rateChannel ? Number(rateChannel.rateKm)||0 : 35;
+    const ratePoint = rateChannel ? Number(rateChannel.ratePoint)||0 : 50;
+    const poolTotal = Math.round((Number(distanceKm)||0)*rateKm + poolPoints*ratePoint);
+    const base = Math.floor(poolTotal/poolPoints);
+    const remainder = poolTotal - base*poolPoints;
+    let seen = 0;
+    pooledIds.forEach(chId=>{
+      const cnt = countByChannel[chId];
+      let amt = base*cnt;
+      for(let i=0;i<cnt;i++){ if(seen<remainder) amt+=1; seen++; }
+      byChannel[chId] = amt;
+      totalAmount += amt;
+    });
+  }
+
+  // 整趟固定金額的通路（例如牧穀）不參與共配分攤，各自獨立計算
+  Object.keys(countByChannel).forEach(chId=>{
+    const ch = channels.find(c=>c.id===chId);
+    if(ch && ch.formulaType==='flat_per_trip'){
+      const amt = Math.round(Number(ch.flatAmount)||0);
+      byChannel[chId] = amt;
+      totalAmount += amt;
+    }
+  });
+
+  return {totalAmount, totalPoints: points.length, byChannel};
+}
+function defaultPeriod(channel, monthStr){
+  const [y,m] = monthStr.split('-').map(Number);
+  if(channel.periodType==='calendar_month'){
+    return { start:`${y}-${pad(m)}-01`, end: ymd(new Date(y,m,0)) };
+  } else if(channel.periodType==='custom'){
+    let py=y, pm=m-1; if(pm===0){pm=12; py=y-1;}
+    return { start:`${py}-${pad(pm)}-${pad(channel.startDay)}`, end:`${y}-${pad(m)}-${pad(channel.endDay)}` };
+  }
+  return { start:`${y}-${pad(m)}-01`, end: ymd(new Date(y,m,0)) };
+}
+// 首頁「通路請款週期即將結束」提醒用：抓出「今天」落在哪個通路的哪一期
+// 週期裡，回傳那一期的結束日。試算當月跟下個月兩個monthStr、看今天落在
+// 哪一個算出來的區間內就用那個——自訂區間(custom)跨月，單看「今天的月份」
+// 去算不一定準（例如每月26日~次月25日這種，今天是9/20時，應該對到
+// 「9/26結束」那一期，不是「8/26~9/25」已經過去的那一期）。
+function currentChannelPeriodEnd(channel, todayStr){
+  const p = channelPeriodForDate(channel, todayStr);
+  return p ? p.end : null;
+}
+// 給任意一天（不是只有「今天」）找出這個通路的請款週期會把這天算在哪一期——
+// 「例外調整」要用這個依「發生日期」自動歸期，不能用使用者畫面上剛好停在哪個
+// 月份去猜（那會算錯，見2026-11-02的事故：10/30發生的調整項，因為畫面停在
+// 10月，被誤歸進9/27~10/26那期，使用者預期的其實是10/27~11/26那期）。
+function channelPeriodForDate(channel, dateStr){
+  const [y,m] = dateStr.split('-').map(Number);
+  for(let delta=0; delta<=1; delta++){
+    let mm=m+delta, yy=y; if(mm>12){ mm=1; yy++; }
+    const period = defaultPeriod(channel, `${yy}-${pad(mm)}`);
+    if(dateStr>=period.start && dateStr<=period.end) return period;
+  }
+  return null;
+}
+// 同一個任務起點／車次／班次如果因為停靠站不同拆成好幾條路線（例如「第八車
+// （週二到週五）」是給夥伴跑的實際版本，「第八車(星期一)」是對客戶報價的
+// 版本），這裡把它們視為同一家族：找出家族裡標「星期一／週一」的那條路線。
+function findRouteFamily(route){
+  const baseSeq = stripWeekdayLabel(route.seq);
+  return state.data.routes.filter(r=> r.originAddr===route.originAddr && r.shift===route.shift && stripWeekdayLabel(r.seq)===baseSeq);
+}
+function findMondayQuoteRoute(route){
+  return findRouteFamily(route).find(r=> /星期一|週一/.test(r.seq)) || null;
+}
+// 對客戶的請款金額：一律以「路線管理」裡這條路線（如果有「星期一」報價版本，
+// 不管實際是哪一天、用哪個版本跑的，套用星期一版本）當天生效的拆賬金額為準
+// ——路線管理的拆賬是主控手動輸入／確認過的金額，任務完成當下資料庫自動
+// 算出來的 a.billingSnapshot 只是formula估算值，兩邊算法本來就不保證一致，
+// 這正是請款結算跟路線管理對不起來的原因。只有在路線被刪除、或該版本從未
+// 設定過拆賬金額時，才退回用任務自己的快照／即時試算頂著（夥伴薪資不受
+// 影響，夥伴費用永遠是自己那趟車實際的 a.fare，只有客戶請款這裡套用）。
+// 路線版本當天的請款金額（沒有人工調整時請款用的數字）；找不到版本金額回傳 null
+function versionByChannelForAssignment(a){
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  if(route){
+    const quoteRoute = findMondayQuoteRoute(route) || route;
+    const v = getActiveVersion(quoteRoute, a.date) || [...(quoteRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
+    if(v && v.billingByChannel && Object.keys(v.billingByChannel).length) return v.billingByChannel;
+  }
+  return null;
+}
+// 這趟每個通路的請款金額。主控在任務詳情手動改過的（billingManual）一律以人工為準
+function effectiveByChannelForAssignment(a){
+  if(a.billingManual && a.billingSnapshot && a.billingSnapshot.byChannel) return a.billingSnapshot.byChannel;
+  const vb = versionByChannelForAssignment(a);
+  if(vb) return vb;
+  return (a.billingSnapshot && a.billingSnapshot.byChannel) || tripBilling(a.dropPoints, a.distanceKm).byChannel;
+}
+function channelBillingTotal(channelId, start, end, assignmentsList = state.data.assignments){
+  let total=0; const contributing=[];
+  assignmentsList.forEach(a=>{
+    if(a.status==='completed' && a.date>=start && a.date<=end){
+      const byChannel = effectiveByChannelForAssignment(a);
+      if(byChannel[channelId]){ total+=byChannel[channelId]; contributing.push({a, amount:byChannel[channelId]}); }
+    }
+  });
+  return {total, contributing};
+}
+// 哪些路線曾經送過這個通路（不限日期區間，用來找版本異動日期切區間，
+// 以及列出這個通路底下有哪些供應商／任務起點）。
+function routesForChannel(channelId){
+  return state.data.routes.filter(r=> (r.versions||[]).some(v=>
+    (v.dropPointIds||[]).some(id=>{
+      const dp = state.data.dropPoints.find(x=>x.id===id);
+      return dp && dp.channelId === channelId;
+    })
+  ));
+}
+// 請款區間如果剛好橫跨路線版本異動的日期，自動切成好幾段小區間（對應
+// 舊人工Excel「0727-0731」「0803-0809」這種分段方式），不用手動輸入。
+function splitPeriodByVersionChanges(channelId, start, end){
+  const routes = routesForChannel(channelId);
+  const boundarySet = new Set([start]);
+  routes.forEach(r=>{
+    (r.versions||[]).forEach(v=>{ if(v.start > start && v.start <= end) boundarySet.add(v.start); });
+  });
+  const boundaries = Array.from(boundarySet).sort();
+  return boundaries.map((segStart,i)=>{
+    let segEnd = end;
+    if(i+1 < boundaries.length){
+      const d = new Date(boundaries[i+1]+'T00:00:00'); d.setDate(d.getDate()-1);
+      segEnd = ymd(d);
+    }
+    return { start: segStart, end: segEnd };
+  });
+}
+// 通路請款總額依「供應商（任務起點）」拆開顯示（對應舊Excel「各區費用總覽」）。
+function channelOriginBreakdown(channelId, start, end, assignmentsList = state.data.assignments){
+  const { contributing } = channelBillingTotal(channelId, start, end, assignmentsList);
+  const byOrigin = {};
+  contributing.forEach(x=>{
+    const route = state.data.routes.find(r=>r.id===x.a.routeId);
+    const addr = route ? route.originAddr : '';
+    if(!byOrigin[addr]) byOrigin[addr] = { originAddr: addr, tripCount:0, storeCount:0, amount:0 };
+    byOrigin[addr].tripCount += 1;
+    byOrigin[addr].storeCount += (x.a.dropPoints||[]).filter(dp=>dp.channelId===channelId).length;
+    byOrigin[addr].amount += x.amount;
+  });
+  return Object.values(byOrigin).sort((a,b)=> b.amount - a.amount);
+}
+// 未稅/含稅/免稅：依通路自己設定的稅別反推（未稅通路加5%營業稅、含稅通路反算內含稅額、
+// 免稅通路完全不計稅，未稅=含稅=原金額）。
+function untaxWithTax(amount, taxMode){
+  let untaxed, withTax;
+  if(taxMode==='exempt'){ untaxed = Math.round(amount); withTax = untaxed; }
+  else if(taxMode==='inclusive'){ withTax = Math.round(amount); untaxed = Math.round(amount/1.05); }
+  else { untaxed = Math.round(amount); withTax = Math.round(amount*1.05); }
+  return { untaxed, withTax, tax: withTax-untaxed };
+}
+function driverMonthly(driverId, monthStr, assignmentsList = state.data.assignments){
+  const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date.startsWith(monthStr) && a.status==='completed');
+  const tripTotal = trips.reduce((s,a)=> s+tripPay(a), 0);
+  const adjustments = state.data.adjustments.filter(a=> a.driverId===driverId && a.month===monthStr);
+  // 代墊款（reimbursement）已經包含在任務報酬裡一起付給夥伴，只是勞報單要拆出來
+  // 不算所得，不影響報酬總額，所以不計入加減項。
+  const adjTotal = adjustments.reduce((s,a)=> a.type==='reimbursement' ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  const reimbursement = adjustments.filter(a=>a.type==='reimbursement').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+  const paid = trips.reduce((s,a)=> s+(Number(a.paidAmount)||0), 0);
+  return { trips, tripTotal, adjustments, adjTotal, reimbursement, paid, net: tripTotal+adjTotal };
+}
+// 區間版（區間勞報單用）：任務取日期在 [start,end] 內已完成的；調整項依「調整項日期」歸入
+// （沒有日期的舊資料視為該月1日）。回傳格式跟 driverMonthly 一致。
+function driverRange(driverId, start, end, assignmentsList = state.data.assignments){
+  const trips = assignmentsList.filter(a=> a.driverId===driverId && a.date>=start && a.date<=end && a.status==='completed');
+  const tripTotal = trips.reduce((s,a)=> s+tripPay(a), 0);
+  const adjustments = state.data.adjustments.filter(a=> { if(a.driverId!==driverId) return false; const d = adjustmentEffectiveDate(a); return d>=start && d<=end; });
+  const adjTotal = adjustments.reduce((s,a)=> (a.type==='advance' || a.type==='reimbursement') ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  const reimbursement = adjustments.filter(a=>a.type==='reimbursement').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+  const paid = trips.reduce((s,a)=> s+(Number(a.paidAmount)||0), 0);
+  return { trips, tripTotal, adjustments, adjTotal, reimbursement, paid, net: tripTotal+adjTotal };
+}
+// 2026-11-01：算出某位夥伴某個月「真正要匯多少錢」，從報酬結算/勞報單頁
+// 的refresh()裡原封不動抽出來（「夥伴匯款清單」要用，邏輯必須跟報酬結算頁
+// 完全一致，不能另外寫一份近似值——這是真的要拿去匯款的金額）。
+// 2026-11-15修：原本這裡會看「有沒有開過勞報單（月結或區間）」，開過的部分改用
+// 勞報單自己的金額，沒開過的部分才用原始金額——使用者明確要求取消這個判斷依據：
+// 勞報單只是提交國稅局的報稅文件，不能拿來當作「這筆錢付了沒」的判定標準（而且
+// 一張橫跨月份的區間勞報單還會讓同一筆錢在不同月份被重複算進可領淨額，見舊版
+// commit 351d79c 的教訓）。現在「付了沒」只看明確的付款動作：預支、登記一次付款
+// （週期任務清單）、延後付款（掛帳）、承接前期超支，一律用原始報酬金額（不假設
+// 扣稅、不管有沒有開單），開不開勞報單、報不報稅完全不影響這裡算出來的數字。
+function computeDriverPayable(driverId, monthStr, monthAssignments){
+  const live = driverMonthly(driverId, monthStr, monthAssignments);
+  const r = { ...live, ...statementNetFromAdjustments(live.tripTotal, live.adjustments) };
+  const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+  const paidTotal = r.paid||0;
+  const payable = r.net - advanceTotal - paidTotal;
+  return { payable, r, advanceTotal, paidTotal };
+}
+// 跨月「超支」餘額：某個月預支（或已付款先付）超過當月實際賺到的淨額，差額不會
+// 自動消失，要繼續從下個月的應付金額扣，扣完為止。回傳 Map(driverId -> 應從 monthStr
+// 這個月開始扣的餘額，負數或0，0代表沒有要承接的欠款）。lookbackMonths 限制最多往回
+// 追幾個月——真的長期掛著沒處理的異常帳務（超過半年還沒扣完），再往前追效益不大，且
+// 每多追一個月就要多撈一次整批任務/調整項資料，這裡抓6個月當上限；真遇到這種極端情況，
+// 畫面上「可領淨額」會持續顯示負數提醒主控，不會悄悄算對、也不會真的算錯，只是追溯不到
+// 半年前的部分不會自動疊加進來，需要人工確認。
+const CARRY_LOOKBACK_MONTHS = 6;
+// fetchAssignmentsInRange()每次都是直接打Supabase、沒有快取——如果每個呼叫端各自只查
+// 自己要的那幾位夥伴，使用者在區間勞報單畫面切換期間/夥伴時，每次都要重新往回查6個月
+// 的任務資料，畫面會明顯頓一下。這裡固定算「全體夥伴」（不管呼叫端只要哪幾位），用
+// monthStr當key在記憶體裡快取幾分鐘，之後不管哪個畫面、查哪位夥伴都直接命中快取，
+// 多查的那幾位夥伴成本也很低（真正貴的是往回查好幾個月的任務/調整項資料本身，筆數
+// 不會因為多算幾位夥伴而變多，純粹是記憶體內多跑幾次陣列運算）。
+async function computeCarryInMap(monthStr, driverIds, lookbackMonths = CARRY_LOOKBACK_MONTHS){
+  const cache = state._carryInCache;
+  if(cache && cache.monthStr===monthStr && cache.lookbackMonths===lookbackMonths && Date.now()-cache.at < 3*60*1000){
+    return cache.map;
+  }
+  const allIds = state.data.drivers.map(d=>d.id);
+  const carry = new Map(allIds.map(id=>[id, 0]));
+  const months = [];
+  let m = monthStr;
+  for(let i=0;i<lookbackMonths;i++){ m = shiftMonth(m,-1); months.unshift(m); }
+  for(const mo of months){
+    let moAssignments;
+    try{
+      moAssignments = await fetchAssignmentsInRange(mo+'-01', monthEndStr(mo));
+      await ensureAdjustmentsRange(mo+'-01');
+    }catch(e){ continue; } // 撈不到就當這個月沒有額外餘額要疊加，不中斷整個流程
+    allIds.forEach(id=>{
+      const base = computeDriverPayable(id, mo, moAssignments).payable;
+      const prev = carry.get(id) || 0;
+      carry.set(id, Math.min(0, base + prev));
+    });
+  }
+  state._carryInCache = { monthStr, lookbackMonths, map: carry, at: Date.now() };
+  return carry;
+}
+// 已月結／區間開單的勞報單：用凍結的金額＋當時的稅務欄位，組出勞報單第1頁＋（有代墊款才有的）
+// 第2頁附件。assignments 要涵蓋該勞報單的整段期間（呼叫端自己用 fetchAssignmentsInRange 取）。
+function buildSlipHtmls(driver, record, assignments){
+  const [start, end] = statementRange(record);
+  const r = record.periodStart ? driverRange(record.driverId, start, end, assignments) : driverMonthly(record.driverId, record.month, assignments);
+  const merged = { ...r, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount };
+  const ded = { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet };
+  const periodOpts = record.periodStart ? { period:{ start, end }, payDate: record.payDate } : {};
+  const monthStr = record.periodStart ? end.slice(0,7) : record.month;
+  return {
+    slipHtml: payrollSlipHtml(driver, monthStr, merged, ded, {
+      ...periodOpts, v2: slipUsesV2(record), serviceName: record.serviceName, payMethod: record.payMethod,
+      signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
+    }),
+    attHtml: payrollAttachmentHtml(driver, monthStr, merged, periodOpts)
+  };
+}
+// 勞報單（正式稅務/勞務文件）月結確認時要用的淨額，跟上面driverMonthly()
+// 算給「我的報酬/報酬結算」即時參考用的net故意不一樣：預支是薪資提前
+// 請領，不是扣款，不該讓這張要簽名的正式文件把預支再扣一次（不然夥伴
+// 等於同一筆錢被扣兩次）；一般加項/減項不受影響，照樣計入。「我的報酬」
+// 那邊維持原本邏輯（含預支扣減），是為了讓夥伴/主控隨時看到「實際還能
+// 拿到多少現金」的即時參考數字，跟這裡刻意不同、不用同步。
+function adjTypeLabel(type){ return type==='advance' ? '預支' : type==='reimbursement' ? '代墊款（憑證開公司）' : type==='add' ? '加項' : '減項'; }
+function statementNetFromAdjustments(tripTotal, adjustments){
+  const adjTotal = adjustments.reduce((s,a)=> (a.type==='advance' || a.type==='reimbursement') ? s : s+(a.type==='add'?Number(a.amount):-Math.abs(Number(a.amount))), 0);
+  return { adjTotal, net: tripTotal+adjTotal };
+}
+// 首頁「即時利潤」只是給主控一眼看大概損益的參考數字，不是正式請款/薪資
+// 文件（那兩個分別在請款結算、報酬結算，各自照自己的規則精確計算，完全
+// 不受這裡影響）。故意統一用「自然月（1號至今天）」同一個時間範圍去算
+// 收入(請款)跟支出(薪資)，而不是讓每個通路各自套用自己的請款週期——
+// 薪資本來就是固定自然月結算，如果收入那邊各通路分別用自己的週期（例如
+// 7-11是每月27日到次月26日），兩邊時間範圍對不起來，相減出來的「利潤」
+// 數字會是兩個不同時間區間硬湊出來的，看起來像損益、其實沒有真正對應到
+// 同一段時間，容易誤判。統一成自然月之後，這裡顯示的各通路金額會跟
+// 「請款結算」裡那個通路自己週期算出來的正式金額有落差，是刻意的
+// （快速參考 vs 正式請款單，本來就不需要一致）。
+// 點「利潤總額」展開的每日明細：跟上面的月合計用同一份資料與同一套算法，逐日加總後一定等於月合計。
+// 請款＝當天完成任務的請款金額（各通路拆賬加總）；夥伴薪資支出＝當天完成任務的報酬＋當天的加減項
+// （預支、代墊款不算；加減項沒有填日期的視為該月 1 號）。
+function computeProfitDaily(){
+  const today = todayStr();
+  const monthStr = today.slice(0,7);
+  const start = monthStr + '-01';
+  const days = {};
+  const bucket = d=> days[d] || (days[d] = { date:d, revenue:0, expense:0, trips:0 });
+  const activeCh = new Set(state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>ch.id));
+  state.data.assignments.forEach(a=>{
+    if(a.status!=='completed' || a.isSupport || a.date<start || a.date>today) return;
+    const byChannel = effectiveByChannelForAssignment(a);
+    const rev = Object.entries(byChannel).reduce((sum,[cid,v])=> activeCh.has(cid) ? sum+(Number(v)||0) : sum, 0);
+    const b = bucket(a.date); b.revenue += rev; b.expense += tripPay(a); b.trips++;
+  });
+  // 請款結算的例外調整：併入「備註開頭寫的日期」那天的請款金額（例如「10/14 合味樣品」→ 10/14）；
+  // 備註沒寫日期（或不是本月）就用登打那天；都不在本月範圍內就算 1 號／今天。首頁不特別列出。
+  monthBillingAdjustments(monthStr).forEach(x=>{
+    const m = /^\s*(\d{1,2})\/(\d{1,2})/.exec(x.note||'');
+    let d = m ? `${monthStr.slice(0,4)}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}` : '';
+    if(!d || d.slice(0,7)!==monthStr) d = x.createdDate || today;
+    bucket(d < start ? start : d > today ? today : d).revenue += Number(x.amount) || 0;
+  });
+  state.data.adjustments.forEach(adj=>{
+    if(adj.month!==monthStr || adj.type==='advance' || adj.type==='reimbursement') return;
+    const d = adjustmentEffectiveDate(adj);
+    if(d<start || d>today) return;
+    bucket(d).expense += adj.type==='add' ? Number(adj.amount) : -Math.abs(Number(adj.amount));
+  });
+  return Object.values(days).sort((x,y)=>y.date.localeCompare(x.date));
+}
+function profitDailyHtml(){
+  const rows = computeProfitDaily();
+  if(!rows.length) return '<div class="empty">本月還沒有已完成的任務</div>';
+  const WD = ['日','一','二','三','四','五','六'];
+  const sum = rows.reduce((t,r)=>({ revenue:t.revenue+r.revenue, expense:t.expense+r.expense, trips:t.trips+r.trips }), { revenue:0, expense:0, trips:0 });
+  const fmt = n=> `${n<0?'-':''}$${money(Math.abs(Math.round(n)))}`;
+  const profitCell = n=> `<td class="amount" style="color:${n>=0?'var(--teal)':'var(--danger)'}; font-weight:700;">${fmt(n)}</td>`;
+  return `<div style="overflow-x:auto;"><table>
+    <thead><tr><th>日期</th><th>任務數</th><th>請款總額</th><th>夥伴薪資支出</th><th>利潤</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td>${r.date.slice(5).replace('-','/')}（${WD[new Date(r.date+'T00:00:00').getDay()]}）</td><td class="amount">${r.trips}</td><td class="amount">${fmt(r.revenue)}</td><td class="amount">${fmt(r.expense)}</td>${profitCell(r.revenue-r.expense)}</tr>`).join('')}
+    <tr style="font-weight:700; background:var(--group);"><td>本月合計</td><td class="amount">${sum.trips}</td><td class="amount">${fmt(sum.revenue)}</td><td class="amount">${fmt(sum.expense)}</td>${profitCell(sum.revenue-sum.expense)}</tr></tbody>
+  </table></div>
+  <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0;">每天的數字是當天完成的任務；加減項依調整項日期歸入（沒填日期的算在 1 號）；請款結算的「例外調整」併入備註開頭日期（沒寫就用登打日）那天的請款總額。僅供參考。</p>`;
+}
+// 請款結算的「例外調整」（人工加減的請款項目，記在「通路＋請款期間」上，沒有日期）：
+// 首頁的本月利潤把「請款期間結束日落在本月」的調整算進本月（例如 7-11 的 9/27～10/26 期間，10/26 結束，算在 10 月）。
+function monthBillingAdjustments(monthStr){
+  const s0 = monthStr + '-01', e0 = monthEndStr(monthStr);
+  const active = new Set(state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>ch.id));
+  return (state.data.billingAdjustments||[]).filter(x=> active.has(x.channelId) && x.periodEnd>=s0 && x.periodEnd<=e0);
+}
+function computeProfitSnapshot(){
+  const monthStr = todayStr().slice(0,7);
+  const today = todayStr();
+  const calStart = monthStr + '-01';
+  const perChannel = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>{
+    const { total: tripTotal } = channelBillingTotal(ch.id, calStart, today);
+    const adj = monthBillingAdjustments(monthStr).filter(x=>x.channelId===ch.id).reduce((s,x)=>s+x.amount, 0);
+    return { channel: ch, total: tripTotal + adj, tripTotal, adj, period: { start: calStart, end: today } };
+  });
+  const revenueTotal = perChannel.reduce((s,x)=>s+x.total, 0);
+  // 2026-11-04修正：支出以前是用driverMonthly()算「整個月」（含還沒到的日期，例如
+  // 已經先登打、生效日排在今天之後的加減項），但上面的收入是算「本月1號到今天」，
+  // 兩邊時間範圍對不起來，導致這裡顯示的利潤總額跟點開「每日明細」看到的本月合計
+  // 兜不起來。改成直接加總computeProfitDaily()逐日算出來的支出，確保這裡跟展開的
+  // 每日明細永遠是同一個數字、不會再對不齊。
+  const expenseTotal = computeProfitDaily().reduce((s,r)=>s+r.expense, 0);
+  return { perChannel, revenueTotal, expenseTotal, profit: revenueTotal-expenseTotal, monthStr };
+}
+function getWeekDates(offset){
+  const now=new Date(); const day=now.getDay(); const mondayDelta = day===0?-6:1-day;
+  const monday=new Date(now); monday.setDate(now.getDate()+mondayDelta+offset*7);
+  const dates=[]; for(let i=0;i<7;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); dates.push(ymd(d)); }
+  return dates;
+}
+
+// ---------- Tabs ----------
+const ADMIN_TABS = [
+  {id:'home', label:'首頁', icon:'🏠'},
+  {id:'carbon_inbox', label:'小碳任務', icon:'🧠'},
+  {id:'warroom', label:'戰情室', icon:'🛰️', group:'排班'},
+  {id:'announcements', label:'公告管理', icon:'📢', group:'排班'},
+  {id:'schedule', label:'週期任務清單', icon:'📅', group:'排班'},
+  {id:'drivers', label:'夥伴資料', icon:'👥', group:'基本資料'},
+  {id:'channels', label:'通路管理', icon:'🏷️', group:'基本資料'},
+  {id:'dropPoints', label:'店點資料庫', icon:'📍', group:'基本資料'},
+  {id:'origins', label:'任務起點資料庫', icon:'🏭', group:'基本資料'},
+  {id:'routes', label:'路線管理', icon:'🛣️', group:'基本資料'},
+  {id:'payroll', label:'報酬結算', icon:'💰', group:'帳務'},
+  {id:'paymentList', label:'夥伴匯款清單', icon:'🏦', group:'帳務'},
+  {id:'billing', label:'請款結算', icon:'🧾', group:'帳務'},
+  {id:'export', label:'資料匯出', icon:'📤', group:'系統'},
+  {id:'settings', label:'系統設定', icon:'⚙️', group:'系統'}
+];
+const DRIVER_TABS = [
+  {id:'home', label:'首頁', icon:'🏠'},
+  {id:'today', label:'今日任務', icon:'📋'},
+  {id:'history', label:'歷史任務', icon:'🕘'},
+  {id:'my-earnings', label:'我的報酬', icon:'💰'},
+  {id:'my-statement', label:'對帳單', icon:'🧾'},
+  {id:'profile', label:'我的資料', icon:'👤'}
+];
+// 電話、銀行資訊、身分證／居留證號為必填(車牌/車型選填)——身分證字號是
+// 勞報單「所得人」欄位要用的，沒有這個勞報單資料不完整。夥伴本人（非主控
+// 檢視）資料未填妥前，鎖定在「我的資料」頁，其他分頁停用，直到補齊必填
+// 欄位並儲存為止。
+function isDriverProfileRequiredComplete(d){
+  if(!d) return true;
+  return !!(d.phone && d.idNumber && d.bank && d.bank.bankName && d.bank.branch && d.bank.account && d.bank.holder);
+}
+// ---------- 輕量通知（取代 alert 彈窗）----------
+// 操作結果（儲存成功、請先選擇…）改成上方淡出的小通知，不用多按一次「確定」才能繼續；
+// 失敗類訊息停留較久、點一下可關閉。破壞性操作的 confirm() 仍然保留。
+// 收合群組（.fold）的標題點擊：點在內容區（.fold-body）裡的按鈕不該觸發收合。
+// 以前用 e.target.closest('.fold-body') 判斷，但內容區裡的按鈕（例如路線管理展開後的「移除」「加入」店點）
+// 會在自己的 onclick 裡把整塊內容重畫——事件往上傳遞時 e.target 已經從頁面上被拿掉，closest() 找不到
+// .fold-body，就誤判成點到標題而把整個群組收合起來。composedPath() 是「點下去那一刻」的路徑，不受重畫影響。
+function clickedInFoldBody(e){
+  return e.composedPath().some(el=> el && el.classList && el.classList.contains('fold-body'));
+}
+function toast(msg, opts){
+  opts = opts || {};
+  let host = document.getElementById('toastHost');
+  if(!host){ host = document.createElement('div'); host.id = 'toastHost'; document.body.appendChild(host); }
+  const text = String(msg==null?'':msg);
+  const type = opts.type || (/失敗|錯誤|無法|不能|不可|逾時|異常/.test(text) ? 'error'
+    : /^請|請先|請選擇|請輸入|請填|請至少|找不到|沒有|還沒|尚未|不足|重複|不一致/.test(text) ? 'warn'
+    : /已|成功|完成|儲存|建立|套用|複製|發佈|更新|刪除|恢復|停用/.test(text) ? 'ok' : 'info');
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.innerHTML = `<span class="toast-ic">${{ok:'✅',error:'⛔',warn:'⚠️',info:'ℹ️'}[type]}</span><span class="toast-tx"></span>${opts.action?'<button class="toast-act"></button>':''}<button class="toast-x" aria-label="關閉">✕</button>`;
+  el.querySelector('.toast-tx').textContent = text;
+  if(opts.action){ const ab = el.querySelector('.toast-act'); ab.textContent = opts.action.label; ab.onclick = e=>{ e.stopPropagation(); dismiss(); Promise.resolve(opts.action.fn()).catch(err=>toast(err.message||'操作失敗', { type:'error' })); }; }
+  const dismiss = ()=>{ if(!el.isConnected) return; el.classList.add('out'); setTimeout(()=>el.remove(), 250); };
+  el.onclick = dismiss;
+  host.appendChild(el);
+  while(host.children.length > 4) host.firstChild.remove();
+  if(!opts.sticky){
+    const ms = opts.action ? 9000 : Math.min(12000, (type==='error'||type==='warn' ? 5000 : 2800) + text.length*45);
+    setTimeout(dismiss, ms);
+  }
+  return { dismiss, el };
+}
+window.alert = msg=>{ toast(msg); };
+
+// ---------- 夜間模式：跟著裝置的日間／夜間設定自動切換（不用手動） ----------
+// 手機／電腦的系統外觀切到夜間（或排程自動切換）時，畫面即時跟著變，不需要重新整理。
+function applyTheme(dark){
+  if(dark) document.documentElement.setAttribute('data-theme','dark'); else document.documentElement.removeAttribute('data-theme');
+  const meta = document.querySelector('meta[name="theme-color"]'); if(meta) meta.setAttribute('content', dark ? '#12161C' : '#F3E7CF');
+}
+(function initTheme(){
+  try{ localStorage.removeItem('theme'); }catch(e){} // 舊版的手動選擇不再使用
+  if(!window.matchMedia) return;
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  applyTheme(mq.matches);
+  const onChange = e=> applyTheme(e.matches);
+  if(mq.addEventListener) mq.addEventListener('change', onChange); else if(mq.addListener) mq.addListener(onChange);
+})();
+
+// ---------- 表格優化：金額欄標題靠右、扣款紅／加項綠、長表格表頭釘住 ----------
+function enhanceTables(root){
+  if(!root) return;
+  root.querySelectorAll('td.amount').forEach(td=>{
+    const t = td.textContent.trim();
+    td.classList.toggle('neg', /^[-−]\s*\$?\s*\d|^\$\s*[-−]\s*\d/.test(t));
+    td.classList.toggle('pos', /^\+\s*\$?\s*[1-9]/.test(t.replace(/,/g,'')));
+  });
+  root.querySelectorAll('table:not(.route-grid)').forEach(tb=>{
+    const rows = [...tb.querySelectorAll(':scope > tbody > tr')];
+    const head = tb.querySelectorAll(':scope > thead th');
+    if(head.length && rows.length){
+      head.forEach((th,i)=>{
+        const cells = rows.map(r=>r.children[i]).filter(Boolean);
+        th.classList.toggle('amount', cells.length>0 && cells.every(c=>c.classList.contains('amount')));
+      });
+    }
+    // 表頭釘住只在「沒有被橫向捲動容器包住」的長表格才有效；包在 overflow 容器裡（例如路線管理的地區卡片）
+    // 表頭會被推到第一列上面蓋住內容，所以這種不釘。
+    let clipped = false;
+    for(let el = tb.parentElement; el && el !== root; el = el.parentElement){
+      const ov = getComputedStyle(el).overflowX;
+      if(ov !== 'visible'){ clipped = true; break; }
+    }
+    tb.classList.toggle('tbl-sticky', rows.length >= 14 && !clipped);
+  });
+}
+(function initTableObserver(){
+  const c = document.getElementById('content'); if(!c || typeof MutationObserver==='undefined') return;
+  let tm = null;
+  new MutationObserver(()=>{ clearTimeout(tm); tm = setTimeout(()=>enhanceTables(c), 40); }).observe(c, { childList:true, subtree:true });
+})();
+
+// ---------- 全域快速搜尋（主控）：夥伴／店點／路線 ----------
+function globalSearchResults(q){
+  const kw = q.trim().toLowerCase();
+  if(!kw) return null;
+  const has = x=> (x||'').toString().toLowerCase().includes(kw);
+  return {
+    drivers: state.data.drivers.filter(d=>has(d.name)).slice(0,6),
+    dps: state.data.dropPoints.filter(dp=>has(dp.address)||has(dp.code)).slice(0,8),
+    routes: state.data.routes.filter(r=>has(routeDisplayName(r.name))||has(r.name)||has(r.seq)).slice(0,6)
+  };
+}
+function renderGlobalSearch(){
+  const input = document.getElementById('globalSearch'), list = document.getElementById('globalSearchList');
+  if(!input || !list) return;
+  const res = globalSearchResults(input.value);
+  if(!res){ list.style.display='none'; return; }
+  const items = [];
+  const grp = (title, arr, fn)=>{ if(arr.length){ items.push(`<div class="gs-h">${title}</div>`); arr.forEach(x=> items.push(fn(x))); } };
+  grp('夥伴', res.drivers, d=>`<div class="gs-i" data-gs="d|${d.id}">${escapeHtml(d.name)}${d.status==='inactive'?' <small>已停用</small>':''}</div>`);
+  grp('店點', res.dps, dp=>`<div class="gs-i" data-gs="p|${dp.id}">${escapeHtml(dpLabel(dp))}<small>${escapeHtml(channelName(dp.channelId))}・${dp.status==='inactive'?'已停用':'使用中'}</small></div>`);
+  grp('路線', res.routes, r=>`<div class="gs-i" data-gs="r|${r.id}">${escapeHtml(routeDisplayName(r.name))}${r.status==='inactive'?' <small>已停用</small>':''}</div>`);
+  list.innerHTML = items.join('') || '<div class="gs-none">找不到符合的夥伴、店點或路線</div>';
+  list.style.display = 'block';
+  list.querySelectorAll('[data-gs]').forEach(el=>{
+    el.onmousedown = e=>{ e.preventDefault(); gsGo(el.dataset.gs); };
+  });
+}
+function gsGo(key){
+  const [kind, id] = key.split('|');
+  const input = document.getElementById('globalSearch');
+  document.getElementById('globalSearchList').style.display = 'none';
+  if(kind==='d'){ const d = state.data.drivers.find(x=>x.id===id); if(!d) return; driverListSearch = d.name; switchTab('drivers'); }
+  else if(kind==='p'){ const dp = state.data.dropPoints.find(x=>x.id===id); if(!dp) return; state._dpSearchInit = dp.code || dp.address; dpOnlyMissing = false; switchTab('dropPoints'); }
+  else if(kind==='r'){ openRouteForEdit(id); }
+  if(input) input.blur();
+}
+(function initGlobalSearch(){
+  const input = document.getElementById('globalSearch'); if(!input) return;
+  let composing = false;
+  input.addEventListener('compositionstart', ()=>{ composing = true; });
+  input.addEventListener('compositionend', ()=>{ composing = false; renderGlobalSearch(); });
+  input.addEventListener('input', ()=>{ if(!composing) renderGlobalSearch(); });
+  input.addEventListener('focus', renderGlobalSearch);
+  input.addEventListener('blur', ()=> setTimeout(()=>{ const l = document.getElementById('globalSearchList'); if(l) l.style.display='none'; }, 150));
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Escape'){ input.value=''; document.getElementById('globalSearchList').style.display='none'; input.blur(); }
+    if(e.key==='Enter'){ const first = document.querySelector('#globalSearchList [data-gs]'); if(first) gsGo(first.dataset.gs); }
+  });
+  document.addEventListener('keydown', e=>{
+    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && document.getElementById('gsWrap').style.display!=='none'){ e.preventDefault(); input.focus(); input.select(); }
+  });
+})();
+// iOS Safari 不理 user-scalable=no，雙指放大要另外擋（只擋夥伴本人）。
+document.addEventListener('gesturestart', e=>{ if(document.body.classList.contains('driver-lock')) e.preventDefault(); });
+document.addEventListener('contextmenu', e=>{ if(document.body.classList.contains('driver-lock') && !/^(INPUT|TEXTAREA)$/.test((e.target||{}).tagName)) e.preventDefault(); });
+// 字體大小偏好存在本機（localStorage），每台裝置/瀏覽器各自記住，不會同步到其他裝置；
+// 只縮放 #content（不影響分頁列），small/large 以外（含沒存過的情況）視為中（不加class＝不縮放）。
+function applyFontSizePref(){
+  const pref = localStorage.getItem('driverFontSize') || 'medium';
+  document.body.classList.toggle('fs-small', pref==='small');
+  document.body.classList.toggle('fs-large', pref==='large');
+}
+function renderNav(){
+  applyFontSizePref();
+  const inDriverView = state.adminViewDriver || state.role==='driver';
+  const tabs = inDriverView ? DRIVER_TABS : ADMIN_TABS;
+  const lockToProfile = state.role==='driver' && !state.adminViewDriver &&
+    !isDriverProfileRequiredComplete(state.data.drivers.find(d=>d.id===state.activeDriverId));
+  if(lockToProfile) state.tab = 'profile';
+  else if(!state.tab || !tabs.find(t=>t.id===state.tab)) state.tab = tabs[0].id;
+  const nav = document.getElementById('tabsNav');
+  document.body.classList.toggle('driver-view', !!inDriverView);
+  // 夥伴本人：鎖定縮放與反白（畫面不會自己放大、也不能雙指放大或長按選字）；主控維持可以雙指放大。
+  const ownDriver = state.role==='driver' && !state.adminViewDriver;
+  document.body.classList.toggle('driver-lock', ownDriver);
+  const vp = document.querySelector('meta[name="viewport"]');
+  if(vp) vp.setAttribute('content', ownDriver ? 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no' : 'width=device-width, initial-scale=1');
+  const gs = document.getElementById('gsWrap'); if(gs) gs.style.display = (state.role==='admin' && !inDriverView) ? 'block' : 'none';
+  let lastGroup = '';
+  nav.innerHTML = tabs.map(t=>{
+    const disabled = lockToProfile && t.id!=='profile';
+    const head = (t.group && t.group!==lastGroup) ? `<div class="nav-group">${t.group}</div>` : '';
+    if(t.group) lastGroup = t.group;
+    return head + `<button data-tab="${t.id}" class="${state.tab===t.id?'active':''}" ${disabled?'disabled style="opacity:.4; cursor:not-allowed;"':''}><span class="ni">${t.icon||''}</span><span class="nl">${t.label}</span></button>`;
+  }).join('');
+  nav.querySelectorAll('button').forEach(b=>{
+    b.onclick=()=>{
+      if(lockToProfile && b.dataset.tab!=='profile'){ alert('請先補齊必填的基本資料（電話、銀行帳戶）並儲存，才能使用其他功能。'); return; }
+      switchTab(b.dataset.tab);
+    };
+  });
+}
+// 報酬結算／請款結算／資料匯出改成各自直接查資料庫、不寫回共用的
+// state.data.assignments 之後，只剩「週期任務清單」還會為了查舊週把窗口往前補
+// 到超過日常需要的範圍（見 trimAssignmentsToBaseWindow 說明）。離開週期任務清單、
+// 切去別的分頁時，把窗口縮回日常操作真的需要的基本大小，避免查過的舊
+// 資料一直占著拖慢其他畫面——這是所有「切分頁」的共用入口（點側邊選單、
+// 或頁面內部「前往OOO」按鈕都會經過這裡），比只改 goTab() 更保險。
+const REPORT_TABS = new Set(['schedule']);
+function switchTab(id){
+  if(REPORT_TABS.has(state.tab) && state.tab!==id) trimAssignmentsToBaseWindow();
+  state.tab = id;
+  renderNav();
+  renderContent();
+}
+function renderContent(){
+  const c = document.getElementById('content');
+  const inDriverView = state.adminViewDriver || state.role==='driver';
+  if(state.tab!=='schedule' && state._bulk) state._bulk = null;
+  if(state.tab!=='warroom') wrLeaveFull();
+  const mainEl = c && c.closest('main');
+  if(mainEl) mainEl.classList.toggle('wide', !inDriverView);
+  if(!inDriverView){
+    ({home:renderHomeAdmin, carbon_inbox:renderCarbonInbox, warroom:renderWarRoom, announcements:renderAnnouncements, schedule:renderScheduleAdmin, drivers:renderDrivers, channels:renderChannels, dropPoints:renderDropPoints,
+      origins:renderOrigins, routes:renderRoutes, payroll:renderPayrollPage, paymentList:renderPaymentList, billing:renderBilling, export:renderExport, settings:renderSettings})[state.tab](c);
+  } else {
+    if(!state.activeDriverId && state.data.drivers.length) state.activeDriverId = state.data.drivers[0].id;
+    ({home:renderHomeDriver, 'today':renderToday, 'history':renderHistory, 'my-earnings':renderMyEarnings, 'my-statement':renderMyStatement, 'profile':renderMyProfile})[state.tab](c);
+    maybeGreetDriver();
+  }
+  // 2026-10-29：主控自己的畫面（不是「檢視夥伴畫面」）現在也有語音助理了，只是問
+  // 得到的資料範圍不一樣（voice.js裡的voiceIsAdminMode()判斷），所以只要是登入狀態
+  // （夥伴或主控）就顯示，不再只限夥伴畫面。
+  if(typeof voiceFabEnsure==='function') voiceFabEnsure(state.role==='admin' || state.role==='driver');
+}
+// ---------- 戰情室（主控電腦版／大螢幕） ----------
+// 只讀「今天」的任務（state.data.assignments，由 Realtime 即時更新），每 15 秒依現在時間重算一次，
+// 逾時、停滯這類「時間到了才發生」的狀況不用等資料變動。紅色情況（夥伴回報未完成原因、沒人排、嚴重逾時）
+// 要有人處理：「已看到」→ 紅框常亮、「已處理」→ 解除；標記存在 war_room_marks，所有螢幕共用。
+const WR_DEFAULTS = { amYellow:'09:30', amRed:'10:00', pmYellow:'14:30', pmRed:'15:00', stallYellow:90, stallRed:120, maxBlink:3 };
+function wrCfg(){ return Object.assign({}, WR_DEFAULTS, (state.data && state.data.settings && state.data.settings.warroomConfig) || {}); }
+function wrMin(hhmm){ const m = String(hhmm||'').match(/^(\d{1,2}):(\d{2})$/); return m ? (+m[1])*60 + (+m[2]) : 0; }
+function wrHM(min){ return pad(Math.floor(min/60)) + ':' + pad(Math.floor(min%60)); }
+function wrState(){
+  if(!state._wr) state._wr = { marks:new Map(), loadedAt:0, err:false, prevDone:{}, sel:{}, cache:{}, lastPoll:0 };
+  return state._wr;
+}
+const WR_COL = { done:'#3FB37F', run:'#4A90E2', late:'#E0902E', stall:'#E0902E', wait:'#5C6B88', hot:'#E5594F' };
+function wrCompute(){
+  const cfg = wrCfg(), now = new Date(), nowMin = now.getHours()*60 + now.getMinutes(), nowMs = now.getTime(), today = todayStr();
+  const wd = now.getDay()===0 ? 7 : now.getDay();
+  const W = wrState();
+  const tasks = state.data.assignments.filter(a=>a.date===today && a.status!=='cancelled' && a.published!==false && !a.isSupport);
+  const cards = tasks.map(a=>{
+    const route = state.data.routes.find(r=>r.id===a.routeId) || null;
+    const dps = a.dropPoints || [];
+    const done = dps.filter(d=>d.status==='completed');
+    const issues = dps.filter(d=>d.status!=='completed' && d.issueReason).length;
+    const stamps = done.map(d=>d.completedAt ? new Date(d.completedAt).getTime() : NaN).filter(t=>!isNaN(t));
+    const lastMs = stamps.length ? Math.max.apply(null, stamps) : null;
+    const perMin = {}; stamps.forEach(t=>{ const k = Math.floor(t/60000); perMin[k] = (perMin[k]||0)+1; });
+    const batch = Object.keys(perMin).some(k=>perMin[k]>=3);
+    const m = W.marks.get(a.id) || { acked:0, resolved:0, resolution:'' };
+    const shiftPm = route ? route.shift==='PM' : false;
+    let s, why = '', over = 0, steady = false;
+    if(issues > m.resolved){ s = 'hot'; why = 'issue'; steady = m.acked >= issues; }
+    else if(a.status==='completed') s = 'done';
+    else if(!done.length){
+      // 夥伴已經按了「出發」（status = in_progress）就是進行中，不再算「待出發／逾時未出發」；
+      // 有出發時間的話，出發後太久沒完成第一站，照「停滯」的門檻算（黃／紅）
+      if(a.status === 'in_progress'){
+        s = 'run';
+        const dm = a.departedAt ? new Date(a.departedAt).getTime() : NaN;
+        if(!isNaN(dm)){
+          const idle = (nowMs - dm)/60000;
+          if(idle >= cfg.stallRed){ s = 'hot'; why = 'stall'; over = Math.round(idle); }
+          else if(idle >= cfg.stallYellow){ s = 'stall'; over = Math.round(idle); }
+        }
+      } else {
+        const y = wrMin(shiftPm ? cfg.pmYellow : cfg.amYellow), r = wrMin(shiftPm ? cfg.pmRed : cfg.amRed);
+        if(nowMin >= r){ s = 'hot'; why = 'late'; over = nowMin - y; }
+        else if(nowMin >= y){ s = 'late'; over = nowMin - y; }
+        else s = 'wait';
+      }
+    } else {
+      const idle = lastMs ? (nowMs - lastMs)/60000 : 0;
+      if(idle >= cfg.stallRed){ s = 'hot'; why = 'stall'; over = Math.round(idle); }
+      else if(idle >= cfg.stallYellow){ s = 'stall'; over = Math.round(idle); }
+      else s = 'run';
+    }
+    const dr = state.data.drivers.find(x=>x.id===a.driverId);
+    return { key:a.id, id:a.id, departedMs: a.departedAt ? new Date(a.departedAt).getTime() : null, route, origin: route ? originLabel(route.originAddr) : '（未知任務起點）', label: wrLabel(route),
+      driverId: a.driverId||null, driver: dr ? dr.name : '未指派', phone: dr ? (dr.phone||'') : '', n:dps.length, doneN:done.length, issues, s, why, over, steady, lastMs, batch,
+      resolution: (issues && m.resolved>=issues) ? m.resolution : '', resolvedTxt: m.resolved>0 && m.resolution ? m.resolution : '' };
+  });
+  // 沒人排的空格：今天完全沒有任務（假日／休息日）就不提示，免得整片紅。
+  if(tasks.length){
+    mobileSlotsFor(today, '').forEach(o=>o.routes.forEach(r=>r.slots.forEach(sl=>{
+      if(sl.items.length) return;
+      const wdList = routeWeekdays(sl.route);
+      if(wdList && !wdList.includes(wd)) return;
+      if(!getActiveVersion(sl.route, today)) return;
+      // 只有「這條路線上週或上上週的同一天有排過」才算應該有人；平常這天不跑的路線（例如週日只跑牧穀）不提示。
+      // 超出已載入的資料範圍時（看不出歷史）才保守地照樣提示。
+      const d7 = ymd(addDays(today,-7)), d14 = ymd(addDays(today,-14)), ids = new Set(sl.candidates.map(r=>r.id));
+      const ws = state.data.assignmentsWindowStart;
+      const canTell = !ws || ws <= d7;
+      if(canTell && !state.data.assignments.some(x=> ids.has(x.routeId) && x.status!=='cancelled' && !x.isSupport && (x.date===d7 || (ws && ws<=d14 && x.date===d14)))) return;
+      cards.push({ key:'gap:'+sl.route.id, id:null, route:sl.route, origin:originLabel(sl.route.originAddr), label:wrLabel(sl.route), driver:'', phone:'', n:0, doneN:0, issues:0, s:'hot', why:'gap', over:0, steady:false, lastMs:null, batch:false, resolution:'', resolvedTxt:'' });
+    })));
+  }
+  cards.sort((x,y)=> x.route && y.route ? routeSortCompare(x.route, y.route) : (x.route?-1:1));
+  return cards;
+}
+function wrLabel(route){
+  if(!route) return '—';
+  let t = routeDisplayName(route.name);
+  const og = originLabel(route.originAddr);
+  if(og && t.indexOf(og)===0) t = t.slice(og.length);
+  return t.trim() || routeDisplayName(route.name);
+}
+function wrClock(ms){ const d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); }
+function wrChip(c){
+  if(c.s==='hot'){
+    if(c.why==='gap') return '🔴 沒人排';
+    if(c.why==='issue') return c.steady ? '🔴 待處理' : '🔴 '+c.issues+' 站未完成';
+    return c.why==='late' ? '🔴 逾時 '+c.over+' 分' : '🔴 '+c.over+' 分沒進度';
+  }
+  return { done:'🟢 已完成', run:'🔵 進行中', late:'🟡 逾時未出發', wait:'⚪ 待出發', stall:'🟡 停滯' }[c.s];
+}
+function wrSev(c){ return (c.why==='issue'||c.why==='gap') ? 0 : c.s==='hot' ? 1 : 2; }
+function wrCardHtml(c, anim){
+  const W = wrState(), hot = c.s==='hot', am = c.s==='late'||c.s==='stall';
+  let segs = '';
+  for(let i=0;i<c.n;i++) segs += '<i class="'+(i<c.doneN?'d':(i<c.doneN+c.issues?'h':''))+'"></i>';
+  let m;
+  if(c.why==='gap') m = '今天這個班次沒有排夥伴';
+  else if(c.s==='wait'||c.s==='late'||(c.s==='hot'&&c.why==='late')) m = '還沒有完成的店點（共 '+c.n+' 站）';
+  else if(c.doneN===0 && c.departedMs && c.why!=='issue') m = wrClock(c.departedMs)+' 出發，還沒有完成任何一站（共 '+c.n+' 站）';
+  else m = c.doneN+' / '+c.n+' 站'+(c.lastMs?'　最近 '+wrHM(new Date(c.lastMs).getHours()*60+new Date(c.lastMs).getMinutes()):'');
+  if(c.resolution) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>';
+  else if(c.s==='done' && c.resolvedTxt) m += '　<span class="ok">✔ 已處理：'+escapeHtml(c.resolvedTxt)+'</span>';
+  const bd = c.batch ? '<div class="bd">🟣 批次上傳，部分時間不準</div>' : '';
+  let btn = '';
+  const ro = !!state._wrExternal;
+  if(!ro && c.why==='issue' && !c.steady) btn = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
+  if(!ro && c.why==='issue' && c.steady){
+    const cur = W.sel[c.id] || '已聯絡店家';
+    btn = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>';
+  }
+  const tel = (c.phone && c.s!=='done') ? ' <a href="tel:'+escapeHtml(c.phone)+'" title="撥給 '+escapeHtml(c.driver)+'">📞</a>' : '';
+  const cls = (hot ? (anim?'hot':'hotst') : am ? (anim?c.s:'amst') : '') + (c.why==='gap'?' gap':'');
+  return '<div class="c '+cls+'" data-key="'+escapeHtml(c.key)+'" style="--c:'+WR_COL[c.s]+'"><div class="r"><b>'+(c.s==='run'?'<i class="dot"></i>':'')+escapeHtml(c.label)+'</b><span class="chip">'+wrChip(c)+'</span></div>'
+    + '<div class="p">'+(c.driver ? escapeHtml(c.driver)+tel : '（空缺）')+'</div>'+(segs?'<div class="segs">'+segs+'</div>':'')+'<div class="m">'+m+'</div>'+bd+btn+'</div>';
+}
+function wrDetailHtml(c){
+  const cfg = wrCfg(), a = c.id ? state.data.assignments.find(x=>x.id===c.id) : null, pm = c.route && c.route.shift==='PM';
+  const yel = pm ? cfg.pmYellow : cfg.amYellow, red = pm ? cfg.pmRed : cfg.amRed;
+  let why;
+  if(c.why==='gap') why = '今天這個班次沒有排夥伴（這條路線上週或上上週的同一天有排過）。';
+  else if(c.why==='issue') why = c.issues+(state._wrExternal ? ' 站回報了未完成原因（見下方店點）。' : ' 站回報了未完成原因，需要你確認處理。');
+  else if(c.s==='hot' && c.why==='late') why = '已超過預計出發時間 '+c.over+' 分鐘（紅色門檻 '+red+'），還沒有完成任何一站。';
+  else if(c.s==='late') why = '已超過預計出發時間 '+c.over+' 分鐘，還沒有完成任何一站（'+yel+' 變黃色、'+red+' 變紅色）。';
+  else if(c.s==='hot' && c.why==='stall') why = (c.doneN ? c.over+' 分鐘沒有新進度' : '出發後 '+c.over+' 分鐘還沒有完成任何一站')+'（紅色門檻 '+cfg.stallRed+' 分鐘）。';
+  else if(c.s==='stall') why = (c.doneN ? c.over+' 分鐘沒有新進度' : '出發後 '+c.over+' 分鐘還沒有完成任何一站')+'（黃色門檻 '+cfg.stallYellow+' 分鐘、紅色門檻 '+cfg.stallRed+' 分鐘）。';
+  else if(c.s==='wait') why = '還沒到預計出發時間（'+yel+'）。';
+  else if(c.s==='run') why = c.doneN ? '進行中，進度正常。' : (c.departedMs ? '夥伴 '+wrClock(c.departedMs)+' 出發，還沒有完成任何一站。' : '夥伴已出發，還沒有完成任何一站。');
+  else why = '全部完成。';
+  if(c.batch) why += ' 注意：有多站在同一分鐘完成，可能是夥伴批次上傳，時間不一定準。';
+  const hm = ms=>{ const d = new Date(ms); return pad(d.getHours())+':'+pad(d.getMinutes()); };
+  const dps = a ? (a.dropPoints||[]).map((d,i)=>({d,i})) : [];
+  const doneL = dps.filter(x=>x.d.status==='completed').sort((x,y)=> new Date(x.d.completedAt||0) - new Date(y.d.completedAt||0));
+  const restL = dps.filter(x=>x.d.status!=='completed');
+  const row = (x)=>{
+    const d = x.d, nm = escapeHtml(dpLabel(d)) + (d.channelId ? '　<small style="color:var(--soft);">'+escapeHtml(channelName(d.channelId))+'</small>' : '');
+    if(d.status==='completed') return '<div class="wr-st done"><b>✔</b><span>'+nm+'</span><em>'+(d.completedAt?hm(new Date(d.completedAt).getTime()):'')+'</em></div>';
+    if(d.issueReason) return '<div class="wr-st iss"><b>⚠</b><span>'+nm+'<br><small>'+escapeHtml(d.issueReason)+'</small></span><em>未完成</em></div>';
+    return '<div class="wr-st pend"><b>○</b><span>'+nm+'</span><em>待完成</em></div>';
+  };
+  const W = wrState(), ro = !!state._wrExternal; let act = '';
+  if(!ro && c.why==='issue' && !c.steady) act = '<button class="ack" data-a="ack" data-id="'+c.id+'">已看到（停止閃爍，紅框保留）</button>';
+  if(!ro && c.why==='issue' && c.steady){ const cur = W.sel[c.id] || '已聯絡店家'; act = '<div class="res"><select data-sel="'+c.id+'">'+['已聯絡店家','明天補送','不需處理'].map(o=>'<option'+(o===cur?' selected':'')+'>'+o+'</option>').join('')+'</select><button class="ack" data-a="res" data-id="'+c.id+'">已處理</button></div>'; }
+  const tel = c.phone ? '<a href="tel:'+escapeHtml(c.phone)+'">📞 '+escapeHtml(c.phone)+'</a>' : '';
+  return '<button class="x" data-a="close">✕ 關閉</button><h3>'+escapeHtml(c.origin+' '+c.label)+'</h3>'
+    + '<div class="who">'+(c.driver ? '夥伴：'+escapeHtml(c.driver)+tel : '（空缺，沒有夥伴）')+'</div>'
+    + '<div class="why" style="--c:'+WR_COL[c.s]+'"><b>'+wrChip(c)+'</b><br>'+why+(c.resolution?'<br><span class="ok">✔ 已處理：'+escapeHtml(c.resolution)+'</span>':'')+'</div>'+act
+    + (dps.length ? '<h4>店點（'+doneL.length+' / '+dps.length+' 站完成）</h4>'+doneL.concat(restL).map(row).join('') : '')
+    + ((!ro && c.id && c.driverId && c.s!=='done') ? '<button class="go" data-a="remind" data-id="'+c.id+'">🔔 提醒夥伴（推播）</button>' : '')
+    + (ro ? '' : '<button class="go" data-a="goto">'+(c.why==='gap'?'前往週期任務清單排人':'前往週期任務清單看這一趟')+'</button>');
+}
+function wrBuild(){
+  const cfg = wrCfg(), cards = wrCompute();
+  const cnt = { done:0, run:0, wait:0, late:0, stall:0, hot:0, bat:0 };
+  let sd = 0, sn = 0;
+  cards.forEach(c=>{ cnt[c.s]++; if(c.batch) cnt.bat++; if(c.driver){ sd += c.doneN; sn += c.n; } });
+  const pct = sn ? Math.round(sd*100/sn) : 0;
+  const cand = cards.filter(c=>(c.s==='hot'&&!c.steady) || c.s==='late' || c.s==='stall')
+    .sort((a,b)=> wrSev(a)-wrSev(b) || (b.over-a.over));
+  const animKeys = new Set(cand.slice(0, cfg.maxBlink).map(c=>c.key));
+  const still = Math.max(0, cand.length - cfg.maxBlink);
+  const kp = [['需要處理',cnt.hot,cnt.hot?'#E5594F':'#3A4A68'],['注意',cnt.late+cnt.stall,(cnt.late+cnt.stall)?'#E0902E':'#3A4A68'],['進行中',cnt.run,'#4A90E2'],['已完成',cnt.done,'#3FB37F'],['待出發',cnt.wait,'#5C6B88'],['時間存疑',cnt.bat,cnt.bat?'#9B72D9':'#3A4A68']];
+  const kpHtml = kp.map(k=>'<div class="wr-k" style="--c:'+k[2]+'"><b>'+k[1]+'</b><span>'+k[0]+'</span></div>').join('');
+  const pctHtml = '站數完成率 '+pct+'%　｜　目前閃爍 '+Math.min(cfg.maxBlink, cand.length)+' 張'+(still?'（另有 '+still+' 張因名額已滿改為常亮）':'（上限 '+cfg.maxBlink+' 張）');
+  const ogs = []; cards.forEach(c=>{ if(!ogs.includes(c.origin)) ogs.push(c.origin); });
+  const boardHtml = cards.length ? '<div class="wr-board">'+ogs.map(o=>{ const mine = cards.filter(c=>c.origin===o); return '<div class="wr-grp"><div class="wr-og">'+escapeHtml(o)+'</div><div class="wr-cards">'+mine.map(c=>wrCardHtml(c, animKeys.has(c.key))).join('')+'</div></div>'; }).join('')+'</div>'
+    : '<div class="wr-empty">今天沒有排任何任務</div>';
+  const nd = [];
+  const nm = c=> escapeHtml(c.origin+' '+c.label)+(c.driver?'（'+escapeHtml(c.driver)+'）':'');
+  cards.filter(c=>c.s==='hot'&&!c.steady).sort((a,b)=>wrSev(a)-wrSev(b)).forEach(c=>{
+    nd.push(['🔴', nm(c)+'　'+(c.why==='gap'?'今天沒有排夥伴':c.why==='issue'?c.issues+' 站回報未完成原因，等你確認':c.why==='late'?'已逾時 '+c.over+' 分鐘還沒有完成任何一站':c.over+' 分鐘沒有新進度')]);
+  });
+  cards.filter(c=>c.s==='hot'&&c.steady).forEach(c=> nd.push(['🔴', nm(c)+'　已看到，待處理']));
+  cards.filter(c=>c.s==='late'||c.s==='stall').forEach(c=> nd.push(['🟡', nm(c)+'　'+(c.s==='late'?'已過預計出發時間 '+c.over+' 分鐘還沒有完成任何一站':c.over+' 分鐘沒有新進度（'+c.doneN+'/'+c.n+' 站）')]));
+  const needHtml = nd.length ? nd.map(n=>'<div class="wr-n"><span>'+n[0]+'</span><em style="font-style:normal;">'+n[1]+'</em></div>').join('') : '<div class="wr-n" style="color:#3FB37F;">目前沒有需要處理的事項</div>';
+  return { kpHtml, pctHtml, pct, boardHtml, needHtml, cards };
+}
+function wrUpdate(){
+  const root = document.getElementById('wrRoot'); if(!root) return;
+  const W = wrState(), b = wrBuild(), now = new Date();
+  document.getElementById('wrClock').textContent = pad(now.getHours())+':'+pad(now.getMinutes());
+  document.getElementById('wrDate').textContent = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（週${'日一二三四五六'[now.getDay()]}）`+(W.err?(state._wrExternal?'　⚠️ 連線中斷，稍後自動重試':'　⚠️ 已看到／已處理的標記暫時無法同步'):'');
+  const set = (id, html)=>{ const el = document.getElementById(id); if(el && W.cache[id]!==html){ el.innerHTML = html; W.cache[id] = html; return true; } return false; };
+  W.cards = b.cards;
+  set('wrKp', b.kpHtml); set('wrNeed', b.needHtml);
+  const dtw = document.getElementById('wrDt');
+  if(dtw){
+    const dc = W.detail ? b.cards.find(x=>x.key===W.detail) : null;
+    if(!dc){ W.detail = null; dtw.style.display = 'none'; dtw.innerHTML = ''; W.cache.wrDt = ''; }
+    else {
+      dtw.style.display = 'block';
+      if(!(document.activeElement && dtw.contains(document.activeElement) && /SELECT/.test(document.activeElement.tagName))){
+        const html = '<div class="wr-dtbg" data-a="close"></div><div class="wr-dt">'+wrDetailHtml(dc)+'</div>';
+        if(W.cache.wrDt!==html){ const keep = dtw.querySelector('.wr-dt'), top = keep ? keep.scrollTop : 0; dtw.innerHTML = html; W.cache.wrDt = html; const nd2 = dtw.querySelector('.wr-dt'); if(nd2) nd2.scrollTop = top; }
+      }
+    }
+  }
+  const lv = document.getElementById('wrLiveTxt'); if(lv && state._wrExternal) lv.textContent = state._wrLive ? '即時更新中' : '每 30 秒更新（即時連線中斷）';
+  const bar = document.getElementById('wrBar'); if(bar) bar.style.width = b.pct+'%';
+  const pc = document.getElementById('wrPct'); if(pc) pc.textContent = b.pctHtml;
+  const boardEl = document.getElementById('wrBoard');
+  if(boardEl && !(document.activeElement && boardEl.contains(document.activeElement) && /SELECT/.test(document.activeElement.tagName))){
+    const changed = set('wrBoard', b.boardHtml);
+    // 剛有新進度的卡片閃一下綠色（不放進 html，免得每次重畫都重播）
+    const fresh = [];
+    b.cards.forEach(c=>{ const prev = W.prevDone[c.key]; if(prev!==undefined && c.doneN>prev) fresh.push(c.key); W.prevDone[c.key] = c.doneN; });
+    if(changed) fresh.forEach(k=>{ const el = boardEl.querySelector('[data-key="'+(window.CSS&&CSS.escape?CSS.escape(k):k)+'"]'); if(el){ el.classList.add('fresh'); setTimeout(()=>el.classList.remove('fresh'), 1800); } });
+  }
+  wrFitScreenSoon(); // 電視模式下，資料量一變就重新量一次能不能整頁放得下，不行就自動縮小字體
+}
+async function wrLoadMarks(force){
+  if(state._wrExternal) return;
+  const W = wrState();
+  if(!force && Date.now()-W.loadedAt < 20000) return;
+  W.loadedAt = Date.now();
+  const today = todayStr();
+  const ids = state.data.assignments.filter(a=>a.date===today).map(a=>a.id);
+  if(!ids.length) return;
+  try{ W.marks = await fetchWarroomMarks(ids); W.err = false; }
+  catch(e){ W.err = true; console.error('讀取戰情室標記失敗', e); }
+}
+function wrApplyMarkEvent(ev){
+  const W = wrState(), r = ev.eventType==='DELETE' ? ev.old : ev.new;
+  if(!r || !r.assignment_id) return;
+  if(ev.eventType==='DELETE') W.marks.delete(r.assignment_id);
+  else W.marks.set(r.assignment_id, { acked:r.acked_count||0, resolved:r.resolved_count||0, resolution:r.resolution||'' });
+  if(state.tab==='warroom') wrUpdate();
+}
+async function wrMark(id, kind, reason){
+  const W = wrState(), a = state.data.assignments.find(x=>x.id===id); if(!a) return;
+  const issues = (a.dropPoints||[]).filter(d=>d.status!=='completed' && d.issueReason).length;
+  const cur = W.marks.get(id) || { acked:0, resolved:0, resolution:'' };
+  const next = { acked:issues, resolved: kind==='res' ? issues : cur.resolved, resolution: kind==='res' ? reason : cur.resolution };
+  W.marks.set(id, next); wrUpdate();
+  try{ await saveWarroomMark(id, next); W.err = false; }
+  catch(e){ W.err = true; wrUpdate(); toast('標記沒有存到資料庫，只有這台螢幕看得到：'+e.message, { type:'error' }); }
+}
+async function wrBackupRefresh(){
+  const W = wrState(), now = new Date(), h = now.getHours();
+  if(state.role!=='admin' || h<5 || h>=21 || Date.now()-W.lastPoll < 270000) { wrUpdate(); return; } // 夜間不輪詢；備援最快每 4.5 分鐘一次
+  W.lastPoll = Date.now();
+  try{ const t = todayStr(); await refreshAssignmentsRange(t, t); await wrLoadMarks(true); }catch(e){ console.error('戰情室備援更新失敗', e); }
+  wrUpdate();
+}
+// ---------- 戰情室外部連結（不登入、唯讀、給大螢幕）：網址 /?wr=<token> ----------
+// 外部畫面拿得到「路線、進度、夥伴姓名、店點名稱／通路、未完成原因」，但沒有夥伴電話、金額、照片（見 api/warroom.js）。
+async function wrExtLoad(live){
+  const W = wrState();
+  try{
+    // live：只抓「今天的任務與標記」（很小）；3 秒一格的 t 讓同時開的幾個螢幕共用同一份邊緣快取，不會各自打資料庫
+    const url = '/api/warroom?token='+encodeURIComponent(state._wrExternal) + (live && state.data ? '&live=1&t='+Math.floor(Date.now()/3000) : '');
+    const r = await fetch(url, { cache:'no-store' });
+    if(r.status===404 || r.status===400){ const j = await r.json().catch(()=>({})); state._wrExternalDead = j.error || '連結無效或已停用'; return; }
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const p = await r.json();
+    state._wrExternalDead = null;
+    const mapA = a=>({ id:a.id, date:a.date, routeId:a.routeId, driverId:a.driverId||null, status:a.status, departedAt:a.departedAt||null, published:true, isSupport:false,
+      dropPoints:a.dropPoints.map((d,i)=>({ status:d.status, completedAt:d.completedAt, issueReason:d.issueReason||null, code:d.label||('第 '+(i+1)+' 站'), address:'', channelId:d.channelId })) });
+    if(p.live && state.data){
+      state.data.settings.warroomConfig = p.config;
+      state.data.assignments = state.data.assignments.filter(a=>a.date!==p.today).concat(p.assignments.map(mapA));
+    } else {
+      state.data = { settings:{ warroomConfig:p.config }, assignmentsWindowStart:p.windowStart,
+        drivers:(p.drivers||[]).map(d=>({ id:d.id, name:d.name, phone:'' })), origins:p.origins, routes:p.routes, channels:p.channels||[], dropPoints:[],
+        assignments:p.assignments.map(mapA) };
+      state._wrCatalogAt = Date.now();
+    }
+    W.marks = new Map(p.marks.map(m=>[m.assignmentId, { acked:m.acked, resolved:m.resolved, resolution:'' }]));
+    W.err = false;
+  }catch(e){ W.err = true; console.error('戰情室外部連結載入失敗', e); }
+}
+async function bootWarRoomExternal(token){
+  state._wrExternal = token; state.role = 'wr'; state.tab = 'warroom';
+  document.title = '碳金戰情室';
+  // 加入主畫面時要記住帶金鑰的網址：換成外部連結專屬的 manifest（見 api/warroom.js），並把主畫面名稱／狀態列色一併設好
+  { let ml = document.querySelector('link[rel="manifest"]'); if(!ml){ ml = document.createElement('link'); ml.rel = 'manifest'; document.head.appendChild(ml); }
+    ml.href = '/api/warroom?manifest=1&token=' + encodeURIComponent(token);
+    const meta = (n, v)=>{ let m = document.querySelector('meta[name="'+n+'"]'); if(!m){ m = document.createElement('meta'); m.name = n; document.head.appendChild(m); } m.content = v; };
+    meta('apple-mobile-web-app-title', '碳金戰情室'); meta('apple-mobile-web-app-capable', 'yes'); meta('theme-color', '#0A0F1A'); }
+  document.getElementById('loginGate').style.display = 'none';
+  document.getElementById('appLayout').style.display = 'flex';
+  document.body.classList.add('wr-full');
+  const c = document.getElementById('content');
+  c.innerHTML = '<div class="wr"><div class="wr-empty">載入中…</div></div>';
+  await wrExtLoad();
+  const show = ()=>{
+    if(state._wrExternalDead){ c.innerHTML = '<div class="wr"><div class="wr-empty">'+escapeHtml(state._wrExternalDead)+'</div></div>'; return false; }
+    if(!state.data){ c.innerHTML = '<div class="wr"><div class="wr-empty">連線中斷，稍後自動重試…</div></div>'; return true; }
+    renderWarRoom(c); return true;
+  };
+  show();
+  // 即時：資料庫一有異動（夥伴按出發、完成店點、主控換人…）會對公開頻道 wr-ping 廣播一個「空」訊號（見 schema PART 28，
+  // 訊息裡沒有任何資料），這裡收到就只抓一次「今天的任務」（約 3 秒內合併成一次）。斷線時退回每 30 秒抓一次。
+  let lastLive = 0, pend = null, dead = false;
+  const refreshLive = async ()=>{
+    if(document.hidden || dead) return;
+    lastLive = Date.now();
+    await wrExtLoad(Date.now()-(state._wrCatalogAt||0) < 600000);
+    if(!show()){ dead = true; return; }
+  };
+  const onPing = ()=>{ clearTimeout(pend); pend = setTimeout(refreshLive, Math.max(500, 3000-(Date.now()-lastLive))); };
+  try{
+    state._wrRt = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth:{ persistSession:false, autoRefreshToken:false } });
+    state._wrRt.channel('wr-ping').on('broadcast', { event:'ping' }, onPing).subscribe(status=>{
+      state._wrLive = status==='SUBSCRIBED';
+      if(state._wrLive) refreshLive(); // 連上（或重連）時補抓一次，不漏掉斷線期間的變動
+      if(typeof wrUpdate==='function') wrUpdate();
+    });
+  }catch(e){ console.error('即時連線建立失敗，改用定時更新', e); }
+  const loop = ()=>{
+    const h = new Date().getHours(), day = h>=5 && h<21;
+    // 即時連線正常時只是保險（每 5 分鐘、夜間每 10 分鐘）；連線中斷時每 30 秒（夜間每 5 分鐘）
+    setTimeout(async ()=>{
+      if(!document.hidden && !dead){ await refreshLive(); }
+      if(!dead) loop();
+    }, state._wrLive ? (day ? 300000 : 600000) : (day ? 30000 : 300000));
+  };
+  loop();
+}
+function wrLeaveFull(){
+  if(state._wrExternal) return;
+  if(!document.body.classList.contains('wr-full')) return;
+  document.body.classList.remove('wr-full');
+  wrClearFit();
+  if(wrFsEl()) wrFsExit();
+}
+// 網頁全螢幕：Safari 舊版只有 webkit 前綴、iPhone 完全不支援，所以統一包起來；不支援時要告訴使用者怎麼辦，不能按了沒反應。
+function wrFsEl(){ return document.fullscreenElement || document.webkitFullscreenElement || null; }
+function wrFsEnter(){ const el = document.documentElement, f = el.requestFullscreen || el.webkitRequestFullscreen; if(!f) return Promise.reject(new Error('unsupported')); try{ const r = f.call(el); return (r && r.then) ? r : Promise.resolve(); }catch(e){ return Promise.reject(e); } }
+function wrFsExit(){ const f = document.exitFullscreen || document.webkitExitFullscreen; try{ if(f) f.call(document); }catch(e){} }
+function wrFsTip(){ toast('這個瀏覽器不能用網頁全螢幕。iPhone／iPad：按「分享 → 加入主畫面」，之後從主畫面圖示開啟就是全螢幕；電腦或電視瀏覽器：按 F11。', { type:'info', sticky:true }); }
+function wrToggleFull(){
+  if(state._wrExternal){ if(wrFsEl()) wrFsExit(); else wrFsEnter().catch(wrFsTip); return; }
+  if(document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); return; }
+  document.body.classList.add('wr-full');
+  wrFsEnter().catch(()=>{});
+  wrUpdateFullBtn();
+  wrFitScreenSoon();
+}
+// 電視模式（全螢幕戰情室）內容量會隨路線/店點數量變動，固定字體大小常常放不下整個畫面，
+// 變成要滑動——戰情室大螢幕通常沒人站在前面滑。進全螢幕、每次資料更新、視窗大小改變時都
+// 重新量一次整個畫面的高度；放不下就把 .wr 的字體整體縮小（這個字體大小是全站卡片/數字
+// 的基準，縮小它會連動縮小所有東西），直到剛好放得下為止。真的資料多到縮到最小字體都放
+// 不下，就放棄縮放、改回正常捲動（不犧牲到看不清楚文字）。
+const WR_FIT_MIN_PX = 11, WR_FIT_MAX_PX = 26;
+function wrClearFit(){ const root = document.getElementById('wrRoot'); if(root) root.style.fontSize = ''; }
+function wrFitScreen(){
+  if(!document.body.classList.contains('wr-full')) return;
+  const root = document.getElementById('wrRoot');
+  if(!root) return;
+  root.style.fontSize = WR_FIT_MAX_PX + 'px';
+  if(root.scrollHeight <= window.innerHeight){ root.style.fontSize = ''; return; } // 預設大小就放得下，不用強制縮放
+  let lo = WR_FIT_MIN_PX, hi = WR_FIT_MAX_PX - 1, best = lo;
+  while(lo <= hi){
+    const mid = Math.floor((lo + hi) / 2);
+    root.style.fontSize = mid + 'px';
+    if(root.scrollHeight <= window.innerHeight){ best = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  root.style.fontSize = best + 'px';
+}
+let _wrFitTimer = null;
+function wrFitScreenSoon(){ clearTimeout(_wrFitTimer); _wrFitTimer = setTimeout(wrFitScreen, 60); }
+window.addEventListener('resize', wrFitScreenSoon);
+function wrUpdateFullBtn(){ const b = document.getElementById('wrFull'); if(!b) return; const on = state._wrExternal ? !!wrFsEl() : document.body.classList.contains('wr-full'); b.textContent = on ? '✕ 離開全螢幕' : '⛶ 全螢幕'; }
+const wrOnFsChange = ()=>{ if(state._wrExternal){ wrUpdateFullBtn(); return; } if(!wrFsEl() && document.body.classList.contains('wr-full')){ document.body.classList.remove('wr-full'); wrUpdateFullBtn(); } };
+document.addEventListener('fullscreenchange', wrOnFsChange); document.addEventListener('webkitfullscreenchange', wrOnFsChange);
+document.addEventListener('keydown', e=>{ if(!state._wrExternal && e.key==='Escape' && document.body.classList.contains('wr-full')){ wrLeaveFull(); wrUpdateFullBtn(); } });
+setInterval(()=>{ if(state.data && state.tab==='warroom' && document.getElementById('wrRoot')) wrUpdate(); }, 15000);
+async function renderWarRoom(c){
+  const W = wrState();
+  if(!document.getElementById('wrRoot') || !c.contains(document.getElementById('wrRoot'))){
+    let mute = false; try{ mute = localStorage.getItem('wrMute')==='1'; }catch(e){}
+    W.cache = {};
+    c.innerHTML = `<div class="wr${mute?' mute':''}" id="wrRoot">
+      <div class="wr-top"><div><div class="wr-t">碳金<span>戰情室</span></div><div class="wr-sub" id="wrDate"></div></div>
+        <div class="wr-right"><div><div class="wr-clock" id="wrClock"></div><div class="wr-live" id="wrLiveTxt">即時更新中</div></div>
+        <div class="wr-btns"><button class="wr-btn" id="wrMute"></button><button class="wr-btn" id="wrFull"></button></div></div></div>
+      <div class="wr-lg"><span>⚪ 待出發</span><span>🔵 進行中（圓點緩慢呼吸）</span><span>🟢 完成</span><span>🟡 注意（慢速脈動，超過門檻自動升級）</span><span>🔴 要處理（快閃→按「已看到」→紅框常亮→按「已處理」才消失）</span><span>🟣 時間存疑</span></div>
+      <div class="wr-kp" id="wrKp"></div><div class="wr-bar"><i id="wrBar"></i></div><div class="wr-pct" id="wrPct"></div>
+      <div class="wr-main"><div id="wrBoard"></div><div class="wr-need"><h3>需要處理</h3><div id="wrNeed"></div></div></div><div id="wrDt" style="display:none;"></div></div>`;
+    const root = document.getElementById('wrRoot');
+    const muteBtn = document.getElementById('wrMute');
+    const showMute = ()=>{ muteBtn.textContent = root.classList.contains('mute') ? '🔇 靜音模式：開' : '🔔 靜音模式：關'; };
+    showMute();
+    muteBtn.onclick = ()=>{ root.classList.toggle('mute'); try{ localStorage.setItem('wrMute', root.classList.contains('mute')?'1':'0'); }catch(e){} showMute(); };
+    document.getElementById('wrFull').onclick = wrToggleFull; wrUpdateFullBtn();
+    if(state._wrExternal && ((window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone)) document.getElementById('wrFull').style.display = 'none'; // 從主畫面開啟已經是全螢幕
+    root.addEventListener('change', e=>{ const id = e.target.getAttribute && e.target.getAttribute('data-sel'); if(id) W.sel[id] = e.target.value; });
+    root.addEventListener('click', e=>{
+      const t = e.target, a = t.getAttribute && t.getAttribute('data-a');
+      if(!a){
+        const card = t.closest && t.closest('.c[data-key]');
+        if(card && !t.closest('button,select,a')){ W.detail = card.getAttribute('data-key'); wrUpdate(); }
+        return;
+      }
+      const id = t.getAttribute('data-id');
+      if(a==='ack') wrMark(id, 'ack');
+      if(a==='res'){ const sel = t.parentNode.querySelector('select'); wrMark(id, 'res', sel ? sel.value : '已處理'); }
+      if(a==='close'){ W.detail = null; wrUpdate(); }
+      if(a==='remind') wrRemind(id, t);
+      if(a==='goto'){ W.detail = null; wrLeaveFull(); state.weekOffset = 0; state._mDay = todayStr(); goTab('schedule'); }
+    });
+  }
+  wrUpdate();
+  await wrLoadMarks(true);
+  if(document.getElementById('wrRoot')) wrUpdate();
+}
+// 戰情室「提醒夥伴」：對這趟的夥伴推播一則提醒（沒出發→提醒出發；有進度→提醒拍照回報）。
+// 通知內容只放路線與站數，不放店名。同一趟 5 分鐘內只能提醒一次，避免連按。
+async function wrRemind(id, btn){
+  const W = wrState(); W.remindAt = W.remindAt || {};
+  const a = state.data.assignments.find(x=>x.id===id);
+  if(!a || !a.driverId) return;
+  if(Date.now() - (W.remindAt[id]||0) < 5*60*1000){ toast('剛剛已經提醒過了，5 分鐘後再試。', { type:'error' }); return; }
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  const label = route ? wrLabel(route) : '今天的任務';
+  const dps = a.dropPoints||[], left = dps.filter(d=>d.status!=='completed').length;
+  const started = !!a.departedAt || dps.some(d=>d.status==='completed');
+  const msg = started
+    ? { title: '請拍照回報進度', body: label+' 還有 '+left+' 站沒有回報，請拍照上傳；送不到請選擇未完成原因。' }
+    : { title: '該出發囉', body: label+' 請按「出發」，並在每一站拍照回報。' };
+  if(btn) btn.disabled = true;
+  try{
+    const r = await pushApi('send', { messages:[{ to:{ driverId:a.driverId }, kind:'reminder', tag:'wr-remind-'+id, url:'/?go=today', title:msg.title, body:msg.body }] });
+    W.remindAt[id] = Date.now();
+    toast(r && r.sent ? '已提醒 '+driverName(a.driverId) : driverName(a.driverId)+' 沒有開啟通知，無法推播，請改用電話聯絡。', { type: r && r.sent ? 'ok' : 'error' });
+  }catch(e){ toast('提醒失敗：'+e.message, { type:'error' }); }
+  if(btn) btn.disabled = false;
+}
+function goTab(id){ switchTab(id); }
+// ---------- 公告管理（主控發布，全體夥伴首頁看得到） ----------
+let editingAnnouncementId = null;
+// 發送對象的夥伴勾選清單（只列在職夥伴，停用夥伴沒有登入系統的可能，
+// 挑他們沒有意義）；prefix 用來讓「新增」跟「編輯中」的checkbox各自有
+// 不衝突的class名稱。
+function driverPickerHtml(prefix, selectedIds){
+  return state.data.drivers.filter(d=>d.status==='active').map(d=>
+    `<label style="display:inline-flex; align-items:center; gap:4px; margin:0 12px 6px 0; font-weight:400;"><input type="checkbox" value="${d.id}" class="${prefix}DriverCheck" ${selectedIds.includes(d.id)?'checked':''} style="width:auto;">${escapeHtml(d.name)}</label>`
+  ).join('') || '<span style="font-size:12.5px; color:var(--ink-soft);">目前沒有在職夥伴</span>';
+}
+function audienceSummary(a){
+  if(a.audience!=='selected') return '全體夥伴';
+  return a.driverIds.length ? a.driverIds.map(driverName).join('、') : '（尚未指定夥伴）';
+}
+function renderAnnouncements(c){
+  c.innerHTML = `
+    <h2 class="section-title">公告管理</h2>
+    <p class="section-sub">發布的公告會顯示在夥伴的「首頁」，可以發給全體夥伴、或只發給指定的一位/幾位夥伴。下架是暫時收回、不是刪除，可以隨時重新上架；真的不需要了才用「刪除」。</p>
+    <div class="panel">
+      <div class="field"><label>標題</label><input id="anTitle" placeholder="例：中秋節出車異動通知"></div>
+      <div class="field"><label>內容</label><textarea id="anContent" style="min-height:80px;" placeholder="請輸入公告內容"></textarea></div>
+      <div class="field" style="max-width:200px;"><label>發送對象</label>
+        <select id="anAudience">
+          <option value="all">全體夥伴</option>
+          <option value="selected">指定夥伴</option>
+        </select>
+      </div>
+      <div id="anDriverPicker" style="display:none; margin-bottom:10px;">${driverPickerHtml('an', [])}</div>
+      <button class="btn amber" id="addAnnouncement">發布公告</button>
+    </div>
+    <div id="announcementListBody"></div>
+  `;
+  document.getElementById('anAudience').onchange = (e)=>{
+    document.getElementById('anDriverPicker').style.display = e.target.value==='selected' ? 'block' : 'none';
+  };
+  document.getElementById('addAnnouncement').onclick = async ()=>{
+    const title = document.getElementById('anTitle').value.trim();
+    const content = document.getElementById('anContent').value.trim();
+    const audience = document.getElementById('anAudience').value;
+    const driverIds = [...document.querySelectorAll('.anDriverCheck:checked')].map(cb=>cb.value);
+    if(!title || !content){ alert('請填寫標題與內容'); return; }
+    if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位夥伴，或改選「全體夥伴」'); return; }
+    try{
+      await createAnnouncement({ title, content, audience, driverIds });
+      pushAnnouncement(title, audience, driverIds);
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  renderAnnouncementListBody();
+}
+function renderAnnouncementListBody(){
+  const wrap = document.getElementById('announcementListBody');
+  const list = state.data.announcements;
+  wrap.innerHTML = `<div class="panel">
+    <h3 style="margin-top:0;">已發布公告（${list.length}）</h3>
+    ${list.map(a=>{
+      if(editingAnnouncementId === a.id){
+        return `<div class="drop-point">
+          <div class="field"><label>標題</label><input id="eanTitle" value="${escapeHtml(a.title)}"></div>
+          <div class="field"><label>內容</label><textarea id="eanContent" style="min-height:80px;">${escapeHtml(a.content)}</textarea></div>
+          <div class="field" style="max-width:200px;"><label>發送對象</label>
+            <select id="eanAudience">
+              <option value="all" ${a.audience!=='selected'?'selected':''}>全體夥伴</option>
+              <option value="selected" ${a.audience==='selected'?'selected':''}>指定夥伴</option>
+            </select>
+          </div>
+          <div id="eanDriverPicker" style="${a.audience==='selected'?'':'display:none;'} margin-bottom:10px;">${driverPickerHtml('ean', a.driverIds)}</div>
+          <button class="btn amber" data-saveedit="${a.id}">儲存</button>
+          <button class="btn ghost" data-canceledit="${a.id}">取消</button>
+        </div>`;
+      }
+      return `<div class="drop-point" style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+        <div style="flex:1;">
+          <strong>${escapeHtml(a.title)}</strong>
+          ${a.active?'<span class="badge completed">上架中</span>':'<span class="badge pending">已下架</span>'}
+          <p style="font-size:12.5px; white-space:pre-wrap; margin:4px 0;">${escapeHtml(a.content)}</p>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0;">發送對象：${escapeHtml(audienceSummary(a))}</p>
+          <span style="font-size:11px; color:var(--ink-soft);">${new Date(a.createdAt).toLocaleString('zh-Hant-TW')}</span>
+        </div>
+        <span style="flex-shrink:0; white-space:nowrap;">
+          <button class="btn ghost" data-editan="${a.id}">編輯</button>
+          <button class="btn ghost" data-toggleactive="${a.id}">${a.active?'下架':'重新上架'}</button>
+          <button class="btn danger" data-delan="${a.id}">刪除</button>
+        </span>
+      </div>`;
+    }).join('') || '<div class="empty">尚未發布任何公告</div>'}
+  </div>`;
+  wrap.querySelectorAll('[data-editan]').forEach(btn=>{ btn.onclick=()=>{ editingAnnouncementId = btn.dataset.editan; renderAnnouncementListBody(); }; });
+  wrap.querySelectorAll('[data-canceledit]').forEach(btn=>{ btn.onclick=()=>{ editingAnnouncementId = null; renderAnnouncementListBody(); }; });
+  const eanAudienceSel = document.getElementById('eanAudience');
+  if(eanAudienceSel){
+    eanAudienceSel.onchange = (e)=>{
+      document.getElementById('eanDriverPicker').style.display = e.target.value==='selected' ? 'block' : 'none';
+    };
+  }
+  wrap.querySelectorAll('[data-saveedit]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const title = document.getElementById('eanTitle').value.trim();
+      const content = document.getElementById('eanContent').value.trim();
+      const audience = document.getElementById('eanAudience').value;
+      const driverIds = [...document.querySelectorAll('.eanDriverCheck:checked')].map(cb=>cb.value);
+      if(!title || !content){ alert('請填寫標題與內容'); return; }
+      if(audience==='selected' && !driverIds.length){ alert('請至少選擇一位夥伴，或改選「全體夥伴」'); return; }
+      try{ await updateAnnouncement(btn.dataset.saveedit, { title, content, audience, driverIds }); editingAnnouncementId = null; renderAnnouncementListBody(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-toggleactive]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const a = state.data.announcements.find(x=>x.id===btn.dataset.toggleactive);
+      try{ await setAnnouncementActive(a.id, !a.active); renderAnnouncementListBody(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-delan]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('確定要刪除這則公告嗎？刪除後無法復原。')) return;
+      try{ await deleteAnnouncement(btn.dataset.delan); renderAnnouncementListBody(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+}
+
+// 今天還沒配送完成的車次/店點，給主控掌握即時進度用。上午車次只在
+// 上午車次只在06:00–14:00區間顯示，下午車次只在14:00–18:30區間顯示，
+// 區間外（太早或太晚）整個面板不顯示——這是主控明確指定的兩個時間段，
+// 不是「累加、只看有沒有處理完」，是單純的時段切換。主控首頁的「今日
+// 尚未配送完成」跟夥伴首頁的「同任務起點今日出發狀況」共用同一套時段判斷。
+// 2026年（民國115年）台灣國定假日，資料來源：行政院人事行政總處公告
+// 行事曆。greeting是null的幾個（和平紀念日、兒童節／清明節、台灣光復節、
+// 行憲紀念日）是紀念性質的節日，不適合用「快樂」這種歡慶字眼，夥伴端
+// 故意不顯示賀詞（用詞用「祝福」不是「放假通知」——車隊不一定真的休息，
+// 這個功能純粹是顯示用，不會自動擋掉那天的排班或出車，中秋節照樣可以
+// 正常排車出貨）；主控的週期任務清單則不分節日性質，統一顯示節日名稱（排班
+// 規劃用，不是賀詞）。日期是寫死的，明年要記得換成明年的行事曆（尤其
+// 農曆節日，每年國曆日期都不同）。
+const TAIWAN_HOLIDAYS_2026 = [
+  { start:'2026-01-01', end:'2026-01-01', name:'元旦', greeting:'🎉 元旦快樂，新年新氣象！' },
+  { start:'2026-02-16', end:'2026-02-19', name:'春節', greeting:'🧧 新年快樂，恭喜發財！' },
+  { start:'2026-02-28', end:'2026-02-28', name:'和平紀念日', greeting:null },
+  { start:'2026-04-04', end:'2026-04-05', name:'兒童節／清明節', greeting:null },
+  { start:'2026-05-01', end:'2026-05-01', name:'勞動節', greeting:'💪 勞動節快樂，您辛苦了！' },
+  { start:'2026-06-19', end:'2026-06-19', name:'端午節', greeting:'🎏 端午節快樂，平安順心！' },
+  { start:'2026-09-25', end:'2026-09-25', name:'中秋節', greeting:'🌕🥮 中秋節快樂，闔家團圓！' },
+  { start:'2026-09-28', end:'2026-09-28', name:'教師節', greeting:'📚 教師節快樂！' },
+  { start:'2026-10-10', end:'2026-10-10', name:'國慶日', greeting:'🎊 國慶日快樂！' },
+  { start:'2026-10-25', end:'2026-10-25', name:'台灣光復節', greeting:null },
+  { start:'2026-12-25', end:'2026-12-25', name:'行憲紀念日', greeting:null }
+];
+function holidayForDate(dateStr){
+  return TAIWAN_HOLIDAYS_2026.find(h => dateStr>=h.start && dateStr<=h.end) || null;
+}
+// 節日賀詞是「祝福」不是「放假通知」，車隊不一定真的休息——如果主控
+// 那天其實有排這位夥伴的班（任務狀態不是cancelled），代表他當天照常
+// 出車，就不顯示賀詞了（顯示「中秋節快樂，闔家團圓」給一個正在跑車的
+// 夥伴看很奇怪）。是依「這位夥伴本人」當天有沒有被排班判斷，不是看
+// 整個車隊有沒有人上班——同一天，沒被排班的夥伴正常看得到賀詞，有
+// 被排班出車的夥伴就不會看到。
+function currentProgressShifts(){
+  const nowMinutes = (()=>{ const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
+  const inAmWindow = nowMinutes >= 6*60 && nowMinutes < 14*60;
+  const inPmWindow = nowMinutes >= 14*60 && nowMinutes < 18*60+30;
+  if(inAmWindow) return ['AM'];
+  if(inPmWindow) return ['PM'];
+  return null;
+}
+// 夥伴首頁「同任務起點今日出發狀況」：同任務起點所有還沒完成的車次都列出來，
+// 只顯示「出發了沒」，不含店點/店名等配送細節；完成的車次直接從清單
+// 消失。夥伴登入時 state.data.assignments 因為RLS只有自己的任務，算不出
+// 「同任務起點其他車次」，要透過 fetchDepotOverview()（呼叫schema.sql的
+// security definer函式）另外查；主控本人或「主控檢視中」預覽時本來就有
+// 完整資料，直接從 state.data 算，確保跟夥伴實際登入看到的內容一致。
+let depotOverviewCache = { key:null, rows:null };
+function computeDepotOverviewLocal(driverId, date){
+  const myAssignment = state.data.assignments.find(a=>a.driverId===driverId && a.date===date && a.status!=='cancelled');
+  if(!myAssignment) return [];
+  const myRoute = state.data.routes.find(r=>r.id===myAssignment.routeId);
+  if(!myRoute) return [];
+  return state.data.assignments
+    .filter(a=> a.date===date && a.status!=='cancelled' && a.status!=='completed')
+    .map(a=>({ a, route: state.data.routes.find(r=>r.id===a.routeId) }))
+    .filter(({route})=> route && route.originAddr===myRoute.originAddr)
+    .sort((x,y)=> routeSortCompare(x.route, y.route))
+    .map(({a, route})=>({
+      assignmentId:a.id, routeName:routeDisplayName(route.name), driverName:driverName(a.driverId), status:a.status,
+      seq:route.seq, shift:route.shift
+    }));
+}
+async function loadDepotOverview(driverId, date){
+  const key = driverId+'|'+date;
+  if(depotOverviewCache.key===key) return depotOverviewCache.rows;
+  const rows = (state.role==='driver' && !state.adminViewDriver)
+    ? await fetchDepotOverview(date)
+    : computeDepotOverviewLocal(driverId, date);
+  depotOverviewCache = { key, rows };
+  return rows;
+}
+async function renderHomeAdmin(c){
+  // 即時利潤的支出/請款都是算「本月至今」，登入當下記憶體裡預設只有近14天
+  // （見 ASSIGNMENTS_WINDOW_DAYS），月中之後（超過14號）本月初那幾天會被
+  // 漏算，不只是慢、是金額會算錯，所以這裡渲染前一定要先確保整個月都補齊。
+  // 平常（已經補過、或本來就在14天窗口內）這裡會直接跳過，不會每次都打資料庫。
+  const monthStart = todayStr().slice(0,7) + '-01';
+  if(state.data.assignmentsWindowStart && monthStart < state.data.assignmentsWindowStart){
+    c.innerHTML = '<h2 class="section-title">首頁</h2><div class="empty">載入中...</div>';
+    try{ await ensureAssignmentsRange(monthStart); }
+    catch(e){ c.innerHTML = `<h2 class="section-title">首頁</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    if(state.tab!=='home') return; // 使用者可能已經切走這一頁
+  }
+  const p = computeProfitSnapshot();
+  // 備份提醒：超過7天沒有下載「完整備份」就提醒——免費方案
+  // 沒有自動備份，全靠這個提醒讓人記得手動備份一次。
+  const lastBackupAt = state.data.settings.lastBackupAt;
+  const daysSinceBackup = lastBackupAt ? Math.floor((Date.now()-new Date(lastBackupAt).getTime())/86400000) : null;
+  const backupReminder = (daysSinceBackup===null || daysSinceBackup>=7) ? (daysSinceBackup===null?'系統上線以來還沒有備份紀錄':`已經 ${daysSinceBackup} 天沒有備份`) : null;
+  // 通路請款週期即將結束提醒：結束日前3天～結束日後1天這個範圍內都提醒，
+  // 免得剛好卡在週末忘記結算。
+  const today = todayStr();
+  const periodReminders = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>{
+    const end = currentChannelPeriodEnd(ch, today);
+    if(!end) return null;
+    const daysLeft = Math.round((new Date(end)-new Date(today))/86400000);
+    if(daysLeft>3 || daysLeft<-1) return null;
+    return { name: ch.name, end, daysLeft };
+  }).filter(Boolean);
+  const pendingFuelCount = (state.data.fuelClaims||[]).filter(f=>f.status==='pending').length;
+  // 上個月還沒月結確認的夥伴：只在每月 1～15 號提醒（16 號起不論有沒有月結都不提示），已標「無需月結」
+  // 的不列出；同一個月在這個 session 只查一次，查詢失敗不影響首頁其他內容。
+  const prevMonthStr = settleReminderMonth();
+  const unsignedStmts = state.data.statements.filter(x=>x.status==='awaiting_signature');
+  // 下週（含之後）還有草稿任務沒發佈：提醒主控（夥伴看不到）。
+  const draftWeekCount = state.data.assignments.filter(a=>a.published===false && a.date>=getWeekDates(0)[0]).length;
+  // 過了那天還停在「執行中」（夥伴忘了按完成）的任務：不會被算進請款與報酬，要提醒主控處理。
+  const stuckTasks = state.data.assignments.filter(a=>a.status==='in_progress' && a.date<today && a.published!==false);
+  // 沒有任何店點的未來任務：夥伴會看到空的行程（例如套用路線更新到一半被中斷）
+  const emptyTrips = state.data.assignments.filter(a=>a.date>=today && a.status!=='cancelled' && !a.isSupport && !(a.dropPoints||[]).length);
+  let deferredDue = [];
+  try{ deferredDue = (await getDeferredCached()).filter(g=>deferredStatus(g.due)!=='later'); }catch(e){ console.error('讀取待付款清單失敗', e); }
+  let unsettledNames = [];
+  if(prevMonthStr){
+    try{
+      await ensureSettleSkips();
+      const lite = await getSettleTrips(prevMonthStr);
+      unsettledNames = unsettledRows(prevMonthStr, lite).map(r=>r.d.name);
+    }catch(e){ console.error('讀取月結名單失敗', e); }
+  }
+  const covNow = computeCoverage(todayStr());
+  const covBad = covNow.missing.length + covNow.dups.length + covNow.inactiveIn.length + covNow.imprecise.length;
+  const noIdCardNames = state.data.drivers.filter(d=>d.status==='active' && !d.idCardPath).map(d=>d.name);
+  c.innerHTML = `
+    <h2 class="section-title">首頁</h2>
+    <p class="section-sub">主控帳號${holidayForDate(todayStr())?` （今日：${escapeHtml(holidayForDate(todayStr()).name)}）`:''}</p>
+    ${emptyTrips.length || covBad || backupReminder || periodReminders.length || pendingFuelCount || unsettledNames.length || unsignedStmts.length || deferredDue.length || draftWeekCount || stuckTasks.length || noIdCardNames.length ? `<div class="rem-box">
+      <h3>⏰ 待辦提醒 <span class="rem-count">${[emptyTrips.length,covBad,unsignedStmts.length,stuckTasks.length,draftWeekCount,deferredDue.length,unsettledNames.length,pendingFuelCount,backupReminder,periodReminders.length,noIdCardNames.length].filter(Boolean).length}</span></h3>
+      ${emptyTrips.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${emptyTrips.length} 趟任務沒有任何店點（夥伴會看到空的行程）：${emptyTrips.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${emptyTrips.length>6?'…':''}。請到週期任務清單刪掉重排，或到路線管理重新套用。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
+      ${covBad ? `<div class="rem" data-lv="danger"><div class="rem-t">🗺️ 店點涵蓋檢查：${[covNow.missing.length?`🔴 ${covNow.missing.length} 家使用中的店沒有排入任何路線`:'', covNow.dups.length?`🟡 ${covNow.dups.length} 家同班次重複排入`:'', covNow.inactiveIn.length?`⚠️ ${covNow.inactiveIn.length} 家已停用的店還在路線裡`:'', covNow.imprecise.length?`📍 ${covNow.imprecise.length} 家店座標可能不精確`:''].filter(Boolean).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="routes">前往路線管理</button></div>` : ''}
+      ${unsignedStmts.length ? `<div class="rem" data-lv="warn"><div class="rem-t">✍️ 有 ${unsignedStmts.length} 份勞報單夥伴尚未回簽：${unsignedStmts.map(x=>`${escapeHtml(driverName(x.driverId))}（${statementLabel(x)}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
+      ${stuckTasks.length ? `<div class="rem" data-lv="danger"><div class="rem-t">⚠️ 有 ${stuckTasks.length} 個過去的任務還停在「執行中」（夥伴忘了按完成，不會算進請款與報酬）：${stuckTasks.slice(0,6).map(a=>`${a.date.slice(5).replace('-','/')} ${escapeHtml(routeName(a.routeId))}（${escapeHtml(driverName(a.driverId))}）`).join('、')}${stuckTasks.length>6?'…':''}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gostuck="${stuckTasks[0].date}">前往處理</button></div>` : ''}
+      ${draftWeekCount ? `<div class="rem" data-lv="info"><div class="rem-t">📝 有 ${draftWeekCount} 趟排好的任務尚未發佈（夥伴看不到）。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosched="1">前往週期任務清單</button></div>` : ''}
+      ${deferredDue.length ? `<div class="rem" data-lv="danger"><div class="rem-t">💰 有 ${deferredDue.length} 筆待付款已到期或 3 天內到期：${deferredDue.map(g=>`${escapeHtml(driverName(g.driverId))}（預計 ${g.due}，$${money(g.total)}${deferredStatus(g.due)==='overdue'?'，已逾期':''}）`).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gopay="${deferredDue[0].driverId}">前往報酬結算</button></div>` : ''}
+      ${unsettledNames.length ? `<div class="rem" data-lv="warn"><div class="rem-t">📝 ${prevMonthStr} 還有 ${unsettledNames.length} 位夥伴尚未月結確認：${unsettledNames.map(escapeHtml).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-gosettle="${prevMonthStr}">前往報酬結算</button></div>` : ''}
+      ${pendingFuelCount ? `<div class="rem" data-lv="warn"><div class="rem-t">⛽ 有 ${pendingFuelCount} 筆夥伴代墊申報（加油／車輛保養）待確認，請核對發票後確認。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="payroll">前往報酬結算</button></div>` : ''}
+      ${backupReminder ? `<div class="rem" data-lv="info"><div class="rem-t">📦 ${backupReminder}，建議去「系統設定」做一次備份。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="settings">前往系統設定</button></div>` : ''}
+      ${periodReminders.map(r=>`<div class="rem" data-lv="warn"><div class="rem-t">💰 「${escapeHtml(r.name)}」請款週期${r.daysLeft<0?`已經在 ${r.end} 結束`:r.daysLeft===0?`今天（${r.end}）結束`:`還有 ${r.daysLeft} 天結束（${r.end}）`}，記得準時結算。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="billing">前往請款結算</button></div>`).join('')}
+      ${noIdCardNames.length ? `<div class="rem" data-lv="info"><div class="rem-t">📋 有 ${noIdCardNames.length} 位夥伴尚未上傳身分證正反面：${noIdCardNames.map(escapeHtml).join('、')}。</div><button class="btn ghost" style="padding:4px 12px; font-size:12px;" data-goto="drivers">前往夥伴資料</button></div>` : ''}
+    </div>` : ''}
+    <div class="panel" style="border-color:var(--amber); border-width:2px;">
+      <div class="toolbar"><h3 style="margin:0;">請款－薪資即時利潤（${p.monthStr} 至今）</h3><button class="btn ghost" data-goto="billing">查看請款明細</button></div>
+      <table>
+        <thead><tr><th>通路</th><th>請款金額（估）</th></tr></thead>
+        <tbody>
+          ${p.perChannel.map(x=>`<tr><td>${x.channel.label||x.channel.name}</td><td class="amount">$${money(x.total.toFixed?x.total.toFixed(0):x.total)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <table style="margin-top:10px;">
+        <tr><td>請款總額</td><td class="amount">$${money(p.revenueTotal.toFixed(0))}</td></tr>
+        <tr><td>夥伴薪資支出總額</td><td class="amount">$${money(p.expenseTotal.toFixed(0))}</td></tr>
+        <tr id="profitRow" style="cursor:pointer;" title="點一下看每一天的明細"><td><strong>利潤總額</strong> <span style="font-size:12px; color:var(--ink-soft);">每日明細 <span id="profitChevron">▸</span></span></td><td class="amount"><strong style="color:${p.profit>=0?'var(--teal)':'var(--danger)'};">$${money(p.profit.toFixed(0))}</strong></td></tr>
+      </table>
+      <div id="profitDaily" style="display:none; margin-top:8px;"></div>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:8px 0 0;">僅供參考：收入與支出統一以自然月（本月1號至今天）估算，跟報酬結算的月結範圍一致，方便直接比較；各通路正式請款金額仍以「請款結算」照各自週期算出來的為準，可能跟這裡的估算數字有落差。</p>
+    </div>
+  `;
+  { // 點「利潤總額」展開／收合每日明細（資料更新重畫後維持展開狀態）
+    const row = document.getElementById('profitRow'), box = document.getElementById('profitDaily'), chev = document.getElementById('profitChevron');
+    if(row && box){
+      const show = open=>{ state._profitOpen = open; box.style.display = open ? 'block' : 'none'; chev.textContent = open ? '▾' : '▸'; if(open) box.innerHTML = profitDailyHtml(); };
+      row.onclick = ()=> show(!state._profitOpen);
+      if(state._profitOpen) show(true);
+    }
+  }
+  c.querySelectorAll('[data-gostuck]').forEach(el=>{ el.onclick = ()=>{ const d = el.dataset.gostuck; for(let off=-8; off<=8; off++){ if(getWeekDates(off).includes(d)){ state.weekOffset = off; break; } } state._mDay = d; goTab('schedule'); }; });
+  c.querySelectorAll('[data-gosched]').forEach(el=>{ el.onclick = ()=>{ state.weekOffset = 1; goTab('schedule'); }; });
+  c.querySelectorAll('[data-gopay]').forEach(el=>{ el.onclick = ()=>{ state._payDriverId = el.dataset.gopay; goTab('payroll'); }; });
+  c.querySelectorAll('[data-gosettle]').forEach(el=>{ el.onclick = ()=>{ state._payrollMonth = el.dataset.gosettle; state._payDriverId = ''; goTab('payroll'); }; });
+  c.querySelectorAll('[data-goto]').forEach(el=>{ el.onclick = ()=> goTab(el.dataset.goto); });
+}
+
+// ---------- 夥伴資料（含車輛、銀行細節） ----------
+let editingDriverId = null;
+let driverListSearch = '';
+let driverGroupExpandedSet = new Set(); // 使用者手動展開過的任務起點名稱，預設全部收合
+// 依這位夥伴「最近一筆還沒取消的排班」找出他固定跑哪個任務起點——一個
+// 夥伴理論上都固定跑同一個任務起點的車，用最近一筆代表就好。優先找今天
+// 或未來的排班（比較貼近「現在」的分組狀態），完全沒有未來排班的話
+// 退回找最近一筆過去的排班；兩種都找不到（從來沒被排過班）就回傳null，
+// 畫面上歸類到「未分類」。
+function driverOriginLabel(driverId){
+  const today = todayStr();
+  const mine = state.data.assignments.filter(a=>a.driverId===driverId && a.status!=='cancelled');
+  const upcoming = mine.filter(a=>a.date>=today).sort((a,b)=>a.date.localeCompare(b.date))[0];
+  const a = upcoming || mine.sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if(!a) return null;
+  const route = state.data.routes.find(r=>r.id===a.routeId);
+  if(!route) return null;
+  const og = state.data.origins.find(o=>o.address===route.originAddr);
+  return og ? (og.label||og.address) : route.originAddr;
+}
+function renderDrivers(c){
+  c.innerHTML = `
+    <div class="toolbar"><h2 class="section-title" style="margin:0;">夥伴資料</h2><button class="btn ghost" id="viewAllDriversBtn">檢視全部夥伴資料</button></div>
+    <p class="section-sub">車輛掛靠夥伴本人，直接併入夥伴資料建置。</p>
+    <div id="allDriversModal"></div>
+    <div class="panel">
+      <div class="form-tabs">
+        <button type="button" class="form-tab-btn active" data-formtab="basic">基本與車輛資訊</button>
+        <button type="button" class="form-tab-btn" data-formtab="finance">財務匯款帳戶</button>
+      </div>
+      <div data-formpage="basic">
+        <div class="grid3">
+          <div class="field"><label>姓名</label><input id="dName"></div>
+          <div class="field"><label>電話</label><input id="dPhone"></div>
+          <div class="field"><label>LINE User ID</label><input id="dLine"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>身分證字號（可提供勞報人員）</label><input id="dIdNumber"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>車牌</label><input id="dPlate"></div>
+          <div class="field"><label>車型</label><input id="dVType"></div>
+          <div class="field"><label>載重(kg)</label><input id="dVLoad" type="number"></div>
+        </div>
+        <div class="field" style="max-width:160px;"><label>狀態</label>
+          <select id="dStatus"><option value="active">在職</option><option value="inactive">停用</option></select>
+        </div>
+      </div>
+      <div data-formpage="finance" hidden>
+        <div class="grid4">
+          <div class="field"><label>銀行</label><input id="dBankName"></div>
+          <div class="field"><label>分行</label><input id="dBranch"></div>
+          <div class="field"><label>帳號</label><input id="dAccount"></div>
+          <div class="field"><label>戶名</label><input id="dHolder"></div>
+        </div>
+      </div>
+      <button class="btn amber" id="addDriver">新增夥伴</button>
+    </div>
+    <div class="field" style="max-width:280px;"><label>搜尋夥伴姓名</label><input id="driverSearch" value="${driverListSearch}" placeholder="輸入夥伴姓名關鍵字篩選"></div>
+    <div style="display:flex; gap:10px; margin-bottom:10px;">
+      <button class="btn ghost" id="driverExpandAll" style="padding:5px 12px; font-size:12.5px;">全部展開</button>
+      <button class="btn ghost" id="driverCollapseAll" style="padding:5px 12px; font-size:12.5px;">全部收合</button>
+    </div>
+    <div class="panel">
+      <div id="driverCardList"></div>
+      <p class="note" style="margin-top:10px;">登入代碼請私下告知夥伴本人（例如用LINE私訊），夥伴打開系統選「夥伴帳號」後輸入這組代碼即可看到自己的資料，不會看到其他夥伴。</p>
+    </div>
+  `;
+  c.querySelectorAll('.form-tab-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      c.querySelectorAll('.form-tab-btn').forEach(b=>b.classList.toggle('active', b===btn));
+      c.querySelectorAll('[data-formpage]').forEach(p=> p.hidden = (p.dataset.formpage !== btn.dataset.formtab));
+    };
+  });
+  function renderEditForm(d){
+    return `
+      <div class="form-tabs">
+        <button type="button" class="form-tab-btn active" data-etabtn="basic">基本與車輛資訊</button>
+        <button type="button" class="form-tab-btn" data-etabtn="finance">財務匯款帳戶</button>
+      </div>
+      <div data-etapage="basic">
+        <div class="grid3">
+          <div class="field"><label>姓名</label><input id="eName" value="${escapeHtml(d.name)}"></div>
+          <div class="field"><label>電話</label><input id="ePhone" value="${escapeHtml(d.phone||'')}"></div>
+          <div class="field"><label>LINE User ID</label><input id="eLine" value="${escapeHtml(d.lineId||'')}"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>身分證字號（可提供勞報人員）</label><input id="eIdNumber" value="${escapeHtml(d.idNumber||'')}"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>車牌</label><input id="ePlate" value="${escapeHtml(d.vehicle.plate||'')}"></div>
+          <div class="field"><label>車型</label><input id="eVType" value="${escapeHtml(d.vehicle.type||'')}"></div>
+          <div class="field"><label>載重(kg)</label><input id="eVLoad" type="number" value="${escapeHtml(String(d.vehicle.load||''))}"></div>
+        </div>
+        <div class="field" style="max-width:160px;"><label>狀態</label>
+          <select id="eStatus"><option value="active" ${d.status==='active'?'selected':''}>在職</option><option value="inactive" ${d.status!=='active'?'selected':''}>停用</option></select>
+        </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
+          <label>勞報單勞務名稱（僅主控可設定）</label>
+          <input id="eServiceName" maxlength="30" placeholder="${DEFAULT_SERVICE_NAME}" value="${escapeHtml(d.serviceName||'')}">
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">空白＝預設名稱。名稱必須符合實際工作：當月有完成任務的，名稱要含「配送」，否則月結確認會被擋下；已月結確認的勞報單不受影響（名稱在月結當下凍結）。</div>
+        </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
+          <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="eUnion" style="width:auto;" ${d.unionInsured?'checked':''}> 已投保職業工會（僅主控可設定）</label>
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">勾選後請上傳工會證明圖檔（例如會員證、投保證明），待逐一確認身分後再作為依據。</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            ${d.unionProofPath ? `<span class="badge completed">已上傳證明</span> <button type="button" class="btn ghost" data-unionview="${d.id}">查看</button> <button type="button" class="btn danger" data-unionremove="${d.id}">移除</button>` : '<span class="badge pending">尚未上傳證明</span>'}
+            <input type="file" id="eUnionFile" accept="image/*" style="max-width:260px;">
+          </div>
+        </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px;">
+          <label>身分證正反面（勞報單用途）</label>
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">夥伴可以自己在「我的資料」頁面拍攝/上傳；主控也可以在這裡代為拍攝/上傳（例如夥伴當面交證件、或不方便自己操作），系統自動合成正反面同頁、已加註浮水印的圖片。</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            ${d.idCardPath ? `<span class="badge completed">已上傳</span> <button type="button" class="btn ghost" data-idcardview="${d.id}">查看</button> <button type="button" class="btn ghost" data-idcarddownload="${d.id}">下載</button>` : '<span class="badge pending">夥伴尚未上傳</span>'}
+            <button type="button" class="btn ghost" data-idcardcapture="${d.id}">${d.idCardPath?'重新拍攝':'拍攝'}</button>
+            <button type="button" class="btn ghost" data-idcardupload="${d.id}">${d.idCardPath?'重新上傳照片':'上傳照片'}</button>
+          </div>
+        </div>
+      </div>
+      <div data-etapage="finance" hidden>
+        <div class="grid4">
+          <div class="field"><label>銀行</label><input id="eBankName" value="${escapeHtml(d.bank.bankName||'')}"></div>
+          <div class="field"><label>分行</label><input id="eBranch" value="${escapeHtml(d.bank.branch||'')}"></div>
+          <div class="field"><label>帳號</label><input id="eAccount" value="${escapeHtml(d.bank.account||'')}"></div>
+          <div class="field"><label>戶名</label><input id="eHolder" value="${escapeHtml(d.bank.holder||'')}"></div>
+        </div>
+        <div class="field" style="border-top:1px solid var(--border); padding-top:10px; max-width:320px;">
+          <label>勞報單所得人姓名覆蓋（僅主控可設定）</label>
+          <input id="ePayrollName" maxlength="30" placeholder="留空＝用上面的戶名" value="${escapeHtml(d.payrollName||'')}">
+          <div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">勞報單上的「所得人姓名」預設用上面的戶名；戶名不是夥伴本人時（例如帳戶是家人代收），請在這裡填夥伴本人的法定姓名，勞報單才會跟身分證字號對得起來。</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button class="btn amber" data-savedriver="${d.id}">儲存</button>
+        <button class="btn ghost" data-canceldriver="${d.id}">取消</button>
+      </div>`;
+  }
+  function driverCardHtml(d){
+    if(editingDriverId === d.id){
+      return `<div class="driver-card">${renderEditForm(d)}</div>`;
+    }
+    return `
+    <div class="driver-card">
+      <div class="driver-card-head">
+        <div>
+          <div class="driver-card-name">${d.name} <span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></div>
+          <div class="driver-card-sub">
+            電話：${escapeHtml(d.phone||'—')}　車牌：${escapeHtml(d.vehicle.plate||'—')}<br>
+            登入代碼：<span class="mono">${d.accessCode}</span>
+            ${d.unionInsured ? (d.unionProofPath ? '<span class="badge completed" style="margin-left:6px;">已投保職業工會</span>' : '<span class="badge pending" style="margin-left:6px;">工會：已勾選・缺證明圖檔</span>') : ''}
+            ${d.forceCodeReset ? '<span class="badge pending" style="margin-left:6px;">尚未設定專屬代碼</span>' : ''}
+            ${d.status==='active' && !d.idCardPath ? '<span class="badge pending" style="margin-left:6px;">尚未上傳身分證</span>' : ''}
+          </div>
+        </div>
+      </div>
+      <div class="driver-card-actions">
+        <button class="btn ghost" data-view="${d.id}">查看夥伴畫面</button>
+        <button class="btn ghost" data-editdriver="${d.id}">編輯</button>
+        <button class="btn ghost" data-regen="${d.id}">重新產生代碼</button>
+        <button class="btn danger" data-del="${d.id}">刪除</button>
+      </div>
+    </div>`;
+  }
+  function renderDriverCards(){
+    const listEl = document.getElementById('driverCardList');
+    const kw = driverListSearch.trim().toLowerCase();
+    const filteredDrivers = kw ? state.data.drivers.filter(d=>d.name.toLowerCase().includes(kw)) : state.data.drivers;
+    if(!filteredDrivers.length){
+      listEl.innerHTML = `<div class="empty">${kw?'找不到符合的夥伴':'尚無夥伴資料'}</div>`;
+      return;
+    }
+    // 依「這位夥伴目前跑哪個任務起點」分組並收合，跟店點資料庫／路線管理
+    // 同一套分組收合邏輯：搜尋中的話全部自動展開，不然預設全部收合。
+    const byOrigin = {};
+    filteredDrivers.forEach(d=>{
+      const key = driverOriginLabel(d.id) || '未分類';
+      if(!byOrigin[key]) byOrigin[key] = [];
+      byOrigin[key].push(d);
+    });
+    const originKeys = Object.keys(byOrigin).filter(k=>k!=='未分類').sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+    if(byOrigin['未分類']) originKeys.push('未分類');
+    listEl.innerHTML = originKeys.map(origin=>{
+      const drivers = byOrigin[origin];
+      const collapsed = !driverGroupExpandedSet.has(origin) && !kw;
+      return `<div class="panel fold ${collapsed?'':'open'}" data-drivergrouptoggle="${escapeHtml(origin)}">
+        <div class="fold-head">
+          <span class="fold-title">${escapeHtml(origin)}（${drivers.length}）</span><span class="fold-chev">${collapsed?'展開 ▸':'收合 ▾'}</span>
+        </div>
+        <div class="fold-body" style="${collapsed?'display:none;':''}">${drivers.map(driverCardHtml).join('')}</div>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-drivergrouptoggle]').forEach(h=>{
+      h.onclick = (e)=>{
+        if(clickedInFoldBody(e)) return;
+        const key = h.dataset.drivergrouptoggle;
+        if(driverGroupExpandedSet.has(key)) driverGroupExpandedSet.delete(key); else driverGroupExpandedSet.add(key);
+        renderDriverCards();
+      };
+    });
+    listEl.querySelectorAll('[data-etabtn]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const card = btn.closest('.driver-card');
+        card.querySelectorAll('[data-etabtn]').forEach(b=>b.classList.toggle('active', b===btn));
+        card.querySelectorAll('[data-etapage]').forEach(p=> p.hidden = (p.dataset.etapage !== btn.dataset.etabtn));
+      };
+    });
+    listEl.querySelectorAll('[data-editdriver]').forEach(btn=>{
+      btn.onclick = ()=>{ editingDriverId = btn.dataset.editdriver; renderDriverCards(); };
+    });
+    listEl.querySelectorAll('[data-canceldriver]').forEach(btn=>{
+      btn.onclick = ()=>{ editingDriverId = null; renderDriverCards(); };
+    });
+    listEl.querySelectorAll('[data-savedriver]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const id = btn.dataset.savedriver;
+        const name = document.getElementById('eName').value.trim();
+        if(!name){ alert('請輸入姓名'); return; }
+        try{
+          // 先處理工會證明圖檔（有選新檔才上傳，舊檔順便刪掉），再一起寫進夥伴資料。
+          const cur = state.data.drivers.find(x=>x.id===id);
+          let unionProofPath = cur ? cur.unionProofPath : '';
+          const unionFile = document.getElementById('eUnionFile').files[0];
+          if(unionFile){
+            const dataUrl = await compressImageFile(unionFile, 1600, 0.8);
+            const newPath = await uploadDriverUnionProof(id, dataUrl);
+            if(unionProofPath) removeDriverUnionProofFile(unionProofPath).catch(()=>{});
+            unionProofPath = newPath;
+          }
+          await updateDriverProfile(id, {
+            unionInsured: document.getElementById('eUnion').checked,
+            serviceName: document.getElementById('eServiceName').value,
+            unionProofPath,
+            name,
+            status: document.getElementById('eStatus').value,
+            phone: document.getElementById('ePhone').value.trim(),
+            lineId: document.getElementById('eLine').value.trim(),
+            idNumber: document.getElementById('eIdNumber').value.trim(),
+            plate: document.getElementById('ePlate').value.trim(),
+            vtype: document.getElementById('eVType').value.trim(),
+            vload: document.getElementById('eVLoad').value,
+            bankName: document.getElementById('eBankName').value.trim(),
+            branch: document.getElementById('eBranch').value.trim(),
+            account: document.getElementById('eAccount').value.trim(),
+            holder: document.getElementById('eHolder').value.trim(),
+            payrollName: document.getElementById('ePayrollName').value.trim()
+          });
+          editingDriverId = null;
+          renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-unionview]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.unionview);
+        try{ openPhotoLightbox([await getDriverUnionProofUrl(driver.unionProofPath)]); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-unionremove]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.unionremove);
+        if(!confirm(`確定要移除「${driver.name}」的工會證明圖檔嗎？`)) return;
+        try{
+          const old = driver.unionProofPath;
+          await updateDriverProfile(driver.id, { unionProofPath:'' });
+          removeDriverUnionProofFile(old).catch(()=>{});
+          renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+    // 身分證查看／下載：每次點都留一筆id_card_views紀錄（誰、何時看過），身分證是高敏感
+    // 個資，寫入紀錄失敗不擋住查看本身（見logIdCardView註解）。
+    listEl.querySelectorAll('[data-idcardview]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.idcardview);
+        try{
+          logIdCardView(driver.id);
+          openPhotoLightbox([await getDriverIdCardUrl(driver.idCardPath)]);
+        }catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-idcarddownload]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(x=>x.id===btn.dataset.idcarddownload);
+        try{
+          logIdCardView(driver.id);
+          const url = await getDriverIdCardUrl(driver.idCardPath);
+          const blob = await (await fetch(url)).blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `${driver.name}_身分證.jpg`;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
+        }catch(err){ alert(err.message); }
+      };
+    });
+    // 主控代為拍攝/上傳身分證：跟夥伴自己在「我的資料」用的是同一套
+    // captureIdCardPhoto()／uploadIdCardPhotos()（導引裁切、四角角標、反光/模糊檢查、
+    // A4合成＋浮水印、最終確認畫面全部一樣），只是上傳對象換成主控正在編輯的這位夥伴，
+    // 不是主控自己。driver-docs bucket本來就對app_admin全權限開放、drivers表主控也本來
+    // 就能寫任何欄位，不需要額外的資料庫權限異動。
+    // 網路上傳這一步失敗時不直接放棄（跟夥伴端finishIdCardUpload()同樣的道理）：失敗時
+    // 問要不要重試，重試用同一張已經裁切合成好的dataUrl，不用重新拍照/選照片。
+    const idCardAdminUpload = async (btn, driverId, grabPhoto)=>{
+      btn.disabled = true;
+      const original = btn.textContent;
+      let dataUrl;
+      try{ dataUrl = await grabPhoto(); }
+      catch(err){ alert(err.message); btn.disabled = false; return; }
+      if(!dataUrl){ btn.disabled = false; return; }
+      for(;;){
+        btn.textContent = '上傳中…';
+        try{
+          const path = await uploadDriverIdCard(driverId, dataUrl);
+          await setDriverIdCardPath(driverId, path);
+          renderContent();
+          return;
+        }catch(err){
+          if(!confirm(`上傳失敗：${err.message}\n\n要重試嗎？不用重新拍照/選照片，會直接用剛剛這張再試一次。`)){
+            btn.disabled = false; btn.textContent = original; return;
+          }
+        }
+      }
+    };
+    listEl.querySelectorAll('[data-idcardcapture]').forEach(btn=>{
+      btn.onclick = ()=> idCardAdminUpload(btn, btn.dataset.idcardcapture, captureIdCardPhoto);
+    });
+    listEl.querySelectorAll('[data-idcardupload]').forEach(btn=>{
+      btn.onclick = ()=> idCardAdminUpload(btn, btn.dataset.idcardupload, uploadIdCardPhotos);
+    });
+    listEl.querySelectorAll('[data-regen]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(d=>d.id===btn.dataset.regen);
+        if(!confirm(`確定要重設「${driver?.name||''}」的登入代碼嗎？舊代碼會立刻失效，這位夥伴要用新代碼才能登入——記得把新代碼告訴他。`)) return;
+        try{ await regenerateDriverAccessCode(btn.dataset.regen); renderContent(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    listEl.querySelectorAll('[data-view]').forEach(btn=>{
+      btn.onclick = ()=> viewAsDriver(btn.dataset.view);
+    });
+    listEl.querySelectorAll('[data-del]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const driver = state.data.drivers.find(d=>d.id===btn.dataset.del);
+        if(!confirm(`確定要刪除夥伴「${driver?.name||''}」嗎？\n\n如果這位夥伴已有歷史任務紀錄，系統會改為「停用」以保留歷史資料（該夥伴將無法再登入）；如果從未有任何任務，會直接永久刪除、無法復原。`)) return;
+        try{
+          const result = await deleteOrDeactivateDriver(btn.dataset.del);
+          if(result==='deactivated') alert('這位夥伴已有歷史任務紀錄，無法直接刪除，已改為「停用」以保留歷史資料。');
+          renderContent();
+        }catch(err){ alert(err.message); }
+      };
+    });
+  }
+  renderDriverCards();
+  const driverSearchEl = document.getElementById('driverSearch');
+  document.getElementById('driverExpandAll').onclick = ()=>{ state.data.drivers.forEach(d=>driverGroupExpandedSet.add(driverOriginLabel(d.id) || '未分類')); renderDriverCards(); };
+  document.getElementById('driverCollapseAll').onclick = ()=>{ driverGroupExpandedSet.clear(); renderDriverCards(); };
+  let driverSearchComposing = false;
+  driverSearchEl.addEventListener('compositionstart', ()=>{ driverSearchComposing = true; });
+  driverSearchEl.addEventListener('compositionend', (e)=>{ driverSearchComposing=false; driverListSearch = e.target.value; renderDriverCards(); });
+  driverSearchEl.addEventListener('input', (e)=>{
+    if(driverSearchComposing) return;
+    driverListSearch = e.target.value;
+    renderDriverCards();
+  });
+  document.getElementById('addDriver').onclick = async ()=>{
+    const name = document.getElementById('dName').value.trim();
+    if(!name){ alert('請輸入姓名'); return; }
+    try{
+      await createDriver({
+        name,
+        phone: document.getElementById('dPhone').value.trim(),
+        lineId: document.getElementById('dLine').value.trim(),
+        idNumber: document.getElementById('dIdNumber').value.trim(),
+        plate: document.getElementById('dPlate').value.trim(),
+        vtype: document.getElementById('dVType').value.trim(),
+        vload: document.getElementById('dVLoad').value,
+        bankName: document.getElementById('dBankName').value.trim(),
+        branch: document.getElementById('dBranch').value.trim(),
+        account: document.getElementById('dAccount').value.trim(),
+        holder: document.getElementById('dHolder').value.trim(),
+        status: document.getElementById('dStatus').value
+      });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  document.getElementById('viewAllDriversBtn').onclick = openAllDriversModal;
+}
+function openAllDriversModal(){
+  const host = document.getElementById('allDriversModal');
+  host.innerHTML = `
+    <div class="modal-backdrop" id="allDriversBackdrop">
+      <div class="modal-box wide">
+        <div class="toolbar"><h3 style="margin:0;">全部夥伴資料（${state.data.drivers.length}）</h3>
+          <span><button class="btn ghost" id="printAllDrivers">列印</button> <button class="btn ghost" id="closeAllDrivers">關閉</button></span>
+        </div>
+        <div class="tbl-scroll"><table class="tbl-nowrap">
+          <thead><tr><th>姓名</th><th>身分證字號</th><th>電話</th><th>LINE</th><th>狀態</th><th>車牌</th><th>車型</th><th>載重</th><th>銀行</th><th>分行</th><th>帳號</th><th>戶名</th></tr></thead>
+          <tbody>
+            ${state.data.drivers.map(d=>`<tr>
+              <td>${escapeHtml(d.name)}</td><td class="mono">${escapeHtml(d.idNumber||'—')}</td><td>${escapeHtml(d.phone||'—')}</td><td>${escapeHtml(d.lineId||'—')}</td>
+              <td><span class="badge ${d.status==='active'?'completed':'pending'}">${d.status==='active'?'在職':'停用'}</span></td>
+              <td class="mono">${escapeHtml(d.vehicle.plate||'—')}</td><td>${escapeHtml(d.vehicle.type||'—')}</td><td>${escapeHtml(String(d.vehicle.load||'—'))}</td>
+              <td>${escapeHtml(d.bank.bankName||'—')}</td><td>${escapeHtml(d.bank.branch||'—')}</td><td class="mono">${escapeHtml(d.bank.account||'—')}</td><td>${escapeHtml(d.bank.holder||'—')}</td>
+            </tr>`).join('') || `<tr><td colspan="12"><div class="empty">尚無夥伴資料</div></td></tr>`}
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('closeAllDrivers').onclick = ()=>{ host.innerHTML=''; };
+  document.getElementById('allDriversBackdrop').onclick = (e)=>{ if(e.target.id==='allDriversBackdrop') host.innerHTML=''; };
+  document.getElementById('printAllDrivers').onclick = ()=> exportPanelPrint(document.querySelector('#allDriversModal .modal-box'), '全部夥伴資料');
+}
+
+// ---------- 通路管理 ----------
+let editingChannelId = null;
+function renderChannels(c){
+  c.innerHTML = `
+    <h2 class="section-title">通路管理</h2>
+    <p class="section-sub">每個通路可以設定自己的請款依據：「依里程+店點數」的通路若同任務共配，會先算出共同總額再依點數比例分攤；「整趟固定金額」（例如牧穀）則不參與共配、獨立計算。也可設定請款週期規則。</p>
+    <div class="panel">
+      <div class="grid4">
+        <div class="field"><label>通路名稱</label><input id="chName"></div>
+        <div class="field"><label>週期類型</label>
+          <select id="chType"><option value="calendar_month">自然月(1~月底)</option><option value="custom">自訂區間(跨月)</option></select>
+        </div>
+        <div class="field"><label>起始日</label><input id="chStart" type="number" min="1" max="31" value="1"></div>
+        <div class="field"><label>結束日(自訂用)</label><input id="chEnd" type="number" min="1" max="31"></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>請款依據</label>
+          <select id="chFormula"><option value="per_km_and_point">依里程+店點數</option><option value="flat_per_trip">整趟固定金額</option></select>
+        </div>
+        <div class="field"><label>每公里（元）</label><input id="chRateKm" type="number" value="35"></div>
+        <div class="field"><label>每店點（元）</label><input id="chRatePoint" type="number" value="50"></div>
+        <div class="field"><label>整趟固定金額（元）</label><input id="chFlat" type="number" placeholder="選「整趟固定金額」時填寫"></div>
+      </div>
+      <div class="field" style="max-width:160px;"><label>請款金額</label>
+        <select id="chTax"><option value="inclusive">含稅</option><option value="exclusive">未稅</option><option value="exempt">免稅</option></select>
+      </div>
+      <button class="btn amber" id="addChannel">新增通路</button>
+    </div>
+    <div id="channelList"></div>
+  `;
+  document.getElementById('addChannel').onclick = async ()=>{
+    const name = document.getElementById('chName').value.trim();
+    if(!name){ alert('請輸入通路名稱'); return; }
+    const type = document.getElementById('chType').value;
+    try{
+      await createChannel({
+        name, periodType:type,
+        startDay: Number(document.getElementById('chStart').value)||1,
+        endDay: type==='custom' ? Number(document.getElementById('chEnd').value)||28 : null,
+        formulaType: document.getElementById('chFormula').value,
+        rateKm: Number(document.getElementById('chRateKm').value)||0,
+        ratePoint: Number(document.getElementById('chRatePoint').value)||0,
+        flatAmount: Number(document.getElementById('chFlat').value)||0,
+        taxMode: document.getElementById('chTax').value
+      });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  renderChannelList();
+}
+function renderChannelList(){
+  const el = document.getElementById('channelList');
+  el.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>通路</th><th>請款依據</th><th>週期規則</th><th>狀態</th><th>客戶專屬連結</th><th></th></tr></thead>
+        <tbody>
+          ${state.data.channels.map(ch=>{
+            if(editingChannelId === ch.id){
+              return `<tr><td colspan="6">
+                <div class="grid4">
+                  <div class="field"><label>通路名稱</label><input id="ecName" value="${ch.name}"></div>
+                  <div class="field"><label>週期類型</label>
+                    <select id="ecType"><option value="calendar_month" ${ch.periodType==='calendar_month'?'selected':''}>自然月(1~月底)</option><option value="custom" ${ch.periodType==='custom'?'selected':''}>自訂區間(跨月)</option></select>
+                  </div>
+                  <div class="field"><label>起始日</label><input id="ecStart" type="number" value="${ch.startDay}"></div>
+                  <div class="field"><label>結束日</label><input id="ecEnd" type="number" value="${ch.endDay||''}"></div>
+                </div>
+                <div class="grid4">
+                  <div class="field"><label>請款依據</label>
+                    <select id="ecFormula"><option value="per_km_and_point" ${ch.formulaType==='per_km_and_point'?'selected':''}>依里程+店點數</option><option value="flat_per_trip" ${ch.formulaType==='flat_per_trip'?'selected':''}>整趟固定金額</option></select>
+                  </div>
+                  <div class="field"><label>每公里（元）</label><input id="ecRateKm" type="number" value="${ch.rateKm}"></div>
+                  <div class="field"><label>每店點（元）</label><input id="ecRatePoint" type="number" value="${ch.ratePoint}"></div>
+                  <div class="field"><label>整趟固定金額（元）</label><input id="ecFlat" type="number" value="${ch.flatAmount}"></div>
+                </div>
+                <div class="field" style="max-width:160px;"><label>請款金額</label>
+                  <select id="ecTax">
+                    <option value="inclusive" ${ch.taxMode==='inclusive'?'selected':''}>含稅</option>
+                    <option value="exclusive" ${ch.taxMode==='exclusive'?'selected':''}>未稅</option>
+                    <option value="exempt" ${ch.taxMode==='exempt'?'selected':''}>免稅</option>
+                  </select>
+                </div>
+                <button class="btn amber" data-savech="${ch.id}">儲存</button>
+                <button class="btn ghost" data-cancelch="${ch.id}">取消</button>
+              </td></tr>`;
+            }
+            const taxModeLabel = ch.taxMode==='exempt' ? '免稅' : ch.taxMode==='exclusive' ? '未稅' : '含稅';
+            const formulaText = (ch.formulaType==='flat_per_trip' ? `整趟固定 $${money(ch.flatAmount)}` : `每公里$${ch.rateKm} + 每點$${ch.ratePoint}`) + `・${taxModeLabel}`;
+            const clientUrl = ch.accessToken ? `${location.origin}/client.html?token=${ch.accessToken}` : '';
+            return `<tr>
+              <td>${ch.name}</td>
+              <td>${formulaText}</td>
+              <td>${ch.periodType==='calendar_month'?'自然月 1~月底':'每月'+ch.startDay+'日 至 次月'+ch.endDay+'日'}</td>
+              <td><span class="badge ${ch.status==='inactive'?'pending':'completed'}">${ch.status==='inactive'?'已停用':'使用中'}</span></td>
+              <td>${clientUrl ? `<input class="mono" readonly value="${clientUrl}" style="font-size:11px; padding:4px 6px;" onclick="this.select()"> <button class="btn ghost" data-regentoken="${ch.id}" style="padding:2px 8px; font-size:11px; margin-top:4px;">重新產生</button>` : `<button class="btn ghost" data-gentoken="${ch.id}" style="padding:4px 8px; font-size:12px;">產生連結</button>`}</td>
+              <td><button class="btn ghost" data-editch="${ch.id}">編輯</button> ${ch.status==='inactive'?`<button class="btn ghost" data-resumech="${ch.id}">恢復使用</button>`:`<button class="btn ghost" data-stopch="${ch.id}">停用</button>`} ${channelInUse(ch.id)?'':`<button class="btn danger" data-del="${ch.id}" title="這個通路從來沒被店點或任務用過，可以直接刪除">刪除</button>`}</td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="6"><div class="empty">尚無通路</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+  el.querySelectorAll('[data-editch]').forEach(btn=>{ btn.onclick = ()=>{ editingChannelId = btn.dataset.editch; renderChannelList(); }; });
+  el.querySelectorAll('[data-cancelch]').forEach(btn=>{ btn.onclick = ()=>{ editingChannelId = null; renderChannelList(); }; });
+  el.querySelectorAll('[data-gentoken]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{ await regenerateChannelAccessToken(btn.dataset.gentoken); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-regentoken]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('重新產生會讓舊的客戶連結失效，客戶需要改用新連結。確定要繼續嗎？')) return;
+      try{ await regenerateChannelAccessToken(btn.dataset.regentoken); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-savech]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = state.data.channels.find(x=>x.id===btn.dataset.savech);
+      const periodType = document.getElementById('ecType').value;
+      try{
+        await updateChannel(ch.id, {
+          name: document.getElementById('ecName').value.trim() || ch.name,
+          periodType,
+          startDay: Number(document.getElementById('ecStart').value)||1,
+          endDay: periodType==='custom' ? (Number(document.getElementById('ecEnd').value)||28) : null,
+          formulaType: document.getElementById('ecFormula').value,
+          rateKm: Number(document.getElementById('ecRateKm').value)||0,
+          ratePoint: Number(document.getElementById('ecRatePoint').value)||0,
+          flatAmount: Number(document.getElementById('ecFlat').value)||0,
+          taxMode: document.getElementById('ecTax').value
+        });
+        editingChannelId = null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-stopch]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = state.data.channels.find(x=>x.id===btn.dataset.stopch);
+      const nStores = state.data.dropPoints.filter(dp=>dp.channelId===btn.dataset.stopch && dp.status!=='inactive').length;
+      if(!confirm(`確定要停用通路「${ch?.name||''}」嗎？\n\n停用後：新增店點時不能再選這個通路、首頁不再提醒它的請款週期。\n歷史店點、任務、請款紀錄全部保留，請款結算仍可查到；隨時可以按「恢復使用」。${nStores?`\n\n注意：這個通路底下還有 ${nStores} 家使用中的店點，不會被自動停用。`:''}`)) return;
+      try{ await setChannelStatus(btn.dataset.stopch, 'inactive'); toast('已停用，隨時可以恢復使用。', { type:'ok' }); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-resumech]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await setChannelStatus(btn.dataset.resumech, 'active'); toast('已恢復使用。', { type:'ok' }); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  el.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const ch = state.data.channels.find(x=>x.id===btn.dataset.del);
+      if(!confirm(`確定要永久刪除通路「${ch?.name||''}」嗎？\n\n這個通路從來沒被店點或任務用過，刪除後無法復原。（通路只是暫時不用，請用「停用」，隨時可以恢復）`)) return;
+      try{
+        const result = await deleteOrDeactivateChannel(btn.dataset.del);
+        if(result==='deactivated') alert('這個通路已有店點或歷史任務關聯，無法直接刪除，已改為「已停用」以保留歷史分類。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+
+// ---------- 店點資料庫 ----------
+let editingDpId = null;
+let dpOnlyMissing = false; // 店點資料庫「只看未排入路線的店」篩選
+const dpExpandedChannels = new Set(); // 使用者手動展開過的通路id，預設全部收合
+// ---------- 店點涵蓋檢查面板（店點資料庫＋路線管理頂端共用） ----------
+// 規則見 js/data-layer.js 的 computeCoverage()。只做檢查與導引，不會自動改任何路線。
+state._cov = state._cov || { asOf:'today', open:null };
+function covAsOfDate(){ return state._cov.asOf==='latest' ? '9999-12-31' : todayStr(); }
+function openRouteForEdit(routeId){
+  const r = state.data.routes.find(x=>x.id===routeId); if(!r) return;
+  routeListSearch = '';
+  regionExpandedSet.add(r.region || '未分類');
+  expandedRouteId = routeId; expandedRouteBox = null;
+  switchTab('routes');
+}
+function covRouteLinks(routes){
+  return routes.map(r=>`<button class="btn ghost" data-openroute="${r.id}" style="padding:2px 8px; font-size:11.5px; margin:1px 2px;">${escapeHtml(routeDisplayName(r.name))}</button>`).join('');
+}
+function renderCoveragePanel(){
+  const host = document.getElementById('covHost');
+  if(!host) return;
+  const cov = computeCoverage(covAsOfDate());
+  const open = state._cov.open;
+  const bad = cov.missing.length + cov.dups.length + cov.inactiveIn.length + cov.imprecise.length;
+  const routed = cov.activeCount - cov.missing.length;
+  const chip = (key, label, n)=> n ? `<button class="btn ${open===key?'amber':'ghost'}" data-cov="${key}">${label} ${n}</button>` : '';
+  const dpRow = dp=>`${escapeHtml(dp.code||'')} ${escapeHtml(dp.address)}（${escapeHtml(channelName(dp.channelId))}）`;
+  let detail = '';
+  if(open==='missing' && cov.missing.length){
+    const rows = cov.missing.slice(0, 300);
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <select id="covRoute" style="width:auto; max-width:260px;"><option value="">選擇要加入的路線</option>${sortedRoutes().filter(r=>r.status!=='inactive').map(r=>`<option value="${r.id}">${escapeHtml(routeDisplayName(r.name))}</option>`).join('')}</select>
+        <button class="btn amber" id="covAddDraft">把勾選的店加到這條路線的草稿</button>
+        <button class="btn danger" id="covStopSel">勾選的店 → 停止配送</button>
+      </div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">「加到草稿」只是放進該路線的編輯草稿，到路線管理設定生效日期並儲存才會生效；「停止配送」是這家店已經不送了（歷史紀錄都保留）。</div>
+      <label style="font-size:12.5px;"><input type="checkbox" id="covAll" style="width:auto;"> 全選</label>
+      <div style="max-height:320px; overflow:auto;">${rows.map(dp=>`
+        <div style="padding:3px 0;">
+          <label style="display:block; font-size:13px;"><input type="checkbox" class="covPick" value="${dp.id}" style="width:auto;"> ${dpRow(dp)}</label>
+          <div style="margin-left:20px;">
+            <button class="btn ghost" data-aitoggle="${dp.id}" style="padding:1px 8px; font-size:11px;">🤖 AI建議插入哪台車</button>
+            <div class="ai-suggest-body" id="aiBody-${dp.id}" style="display:none; margin-top:4px;"></div>
+          </div>
+        </div>`).join('')}</div>
+      ${cov.missing.length>rows.length ? `<div style="font-size:12px;">…還有 ${cov.missing.length-rows.length} 家，處理完上面的再看。</div>` : ''}
+    </div>`;
+  } else if(open==='dup' && cov.dups.length){
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">同一天、同一班次排進兩條以上不同車次（路線名稱括號裡標了星期的，只看那幾天；星期一版／週二到五版、上午＋下午各一次不算）。如果是刻意的，按「允許重複」之後就不再警示；排錯了就點路線去移除。</div>
+      ${cov.dups.map(x=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px;">
+        <div>${dpRow(x.dp)}${x.within?' <span class="badge pending">同一條路線放了兩次</span>':''} <span style="font-size:11.5px; color:var(--ink-soft);">（${x.days.length===7?'每天':'星期'+x.days.map(d=>'一二三四五六日'[d-1]).join('、')}）</span></div>
+        <div>${covRouteLinks(x.routes)} <button class="btn ghost" data-allowdup="${x.dp.id}" style="padding:2px 8px; font-size:11.5px;">允許重複</button></div></div>`).join('')}
+    </div>`;
+  } else if(open==='inactive' && cov.inactiveIn.length){
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">這些店已經標為「已停用」，但還留在目前生效的路線裡。點路線把它移除（設定生效日期後儲存）；如果其實還要送，按「恢復使用」。</div>
+      ${cov.inactiveIn.map(x=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px;">
+        <div>${dpRow(x.dp)}</div>
+        <div>${covRouteLinks(x.routes)} <button class="btn ghost" data-resumedp="${x.dp.id}" style="padding:2px 8px; font-size:11.5px;">恢復使用</button></div></div>`).join('')}
+    </div>`;
+  } else if(open==='imprecise' && cov.imprecise.length){
+    detail = `<div class="note" style="margin-top:10px;">
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;">這些店的地址轉座標時沒抓到完整門牌，退而求其次抓了路段概略位置，容易跟附近其他店座標重疊，影響路線里程估算。按「查地圖」用Google地圖核對實際位置，確認後回店點資料手動修正座標。</div>
+      ${cov.imprecise.map(dp=>`<div style="padding:6px 0; border-top:1px solid var(--border); font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>${dpRow(dp)}</span>
+        <a class="btn ghost" style="padding:2px 8px; font-size:11.5px;" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(dp.address)}">查地圖</a>
+      </div>`).join('')}
+    </div>`;
+  }
+  host.innerHTML = `<div class="panel no-print" style="border-color:${bad?'var(--danger)':'var(--ok,#2E7D32)'}; border-width:2px;">
+    <div class="toolbar" style="margin-bottom:6px;"><b>店點涵蓋檢查</b>
+      <select id="covAsOf" style="width:auto;"><option value="today" ${state._cov.asOf==='today'?'selected':''}>依今天生效的路線</option><option value="latest" ${state._cov.asOf==='latest'?'selected':''}>依最新版本（含未來才生效的）</option></select>
+    </div>
+    <div style="font-size:13.5px;">使用中店點 <b>${cov.activeCount}</b> 家　已排入路線 <b>${routed}</b> 家${bad?'':'　✅ 全部都有路線，沒有誤重複'}</div>
+    ${bad ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">${chip('missing','🔴 未排入路線',cov.missing.length)}${chip('dup','🟡 同班次重複',cov.dups.length)}${chip('inactive','⚠️ 已停用卻還在路線裡',cov.inactiveIn.length)}${chip('imprecise','📍 座標可能不精確',cov.imprecise.length)}</div>` : ''}
+    ${detail}
+    <div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">規則：檢查從今天起連續 7 天，每天只看當天實際會跑（依路線名稱括號的星期標註）、當天生效版本的路線；已停用的店不檢查。調整路線儲存時也會即時提醒。</div>
+  </div>`;
+  host.querySelector('#covAsOf').onchange = e=>{ state._cov.asOf = e.target.value; renderContent(); };
+  host.querySelectorAll('[data-cov]').forEach(b=>{ b.onclick = ()=>{ state._cov.open = open===b.dataset.cov ? null : b.dataset.cov; renderCoveragePanel(); }; });
+  host.querySelectorAll('[data-openroute]').forEach(b=>{ b.onclick = ()=> openRouteForEdit(b.dataset.openroute); });
+  host.querySelectorAll('[data-allowdup]').forEach(b=>{
+    b.onclick = async ()=>{ try{ await setDropPointAllowDuplicate(b.dataset.allowdup, true); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  host.querySelectorAll('[data-resumedp]').forEach(b=>{
+    b.onclick = async ()=>{ try{ await setDropPointsStatus([b.dataset.resumedp], 'active'); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  host.querySelectorAll('[data-aitoggle]').forEach(b=>{
+    b.onclick = ()=>{
+      const dpId = b.dataset.aitoggle;
+      const body = document.getElementById('aiBody-'+dpId);
+      if(!body) return;
+      const showing = body.style.display!=='none';
+      if(showing){ body.style.display='none'; return; }
+      body.style.display='block';
+      if(body.dataset.inited) return;
+      body.dataset.inited = '1';
+      const origOpts = state.data.origins.filter(og=>og.status!=='inactive').map(og=>`<option value="${og.id}">${escapeHtml(og.label||og.address)}</option>`).join('');
+      body.innerHTML = `<div class="note" style="font-size:12px;">
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <select class="aiOrigin" style="width:auto; max-width:200px; font-size:12px;">${origOpts}</select>
+          <select class="aiShift" style="width:auto; font-size:12px;"><option value="AM">上午</option><option value="PM">下午</option></select>
+          <button class="btn ghost aiQuery" style="padding:2px 10px; font-size:11.5px;">查詢建議</button>
+        </div>
+        <div class="aiResultArea" style="margin-top:6px;"></div>
+      </div>`;
+      const resultArea = body.querySelector('.aiResultArea');
+      body.querySelector('.aiQuery').onclick = async ()=>{
+        const originId = body.querySelector('.aiOrigin').value;
+        const shift = body.querySelector('.aiShift').value;
+        if(!originId){ resultArea.innerHTML = '<span style="color:var(--danger);">請先選擇任務起點</span>'; return; }
+        resultArea.innerHTML = '查詢中…（需要呼叫外部路網服務，可能要幾秒到十幾秒）';
+        try{
+          const results = await suggestRouteInsertion(originId, shift, dpId);
+          if(!results.length){ resultArea.innerHTML = '這個起點＋班次目前沒有可用的現有路線。'; return; }
+          resultArea.innerHTML = `<div style="font-size:11.5px; color:var(--ink-soft); margin-bottom:4px;">僅供參考，不會自動修改任何路線；覺得合適的話，到上面選單選這條路線、按「加到草稿」，再自己去路線管理調整順序。預估送完時間已含每店3分鐘下貨時間，${shift==='PM'?'下午班須17:30前送完':'上午班須11:30前送完'}。</div>
+            <table style="font-size:12px;"><thead><tr><th>路線</th><th>插入在</th><th>多跑</th><th>新車趟時間</th><th>預估送完</th><th>新店數</th></tr></thead>
+            <tbody>${results.map(r=>`<tr${r.overTimeLimit?' style="color:var(--danger);"':''}><td>${escapeHtml(r.routeName)}</td><td>${escapeHtml(r.insertAfterStopCode)}之後</td><td>${r.addedKm}km／${r.addedMin}分</td><td>${r.newTotalMin}分</td><td>${r.finishClock}${r.overTimeLimit?'　⚠️超時':''}</td><td>${r.newStopCount}</td></tr>`).join('')}</tbody></table>`;
+        }catch(err){ resultArea.innerHTML = `<span style="color:var(--danger);">${escapeHtml(err.message)}</span>`; }
+      };
+    };
+  });
+  const all = host.querySelector('#covAll');
+  if(all) all.onchange = ()=> host.querySelectorAll('.covPick').forEach(x=>x.checked = all.checked);
+  const picked = ()=> [...host.querySelectorAll('.covPick:checked')].map(x=>x.value);
+  const add = host.querySelector('#covAddDraft');
+  if(add) add.onclick = ()=>{
+    const ids = picked(), rid = host.querySelector('#covRoute').value;
+    if(!ids.length){ alert('請先勾選要加入的店'); return; }
+    if(!rid){ alert('請先選擇要加入的路線'); return; }
+    const route = state.data.routes.find(r=>r.id===rid);
+    const draft = ensureDraft(route);
+    let n = 0; ids.forEach(id=>{ if(!draft.order.includes(id)){ draft.order.push(id); n++; } });
+    alert(`已把 ${n} 家店放進「${routeDisplayName(route.name)}」的編輯草稿（排在最後面）。\n接下來到路線管理調整順序、設定生效日期後按儲存，才會真的生效。`);
+    openRouteForEdit(rid);
+  };
+  const stop = host.querySelector('#covStopSel');
+  if(stop) stop.onclick = async ()=>{
+    const ids = picked();
+    if(!ids.length){ alert('請先勾選要停止配送的店'); return; }
+    if(!confirm(`確定這 ${ids.length} 家店已經不配送了嗎？\n會改成「已停用」：歷史任務、請款、報酬紀錄都保留，新路線不會再列出，之後可以隨時恢復使用。`)) return;
+    try{ await setDropPointsStatus(ids, 'inactive'); renderContent(); }catch(err){ alert(err.message); }
+  };
+}
+function renderDropPoints(c){
+  const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">店點資料庫</h2>
+    <p class="section-sub">先建立好常用店點，之後在「路線管理」用選單直接組成路線，不用每次手key地址。</p>
+    <div id="covHost"></div>
+    <div id="geoBox"></div>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>地址</label><input id="dpAddr"></div>
+        <div class="field"><label>所屬通路</label><select id="dpChannel">${chOpts}</select></div>
+        <div class="field"><label>備註代號（選填）</label><input id="dpCode" placeholder="例：A"></div>
+      </div>
+      <button class="btn amber" id="addDp">新增店點</button>
+    </div>
+    <div class="field"><label>搜尋地址或代號</label><input id="dpSearch" value="${escapeHtml(state._dpSearchInit||'')}" placeholder="輸入關鍵字篩選（數量多時建議先搜尋）"></div>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" id="dpOnlyMissing" ${dpOnlyMissing?'checked':''} style="width:auto;"> 只看「使用中但沒排入任何路線」的店</label>
+      <button class="btn ghost" id="dpExpandAll" style="padding:5px 12px; font-size:12.5px;">全部展開</button>
+      <button class="btn ghost" id="dpCollapseAll" style="padding:5px 12px; font-size:12.5px;">全部收合</button>
+    </div>
+    <div id="dpListBody"></div>
+  `;
+  document.getElementById('addDp').onclick = async ()=>{
+    const addr = document.getElementById('dpAddr').value.trim();
+    if(!addr){ alert('請輸入地址'); return; }
+    try{
+      await createDropPoint({ address: addr, channelId: document.getElementById('dpChannel').value, code: document.getElementById('dpCode').value.trim() });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  state._dpSearchInit = '';
+  renderGeoBox();
+  document.getElementById('dpSearch').oninput = renderDpListBody;
+  document.getElementById('dpOnlyMissing').onchange = e=>{ dpOnlyMissing = e.target.checked; renderDpListBody(); };
+  document.getElementById('dpExpandAll').onclick = ()=>{ state.data.channels.forEach(ch=>dpExpandedChannels.add(ch.id)); renderDpListBody(); };
+  document.getElementById('dpCollapseAll').onclick = ()=>{ dpExpandedChannels.clear(); renderDpListBody(); };
+  renderCoveragePanel();
+  renderDpListBody();
+  // 地圖座標自動校正：機會性執行一次（不是每家店都會符合條件，見data-layer.js
+  // suggestDropPointCoordCorrections 旁邊的說明），純粹讓地圖/導航更準，跟計價
+  // 公式無關，不需要跳確認視窗，但校正完要重畫列表讓目前畫面上的座標跟著更新。
+  suggestDropPointCoordCorrections().then(applied=>{
+    if(applied.length){ toast(`📍 已依送貨照片定位自動校正 ${applied.length} 家店的地圖座標`, { type:'info' }); renderDpListBody(); }
+  }).catch(e=> console.error('座標自動校正失敗', e));
+}
+// 地圖座標：把店點地址轉成經緯度（路線管理的地圖路線、預計時間用）。免費、只查一次，每秒一家，所以一次補齊很多家要幾分鐘。
+let geoCancel = { stop:false }, geoRunning = false;
+function suspectDropPoints(list){
+  const km = (a,b,c,d)=>{ const R=6371, r=x=>x*Math.PI/180, dLat=r(c-a), dLng=r(d-b); const h=Math.sin(dLat/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(h)); };
+  const groups = new Map();
+  list.filter(d=>d.lat!=null && d.lng!=null).forEach(d=>{ const k=(d.address||'').replace(/\s+/g,'').slice(0,6); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(d); });
+  const med = arr=>{ const a=[...arr].sort((x,y)=>x-y), m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; };
+  const out = [];
+  list.forEach(d=>{ if(d.lat!=null && (d.lat<21.5 || d.lat>26.5 || d.lng<118 || d.lng>123)) out.push({ dp:d, km:999 }); });
+  groups.forEach(g=>{
+    if(g.length<3) return;
+    const cl = med(g.map(d=>d.lat)), cn = med(g.map(d=>d.lng));
+    g.forEach(d=>{ const k = km(d.lat, d.lng, cl, cn); if(k>12 && !out.find(o=>o.dp.id===d.id)) out.push({ dp:d, km:k }); });
+  });
+  return out.sort((a,b)=>b.km-a.km);
+}
+function renderGeoBox(){
+  const box = document.getElementById('geoBox'); if(!box) return;
+  const active = state.data.dropPoints.filter(dp=>dp.status!=='inactive');
+  const miss = active.filter(dp=>dp.lat==null || dp.lng==null);
+  if(!desktopDnd()){ box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="panel no-print" style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+    <div><b>地圖座標</b>　已定位 <b>${active.length-miss.length}</b> ／ ${active.length} 家${miss.length?`　<span style="color:var(--danger);">還有 ${miss.length} 家沒有位置</span>`:'　✅'}
+      <div id="geoProg" style="font-size:12px; color:var(--ink-soft); margin-top:2px;">${miss.length?`補齊後，路線管理就能顯示地圖路線與預計到達時間。每秒查一家，約需 ${Math.ceil(miss.length*2.2/60)} 分鐘（可以中途停止、之後接著補）。`:'路線管理的地圖與預計時間可以使用。'}</div></div>
+    ${miss.length?'<span><button class="btn amber" id="geoGo">補齊地圖座標</button> <button class="btn ghost" id="geoStop" style="display:none;">停止</button></span>':''}
+  </div>
+  ${miss.length ? `<details class="fold-d no-print" style="margin:-4px 0 12px;" ${state._geoListOpen?'open':''} ontoggle="state._geoListOpen=this.open"><summary style="font-weight:600;"><span>沒有位置的店點（${miss.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　自動查不到的，可以在這裡一家一家手動指定</span></span></summary>
+    <div class="panel" style="margin-top:6px;"><table><thead><tr><th>代號</th><th>地址</th><th>通路</th><th></th></tr></thead><tbody>${miss.map(dp=>`<tr><td class="mono">${escapeHtml(dp.code||'—')}</td><td>${escapeHtml(dp.address)}${(state._geoFailed&&state._geoFailed.has(dp.id))?' <span class="badge pending">自動查不到</span>':''}</td><td>${escapeHtml(channelName(dp.channelId))}</td><td><button class="btn amber" data-geoloc="${dp.id}">指定位置</button></td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
+  // 位置可疑：自動查詢退而求其次只查到「路名」，或同名路在別的縣市，位置就可能差很遠。
+  // 這裡抓「離同一縣市區其他店的中心太遠」的店點（同區至少 3 家有座標才判斷），讓你優先檢查。
+  const sus = suspectDropPoints(active);
+  if(sus.length){
+    const wrapEl = document.createElement('div');
+    wrapEl.innerHTML = `<details class="fold-d no-print" style="margin:-4px 0 12px;" ${state._geoSusOpen?'open':''} ontoggle="state._geoSusOpen=this.open"><summary style="font-weight:600;"><span>位置可能不準的店點（${sus.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　離同一區其他店很遠，建議逐一檢查</span></span></summary>
+      <div class="panel" style="margin-top:6px;"><table><thead><tr><th>代號</th><th>地址</th><th>離同區中心</th><th></th></tr></thead><tbody>${sus.map(x=>`<tr><td class="mono">${escapeHtml(x.dp.code||'—')}</td><td>${escapeHtml(x.dp.address)}</td><td>${x.km<1?'<1':Math.round(x.km)} 公里</td><td><button class="btn amber" data-geoloc="${x.dp.id}">檢查／修正</button></td></tr>`).join('')}</tbody></table></div></details>`;
+    box.appendChild(wrapEl);
+  }
+  box.querySelectorAll('[data-geoloc]').forEach(b=>{ b.onclick = ()=> openLocate('dp', b.dataset.geoloc); });
+  const go = box.querySelector('#geoGo'); if(!go) return;
+  go.onclick = async ()=>{
+    if(geoRunning) return;
+    if(!confirm(`要把 ${miss.length} 家店的地址轉成地圖座標嗎？\n\n會一家一家查（約 ${Math.ceil(miss.length*2.2/60)} 分鐘），查的過程請不要關閉這個頁面；可以隨時按「停止」，下次接著補。`)) return;
+    geoRunning = true; geoCancel = { stop:false };
+    go.disabled = true; const stop = box.querySelector('#geoStop'); stop.style.display = ''; stop.onclick = ()=>{ geoCancel.stop = true; stop.disabled = true; };
+    const prog = box.querySelector('#geoProg');
+    try{
+      const r = await geocodeMissingDropPoints(p=>{ if(prog.isConnected) prog.textContent = `查詢中 ${p.done} / ${p.total}：${p.name}（查不到 ${p.failed} 家）`; }, geoCancel);
+      state._geoFailed = new Set(r.failed.map(d=>d.id)); if(r.failed.length) state._geoListOpen = true;
+      toast(`座標補齊完成：成功 ${r.done - r.failed.length} 家${r.failed.length?`，${r.failed.length} 家查不到（在下面的清單按「指定位置」手動設定）`:''}${geoCancel.stop?'（已中途停止）':''}`, { type: r.failed.length ? 'warn' : 'ok' });
+    }catch(e){ toast(e.message, { type:'error' }); }
+    geoRunning = false;
+    if(document.getElementById('geoBox')){ renderGeoBox(); renderDpListBody(); }
+  };
+}
+// ---------- 手動指定店點位置 ----------
+// 自動查不到的地址（OpenStreetMap 在台灣的門牌資料不完整）：貼上 Google 地圖的座標／網址、搜尋、或直接在地圖上點一下；標記可以拖曳微調。
+function parseLatLng(text){
+  const t = String(text||'');
+  let m = t.match(/@(-?\d+\.\d+),\s*(-?\d+\.\d+)/) || t.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || t.match(/(-?\d{1,3}\.\d+)\s*[,，\s]\s*(-?\d{1,3}\.\d+)/);
+  if(!m) return null;
+  let a = Number(m[1]), b = Number(m[2]);
+  if(a > 100 && b < 60){ const x = a; a = b; b = x; }   // 經緯度貼反了
+  if(a < 20 || a > 27 || b < 118 || b > 124) return null; // 不在台灣範圍
+  return { lat:a, lng:b };
+}
+// kind：'dp'（店點）或 'origin'（任務起點）；onDone：儲存成功後要做的事（例如重畫路線地圖）
+async function openLocate(kind, targetId, onDone){
+  const isOg = kind==='origin';
+  const dp = isOg ? state.data.origins.find(x=>x.id===targetId) : state.data.dropPoints.find(x=>x.id===targetId); if(!dp) return;
+  try{ await loadLeaflet(); }catch(e){ toast(e.message, { type:'error' }); return; }
+  document.getElementById('locBackdrop')?.remove();
+  const wrap = document.createElement('div'); wrap.className = 'modal-backdrop'; wrap.id = 'locBackdrop';
+  wrap.innerHTML = `<div class="panel" style="max-width:760px; width:100%; margin:0 auto;">
+    <h3 style="margin-top:0;">${isOg?'指定任務起點位置':'指定位置'}　<span class="mono">${escapeHtml(isOg ? (dp.label||'') : (dp.code||''))}</span></h3>
+    <p class="section-sub" style="margin:0 0 8px;">${escapeHtml(dp.address)}${isOg?'':'（'+escapeHtml(channelName(dp.channelId))+'）'}</p>
+    <div class="field"><label>方法一：貼上座標或 Google 地圖網址</label>
+      <div style="display:flex; gap:8px;"><input id="locPaste" placeholder="例如 25.0330, 121.5654　或整段 Google 地圖網址"><button class="btn ghost" id="locApply" style="white-space:nowrap;">套用</button></div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-top:4px;">先 <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(dp.address)}" target="_blank" rel="noopener">在 Google 地圖查這個地址</a>，找到店後對著地點「按右鍵」，點最上面那行數字（座標）就會複製起來，貼到這裡。手機上長按地點，座標會出現在下方。</div></div>
+    <div class="field"><label>方法二：搜尋　或直接在地圖上點一下（標記可以拖曳）</label>
+      <div style="display:flex; gap:8px;"><input id="locQ" placeholder="店名、路名、地標…"><button class="btn ghost" id="locFind" style="white-space:nowrap;">搜尋</button></div></div>
+    <div id="locMap" style="height:340px; border-radius:8px; border:1px solid var(--border);"></div>
+    <div id="locInfo" style="font-size:12.5px; color:var(--ink-soft); margin:6px 0;">還沒有選位置。</div>
+    <button class="btn amber" id="locSave">儲存位置</button> <button class="btn ghost" id="locCancel">取消</button></div>`;
+  document.body.appendChild(wrap);
+  const close = ()=> wrap.remove();
+  wrap.onclick = e=>{ if(e.target===wrap) close(); };
+  document.getElementById('locCancel').onclick = close;
+  // 起始位置：同一個「縣市＋區」已經有座標的店點的中心；沒有就看整個台灣
+  const pref = (dp.address||'').replace(/\s+/g,'').slice(0,6);
+  const near = state.data.dropPoints.concat(state.data.origins).filter(x=>x.id!==dp.id && x.lat!=null && x.lng!=null && (x.address||'').replace(/\s+/g,'').slice(0,6)===pref);
+  const center = near.length ? [near.reduce((a,x)=>a+x.lat,0)/near.length, near.reduce((a,x)=>a+x.lng,0)/near.length] : [23.7, 121.0];
+  const map = L.map('locMap').setView(center, near.length ? 14 : 8);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+  let marker = null, pos = null;
+  const info = document.getElementById('locInfo');
+  const place = (lat, lng, zoom)=>{
+    pos = { lat, lng };
+    if(!marker){ marker = L.marker([lat,lng], { draggable:true }).addTo(map); marker.on('dragend', ()=>{ const p = marker.getLatLng(); pos = { lat:p.lat, lng:p.lng }; info.textContent = `已選：${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`; }); }
+    else marker.setLatLng([lat,lng]);
+    if(zoom) map.setView([lat,lng], zoom);
+    info.textContent = `已選：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  };
+  map.on('click', e=> place(e.latlng.lat, e.latlng.lng));
+  document.getElementById('locApply').onclick = ()=>{
+    const r = parseLatLng(document.getElementById('locPaste').value);
+    if(!r){ toast('看不出座標。請貼上像「25.0330, 121.5654」的數字，或含有 @25.03,121.56 的 Google 地圖網址（要在台灣範圍內）', { type:'warn' }); return; }
+    place(r.lat, r.lng, 17);
+  };
+  document.getElementById('locFind').onclick = async ()=>{
+    const q = document.getElementById('locQ').value.trim(); if(!q) return;
+    try{
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=tw&accept-language=zh-TW&q=' + encodeURIComponent(q));
+      const j = r.ok ? await r.json() : [];
+      if(j && j[0]){ map.setView([Number(j[0].lat), Number(j[0].lon)], 17); info.textContent = '已移到搜尋結果，請在地圖上點選店的位置。'; }
+      else toast('搜尋不到，換個寫法試試（例如只輸入路名），或用方法一貼上座標。', { type:'warn' });
+    }catch(e){ toast('搜尋失敗，請稍後再試', { type:'error' }); }
+  };
+  document.getElementById('locSave').onclick = async ()=>{
+    if(!pos){ toast('請先選位置：貼上座標，或在地圖上點一下', { type:'warn' }); return; }
+    try{
+      if(isOg) await saveOriginCoord(dp.id, pos.lat, pos.lng); else await saveDropPointCoord(dp.id, pos.lat, pos.lng);
+      close(); toast('已儲存位置');
+      if(state._geoFailed) state._geoFailed.delete(dp.id);
+      if(document.getElementById('geoBox')){ renderGeoBox(); renderDpListBody(); }
+      if(document.getElementById('ogList')) renderOgList();
+      if(onDone) onDone();
+    }catch(e){ toast(e.message, { type:'error' }); }
+  };
+}
+function renderDpListBody(){
+  const wrap = document.getElementById('dpListBody');
+  const keyword = (document.getElementById('dpSearch').value||'').trim().toLowerCase();
+  const chOpts = state.data.channels.filter(ch=>ch.status!=='inactive').map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('');
+  // 每家店現在排在哪些路線（依涵蓋檢查設定的日期），讓遺漏／重複在列表上一眼看得到。
+  const cov = computeCoverage(covAsOfDate());
+  const dupIds = new Set(cov.dups.map(x=>x.dp.id));
+  const routeCell = dp=>{
+    const rs = cov.byDp.get(dp.id) || [];
+    if(dp.status==='inactive') return rs.length ? `<span style="color:var(--danger);">⚠️ 已停用卻還在：${escapeHtml(rs.map(r=>routeDisplayName(r.name)).join('、'))}</span>` : '<span style="color:var(--ink-soft);">—</span>';
+    if(!rs.length) return '<span style="color:var(--danger); font-weight:700;">🔴 未排入任何路線</span>';
+    const names = rs.map(r=>routeDisplayName(r.name));
+    const txt = escapeHtml(names.length>3 ? names.slice(0,3).join('、')+` 等${names.length}條` : names.join('、'));
+    return (dupIds.has(dp.id)?'🟡 ':'') + txt;
+  };
+  const rowHtml = dp=>{
+    if(editingDpId === dp.id){
+      return `<tr><td colspan="5">
+        <div class="grid3">
+          <div class="field"><label>地址</label><input id="edpAddr" value="${dp.address}"></div>
+          <div class="field"><label>所屬通路</label><select id="edpChannel">${chOpts.replace(`value="${dp.channelId}"`, `value="${dp.channelId}" selected`)}</select></div>
+          <div class="field"><label>代號</label><input id="edpCode" value="${dp.code||''}"></div>
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:4px 0 8px;"><input type="checkbox" id="edpAllowDup" ${dp.allowDuplicate?'checked':''} style="width:auto;"> 允許重複（刻意同一班次排進多條路線，涵蓋檢查不警示）</label>
+        <div class="field"><label>卸貨備註（司機排到這個店也會看到／能補寫）</label><textarea id="edpUnloadNote" rows="2" placeholder="例：從後門進，警衛室收件">${escapeHtml(dp.unloadNote||'')}</textarea></div>
+        <button class="btn amber" data-savedp="${dp.id}">儲存</button>
+        <button class="btn ghost" data-canceldp="${dp.id}">取消</button>
+      </td></tr>`;
+    }
+    const inactive = dp.status==='inactive';
+    const hasPos = dp.lat!=null && dp.lng!=null;
+    return `<tr><td class="mono">${dp.code||'—'}</td><td>${dp.address}${dp.allowDuplicate?' <span class="badge locked" title="刻意重複，涵蓋檢查不警示">允許重複</span>':''}${hasPos?'':' <span class="badge pending">沒有位置</span>'}${dp.unloadNote?`<div style="font-size:12px; background:#FFF6E0; color:#5b4500; border-radius:6px; padding:3px 7px; margin-top:4px; display:inline-block;">📝 ${escapeHtml(dp.unloadNote)}</div>`:''}</td><td style="font-size:12.5px;">${routeCell(dp)}</td><td><span class="badge ${inactive?'pending':'completed'}">${inactive?'已停用':'使用中'}</span></td>
+    <td><button class="btn ghost" data-editdp="${dp.id}">編輯</button> <button class="btn ghost" data-locdp="${dp.id}" title="在地圖上檢查或修正這家店的位置">${hasPos?'修正位置':'指定位置'}</button> ${inactive?`<button class="btn ghost" data-resumedp="${dp.id}">恢復使用</button>`:`<button class="btn ghost" data-stopdp="${dp.id}">停止配送</button>`} ${dropPointInUse(dp.id)?'':`<button class="btn danger" data-del="${dp.id}" title="這家店從來沒被路線或任務用過，可以直接刪除">刪除</button>`}</td></tr>`;
+  };
+  const head = '<thead><tr><th>代號</th><th>地址</th><th>目前排在哪些路線</th><th>狀態</th><th></th></tr></thead>';
+  wrap.innerHTML = state.data.channels.map(ch=>{
+    let rows = state.data.dropPoints.filter(dp=>dp.channelId===ch.id);
+    if(keyword){ rows = rows.filter(dp=> dp.address.toLowerCase().includes(keyword) || (dp.code||'').toLowerCase().includes(keyword)); }
+    if(keyword && !rows.length) return '';
+    if(dpOnlyMissing) rows = rows.filter(dp=> dp.status!=='inactive' && !(cov.byDp.get(dp.id)||[]).length);
+    const activeRows = rows.filter(dp=>dp.status!=='inactive');
+    const inactiveRows = rows.filter(dp=>dp.status==='inactive');
+    if(dpOnlyMissing && !rows.length) return '';
+    const collapsed = !dpExpandedChannels.has(ch.id) && !keyword && !dpOnlyMissing;
+    return `<div class="panel fold ${collapsed?'':'open'}" data-dptoggle="${ch.id}">
+      <div class="fold-head">
+        <span class="fold-title">${ch.name}（使用中 ${activeRows.length}${inactiveRows.length?`　已停用 ${inactiveRows.length}`:''}）</span><span class="fold-chev">${collapsed?'展開 ▸':'收合 ▾'}</span>
+      </div>
+      <div class="fold-body" style="${collapsed?'display:none;':''}">
+      <table>
+        ${head}
+        <tbody>
+          ${activeRows.map(rowHtml).join('') || `<tr><td colspan="5"><div class="empty">此通路目前沒有使用中的店點</div></td></tr>`}
+        </tbody>
+      </table>
+      ${inactiveRows.length ? `<details class="fold-d" style="margin-top:8px;" ${keyword?'open':''}><summary style="font-size:12.5px; color:var(--ink-soft);"><span>已停用的店點（${inactiveRows.length}）— 歷史紀錄保留，不列入涵蓋檢查</span></summary>
+        <table>${head}<tbody>${inactiveRows.map(rowHtml).join('')}</tbody></table></details>` : ''}
+      </div>
+    </div>`;
+  }).join('') || (dpOnlyMissing ? '<div class="empty">🎉 沒有未排入路線的店點</div>' : '');
+  wrap.querySelectorAll('[data-dptoggle]').forEach(h=>{
+    h.onclick = (e)=>{
+      if(clickedInFoldBody(e)) return;
+      const id = h.dataset.dptoggle;
+      if(dpExpandedChannels.has(id)) dpExpandedChannels.delete(id); else dpExpandedChannels.add(id);
+      renderDpListBody();
+    };
+  });
+  wrap.querySelectorAll('[data-locdp]').forEach(btn=>{ btn.onclick = ()=> openLocate('dp', btn.dataset.locdp); });
+  wrap.querySelectorAll('[data-editdp]').forEach(btn=>{ btn.onclick = ()=>{ editingDpId = btn.dataset.editdp; renderDpListBody(); }; });
+  wrap.querySelectorAll('[data-canceldp]').forEach(btn=>{ btn.onclick = ()=>{ editingDpId = null; renderDpListBody(); }; });
+  wrap.querySelectorAll('[data-savedp]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.savedp);
+      const newAddr = document.getElementById('edpAddr').value.trim() || dp.address;
+      try{
+        await updateDropPoint(dp.id, { address: newAddr, channelId: document.getElementById('edpChannel').value, code: document.getElementById('edpCode').value.trim() });
+        const allowDup = document.getElementById('edpAllowDup').checked;
+        if(allowDup !== !!dp.allowDuplicate) await setDropPointAllowDuplicate(dp.id, allowDup);
+        const newNote = document.getElementById('edpUnloadNote').value.trim();
+        if(newNote !== (dp.unloadNote||'')) await saveUnloadNote(dp.id, newNote);
+        editingDpId = null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-stopdp]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.stopdp);
+      const inRoutes = cov.byDp.get(btn.dataset.stopdp) || [];
+      if(!confirm(`確定「${dp?dpLabel(dp):''}」已經不配送了嗎？\n\n會改成「已停用」：歷史任務、請款、報酬紀錄都保留，新路線不會再列出它，之後可隨時恢復使用。${inRoutes.length?`\n\n注意：它目前還在 ${inRoutes.map(r=>routeDisplayName(r.name)).join('、')}，停用後涵蓋檢查會提醒你把它從路線移除；已排好的任務不受影響。`:''}`)) return;
+      try{ await setDropPointsStatus([btn.dataset.stopdp], 'inactive'); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
+  wrap.querySelectorAll('[data-resumedp]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await setDropPointsStatus([btn.dataset.resumedp], 'active'); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  wrap.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const dp = state.data.dropPoints.find(x=>x.id===btn.dataset.del);
+      if(!confirm(`確定要永久刪除店點「${dp?dpLabel(dp):''}」嗎？\n\n這家店從來沒被路線或任務用過，刪除後無法復原。（店已經不配送請用「停止配送」，不要刪除）`)) return;
+      try{
+        const result = await deleteOrDeactivateDropPoint(btn.dataset.del);
+        if(result==='deactivated') alert('這個店點已被路線版本或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+
+// ---------- 任務起點資料庫 ----------
+let editingOgId = null;
+function renderOrigins(c){
+  c.innerHTML = `
+    <h2 class="section-title">任務起點資料庫</h2>
+    <p class="section-sub">先建立好常用任務起點，路線與週期任務清單中即可用選單挑選，不用每次手key。每個起點可以產生一條不用登入的查詢連結，給起點自己看目前生效的車次與店點順序（不含任何金額或夥伴資料），路線一有異動，連結裡看到的就是最新的，不用再截圖給他們。</p>
+    <div class="panel">
+      <div class="grid2">
+        <div class="field"><label>地址</label><input id="ogAddr"></div>
+        <div class="field"><label>備註名稱（選填）</label><input id="ogLabel" placeholder="例：總倉"></div>
+      </div>
+      <button class="btn amber" id="addOg">新增任務起點</button>
+    </div>
+    <div id="ogList"></div>
+  `;
+  document.getElementById('addOg').onclick = async ()=>{
+    const addr = document.getElementById('ogAddr').value.trim();
+    if(!addr){ alert('請輸入地址'); return; }
+    try{
+      await createOrigin({ address: addr, label: document.getElementById('ogLabel').value.trim() });
+      renderContent();
+    }catch(err){ alert(err.message); }
+  };
+  renderOgList();
+}
+function renderOgList(){
+  const el = document.getElementById('ogList');
+  el.innerHTML = `
+    <div class="panel">
+      <table>
+        <thead><tr><th>名稱</th><th>地址</th><th>地圖位置</th><th>狀態</th><th>行程查詢連結</th><th></th></tr></thead>
+        <tbody>
+          ${state.data.origins.map(og=>{
+            if(editingOgId === og.id){
+              return `<tr><td colspan="6">
+                <div class="grid2">
+                  <div class="field"><label>地址</label><input id="eogAddr" value="${escapeHtml(og.address)}"></div>
+                  <div class="field"><label>備註名稱</label><input id="eogLabel" value="${escapeHtml(og.label||'')}"></div>
+                </div>
+                <button class="btn amber" data-saveog="${og.id}">儲存</button>
+                <button class="btn ghost" data-cancelog="${og.id}">取消</button>
+              </td></tr>`;
+            }
+            const hasPos = og.lat!=null && og.lng!=null;
+            const ogUrl = og.accessToken ? `${location.origin}/origin.html?token=${og.accessToken}` : '';
+            return `<tr><td>${escapeHtml(og.label||'—')}</td><td>${escapeHtml(og.address)}</td><td>${hasPos?'<span style="color:var(--teal);">已定位</span>':'<span style="color:var(--danger);">還沒有位置</span>'} <button class="btn ghost" data-locog="${og.id}" style="padding:2px 8px; font-size:12px;">${hasPos?'修正':'指定位置'}</button></td><td><span class="badge ${og.status==='inactive'?'pending':'completed'}">${og.status==='inactive'?'已停用':'使用中'}</span></td>
+            <td>${ogUrl ? `<input class="mono" readonly value="${ogUrl}" style="font-size:11px; padding:4px 6px; max-width:220px;" onclick="this.select()"> <button class="btn ghost" data-regenog="${og.id}" style="padding:2px 8px; font-size:12px;">重新產生</button>` : `<button class="btn ghost" data-genog="${og.id}" style="padding:2px 8px; font-size:12px;">產生連結</button>`}</td>
+            <td><button class="btn ghost" data-editog="${og.id}">編輯</button> ${og.status!=='inactive'?`<button class="btn danger" data-del="${og.id}">刪除</button>`:''}</td></tr>`;
+          }).join('') || `<tr><td colspan="6"><div class="empty">尚無任務起點資料</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+  el.querySelectorAll('[data-locog]').forEach(btn=>{ btn.onclick = ()=> openLocate('origin', btn.dataset.locog); });
+  el.querySelectorAll('[data-genog]').forEach(btn=>{
+    btn.onclick = async ()=>{ try{ await regenerateOriginAccessToken(btn.dataset.genog); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  el.querySelectorAll('[data-regenog]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('重新產生會讓舊的連結失效，這個起點要改用新連結。確定要繼續嗎？')) return;
+      try{ await regenerateOriginAccessToken(btn.dataset.regenog); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-editog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = btn.dataset.editog; renderOgList(); }; });
+  el.querySelectorAll('[data-cancelog]').forEach(btn=>{ btn.onclick = ()=>{ editingOgId = null; renderOgList(); }; });
+  el.querySelectorAll('[data-saveog]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const og = state.data.origins.find(x=>x.id===btn.dataset.saveog);
+      try{
+        await updateOrigin(og.id, { address: document.getElementById('eogAddr').value.trim() || og.address, label: document.getElementById('eogLabel').value.trim() });
+        editingOgId = null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  el.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const og = state.data.origins.find(x=>x.id===btn.dataset.del);
+      if(!confirm(`確定要刪除任務起點「${og?.label||og?.address||''}」嗎？\n\n如果這個任務起點已被路線或歷史任務使用，系統會改為「已停用」，新路線將不會再顯示它；如果從未使用過，會直接永久刪除、無法復原。`)) return;
+      try{
+        const result = await deleteOrDeactivateOrigin(btn.dataset.del);
+        if(result==='deactivated') alert('這個任務起點已被路線或歷史任務使用，無法直接刪除，已改為「已停用」，新路線將不會再顯示它。');
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+
+// ---------- 路線管理（版本化，不綁夥伴） ----------
+function distinctRegions(){
+  return [...new Set(state.data.routes.map(r=>r.region).filter(Boolean))].sort();
+}
+function renderRoutes(c){
+  const ogOptsTop = state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  const regionOpts = distinctRegions().map(rg=>`<option value="${rg}"></option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">路線管理</h2>
+    <p class="section-sub">路線本身不綁夥伴。修改店點組合並設定生效日，系統會自動保留舊版本、開啟新版本。</p>
+    <div id="covHost"></div>
+    <div class="panel">
+      <div class="grid4">
+        <div class="field"><label>任務起點</label><select id="rOrigin">${ogOptsTop}</select></div>
+        <div class="field"><label>車次</label><input id="rSeq" placeholder="例：第一車"></div>
+        <div class="field"><label>班次</label><select id="rShift"><option value="AM">上午</option><option value="PM">下午</option></select></div>
+        <div class="field"><label>地區（選填，用於下方收合分組）</label><input id="rRegion" list="regionOptions" placeholder="例：北區"></div>
+      </div>
+      <datalist id="regionOptions">${regionOpts}</datalist>
+      <button class="btn amber" id="addRoute">新增路線</button>
+    </div>
+    <div id="routeList"></div>
+  `;
+  document.getElementById('addRoute').onclick = async ()=>{
+    const originAddr = document.getElementById('rOrigin').value;
+    const seq = document.getElementById('rSeq').value.trim();
+    const shift = document.getElementById('rShift').value;
+    const region = document.getElementById('rRegion').value.trim();
+    if(!originAddr || !seq){ alert('請選擇任務起點並輸入車次'); return; }
+    const og = state.data.origins.find(o=>o.address===originAddr);
+    const name = `${og?(og.label||og.address):originAddr} ${seq} ${shift==='AM'?'上午':'下午'}`;
+    try{
+      await createRoute({ name, originAddr, seq, shift, region });
+      renderRoutes(c);
+    }catch(err){ alert(err.message); }
+  };
+  renderCoveragePanel();
+  renderRouteList();
+}
+let routeDraft = {};
+let expandedRouteId = null;
+let expandedRouteBox = null; // 目前展開中那張路線卡片自己的 .fold-body（data-routebody），
+// 讓 renderRouteDetail() 內部存檔/刪除後能重新渲染回同一個位置，不會跳回頁面最底部的舊容器。
+let routeListSearch = '';
+let regionExpandedSet = new Set(); // 使用者手動展開過的地區名稱，預設全部收合
+function ensureDraft(route){
+  if(!routeDraft[route.id]){
+    const open = (route.versions||[]).find(v=>!v.end);
+    // 已存的拆賬金額／請款總額是「含額外固定費」的最終數字；編輯時分開成「基本」與「額外固定費」兩部分顯示，
+    // 這樣之後改里程或店數、系統重新計算基本金額時，不會把額外固定費蓋掉。
+    const extras = (open?.extraFees||[]).map(x=>({ channelId:x.channelId, amount:Number(x.amount)||0, note:x.note||'', solo:x.solo!==false }));
+    const base = open?.billingByChannel ? {...open.billingByChannel} : null;
+    if(base) extras.forEach(x=>{
+      if(x.channelId in base) base[x.channelId] = (Number(base[x.channelId])||0) - x.amount;
+      if(x.solo && Math.abs(Number(base[x.channelId])||0) < 0.5) delete base[x.channelId]; // 只收固定費的通路：基本拆款裡沒有它
+    });
+    const extraSum = extras.reduce((s,x)=>s+x.amount,0);
+    routeDraft[route.id] = {
+      order: open ? [...open.dropPointIds] : [], dpSearch: '',
+      distanceKm: open?.distanceKm ?? '', driverFare: open?.driverFare ?? '',
+      billingTotal: (open?.billingTotal ?? '')==='' ? '' : (Number(open.billingTotal)||0) - extraSum,
+      billingByChannel: base,
+      extraFees: extras,
+      splitManuallyEdited: false
+    };
+  }
+  return routeDraft[route.id];
+}
+function renderRouteList(){
+  const el = document.getElementById('routeList');
+  el.innerHTML = `
+    <div class="field" style="max-width:320px;"><label>搜尋路線（依名稱／任務起點／車次）</label><input id="routeSearch" value="${routeListSearch}" placeholder="輸入關鍵字篩選，路線多時建議先搜尋"></div>
+    <div style="display:flex; gap:10px; margin-bottom:10px;">
+      <button class="btn ghost" id="routeExpandAll" style="padding:5px 12px; font-size:12.5px;">全部展開</button>
+      <button class="btn ghost" id="routeCollapseAll" style="padding:5px 12px; font-size:12.5px;">全部收合</button>
+    </div>
+    <div id="routeTableWrap"></div>
+  `;
+  renderRouteTable();
+  document.getElementById('routeExpandAll').onclick = ()=>{ state.data.routes.forEach(r=>regionExpandedSet.add(r.region || '未分類')); renderRouteTable(); };
+  document.getElementById('routeCollapseAll').onclick = ()=>{ regionExpandedSet.clear(); renderRouteTable(); };
+  const searchEl = document.getElementById('routeSearch');
+  let composing = false;
+  searchEl.addEventListener('compositionstart', ()=>{ composing = true; });
+  searchEl.addEventListener('compositionend', (e)=>{ composing=false; routeListSearch = e.target.value; renderRouteTable(); });
+  searchEl.addEventListener('input', (e)=>{
+    if(composing) return;
+    routeListSearch = e.target.value;
+    renderRouteTable();
+  });
+}
+// 第七車/第八車這種「星期一報價、週二到五實跑」分成兩條路線的車次，請款
+// 金額一律跟著星期一報價版本走（跟 effectiveByChannelForAssignment() 同一套
+// 規則）——週二到五那條路線自己的版本本來就不會填請款金額，不能直接讀
+// 自己的 billingTotal，不然會變成0，跟夥伴費用相減還會出現莫名其妙的負數。
+function billingVersionFor(r){
+  const quoteRoute = findMondayQuoteRoute(r) || r;
+  return (quoteRoute.versions||[]).find(v=>!v.end);
+}
+function routeRowHtml(r){
+  // 夥伴費用／請款費用現在是路線「目前生效版本」裡人工填好的數字
+  // （見路線管理下方的版本設定），不再是每趟臨時填的。
+  const openVersion = (r.versions||[]).find(v=>!v.end);
+  const billingVersion = billingVersionFor(r);
+  const fareText = openVersion && openVersion.driverFare != null ? `$${money(openVersion.driverFare)}` : '尚未設定';
+  const billingText = billingVersion && billingVersion.billingTotal != null ? `$${money(billingVersion.billingTotal)}` : '尚未設定';
+  const hasBoth = openVersion && openVersion.driverFare != null && billingVersion && billingVersion.billingTotal != null;
+  const marginText = hasBoth ? `$${money(billingVersion.billingTotal - openVersion.driverFare)}` : '—';
+  const open = expandedRouteId===r.id;
+  // 路線本身也用跟地區一樣的收合卡片樣式（.fold）：整排都能點開，不用額外的「管理」按鈕文字；
+  // 手機版不會因為獨立的按鈕欄位被撐出表格寬度，順便解決了手機版要左右滑動才看得到「管理」的問題。
+  const marginColor = hasBoth ? ((billingVersion.billingTotal - openVersion.driverFare) >= 0 ? 'var(--teal)' : 'var(--danger)') : 'inherit';
+  return `<div class="fold route-fold ${open?'open':''}" data-toggleroute="${r.id}">
+    <div class="fold-head route-head">
+      <span style="font-weight:600;">${routeDisplayName(r.name)}${r.status==='inactive'?' <span class="badge pending">已停用</span>':''}</span>
+      <div class="route-stats">
+        <div class="route-stat"><span class="route-stat-label">夥伴</span><span class="route-stat-value">${fareText}</span></div>
+        <div class="route-stat"><span class="route-stat-label">請款</span><span class="route-stat-value">${billingText}</span></div>
+        <div class="route-stat"><span class="route-stat-label">毛利</span><span class="route-stat-value" style="color:${marginColor};">${marginText}</span></div>
+      </div>
+      <span class="fold-chev">${open?'▾':'▸'}</span>
+    </div>
+    <div class="fold-body" data-routebody="${r.id}" style="${open?'':'display:none;'}"></div>
+  </div>`;
+}
+function renderRouteTable(){
+  const wrap = document.getElementById('routeTableWrap');
+  const kw = routeListSearch.trim().toLowerCase();
+  const filtered = sortedRoutes().filter(r=>{
+    if(!kw) return true;
+    const og = state.data.origins.find(o=>o.address===r.originAddr);
+    const originText = (og?(og.label||og.address):r.originAddr||'').toLowerCase();
+    // routeDisplayName() 把「第一車」轉成「R1」只是畫面顯示、不會改資料庫裡存的 r.name，
+    // 但使用者搜尋時打的是畫面上看到的「R1」，只比對 r.name 原始字串會完全比對不到，一律加進來一起比對。
+    return r.name.toLowerCase().includes(kw) || routeDisplayName(r.name).toLowerCase().includes(kw) || originText.includes(kw) || (r.seq||'').toLowerCase().includes(kw);
+  });
+  if(!filtered.length){
+    wrap.innerHTML = `<div class="panel"><div class="empty">${kw?'找不到符合的路線':'尚未建立任何路線'}</div></div>`;
+    return;
+  }
+  const inactiveRoutes = filtered.filter(r=>r.status==='inactive');
+  const byRegion = {};
+  filtered.filter(r=>r.status!=='inactive').forEach(r=>{ const key = r.region || '未分類'; if(!byRegion[key]) byRegion[key] = []; byRegion[key].push(r); });
+  const regionKeys = Object.keys(byRegion).filter(k=>k!=='未分類').sort();
+  if(byRegion['未分類']) regionKeys.push('未分類');
+  wrap.innerHTML = regionKeys.map(region=>{
+    const rows = byRegion[region];
+    const collapsed = !regionExpandedSet.has(region) && !kw;
+    return `<div class="panel fold ${collapsed?'':'open'}" data-regiontoggle="${region}">
+      <div class="fold-head">
+        <span class="fold-title">${region}（${rows.length}）</span><span class="fold-chev">${collapsed?'▸':'▾'}</span>
+      </div>
+      <div class="fold-body" style="${collapsed?'display:none;':''}">
+        ${rows.map(routeRowHtml).join('')}
+      </div>
+    </div>`;
+  }).join('') + (inactiveRoutes.length ? `<div class="panel">
+      <details class="fold-d" ${kw || inactiveRoutes.some(r=>r.id===expandedRouteId) ? 'open' : ''}><summary style="font-weight:700;"><span>已停用的路線（${inactiveRoutes.length}）<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— 不出現在週期任務清單，歷史紀錄保留，可隨時恢復</span></span></summary>
+        <div style="margin-top:8px;">${inactiveRoutes.map(routeRowHtml).join('')}</div>
+      </details>
+    </div>` : '');
+  wrap.querySelectorAll('[data-regiontoggle]').forEach(h=>{
+    h.onclick = (e)=>{
+      if(clickedInFoldBody(e)) return;
+      const key = h.dataset.regiontoggle;
+      if(regionExpandedSet.has(key)) regionExpandedSet.delete(key); else regionExpandedSet.add(key);
+      renderRouteTable();
+    };
+  });
+  wrap.querySelectorAll('[data-toggleroute]').forEach(card=>{
+    card.onclick = (e)=>{
+      // 路線卡片包在地區卡片的 .fold-body 裡面，點路線卡片本身的標題，事件路徑上一定會經過
+      // 地區那層 .fold-body——clickedInFoldBody() 看到就會以為「點到內容區裡面」而擋掉，
+      // 這裡只需要擋「點到自己展開後的管理內容」，所以改成只檢查 card 自己裡面的 .fold-body。
+      if(e.composedPath().some(el=> el && el.classList && el.classList.contains('fold-body') && card.contains(el))) return;
+      expandedRouteId = (expandedRouteId===card.dataset.toggleroute) ? null : card.dataset.toggleroute;
+      expandedRouteBox = null;
+      renderRouteTable();
+    };
+  });
+  // 管理面板直接展開在點擊的那張路線卡片自己的 .fold-body 裡，不用再滑到頁面最底部看；
+  // 同一張再點一次收合。路線只能同時展開一個（跟 expandedRouteId 本來就是單一值一致），
+  // 不用擔心多個面板互相干擾。
+  if(expandedRouteId){
+    const card = wrap.querySelector(`[data-toggleroute="${expandedRouteId}"]`);
+    if(card){
+      expandedRouteBox = card.querySelector('[data-routebody]');
+      renderRouteDetail(expandedRouteId);
+    } else {
+      // 展開中的路線被搜尋篩掉了，不用維持展開狀態
+      expandedRouteId = null;
+      expandedRouteBox = null;
+    }
+  }
+}
+// 路線費用自動計算：里程 × 每公里單價 ＋ 店數 × 每店單價。主控在路線版本打完里程（或增減店點）後
+// 自動填入夥伴費用與請款總額，隨時可以手動改；但只要里程或店數又變動，數據已經不同，就一律重新計算覆蓋。
+const ROUTE_FEE_RATES = { driverPerKm:25, driverPerStore:30, billingPerKm:35, billingPerStore:50 };
+function calcRouteFees(km, stores){
+  const k = Number(km)||0, n = Number(stores)||0;
+  return {
+    driverFare: Math.round(k*ROUTE_FEE_RATES.driverPerKm + n*ROUTE_FEE_RATES.driverPerStore),
+    billingTotal: Math.round(k*ROUTE_FEE_RATES.billingPerKm + n*ROUTE_FEE_RATES.billingPerStore)
+  };
+}
+// 里程有填時，依目前里程與店數重算草稿的夥伴費用／請款總額（里程或店數一變動就覆蓋，不管之前有沒有手動改過）。回傳是否有套用。
+function applyAutoFees(draft){
+  if(draft.distanceKm==='' || draft.distanceKm==null || isNaN(Number(draft.distanceKm))) return false;
+  const f = calcRouteFees(draft.distanceKm, draft.order.length);
+  draft.driverFare = f.driverFare; draft.billingTotal = f.billingTotal;
+  return true;
+}
+// 修正歷史版本：只改「生效開始日」或「各通路拆賬金額」，不動店點／里程／夥伴費用，也不用重建版本。
+// 拖拉只在電腦版（滑鼠、較寬的畫面）啟用；手機維持原本的點按操作。
+function desktopDnd(){ return window.matchMedia && window.matchMedia('(min-width:701px) and (pointer:fine)').matches; }
+// 路線管理：拖拉店點卡片調整順序（放開後順序馬上更新，里程費用的店數也跟著算）
+function bindStopDrag(detailEl, rid){
+  const list = detailEl.querySelector(`[data-orderlist="${rid}"]`);
+  if(!list || !desktopDnd()) return;
+  let from = null;
+  const cards = [...list.querySelectorAll('[data-dragidx]')];
+  const clear = ()=> cards.forEach(c=>c.classList.remove('dnd-before','dnd-after','dragging'));
+  cards.forEach(c=>{
+    c.addEventListener('dragstart', e=>{ from = Number(c.dataset.dragidx); c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'stop:'+from); });
+    c.addEventListener('dragend', ()=>{ clear(); from = null; });
+    c.addEventListener('dragover', e=>{
+      if(from===null) return; e.preventDefault();
+      const r = c.getBoundingClientRect(), before = (e.clientY - r.top) < r.height/2;
+      cards.forEach(x=>x.classList.remove('dnd-before','dnd-after'));
+      c.classList.add(before ? 'dnd-before' : 'dnd-after');
+    });
+    c.addEventListener('drop', e=>{
+      if(from===null) return; e.preventDefault();
+      const r = c.getBoundingClientRect(), before = (e.clientY - r.top) < r.height/2;
+      let to = Number(c.dataset.dragidx) + (before ? 0 : 1);
+      const order = routeDraft[rid].order;
+      const [moved] = order.splice(from, 1);
+      if(from < to) to--;
+      order.splice(to, 0, moved);
+      clear(); from = null;
+      applyAutoFees(routeDraft[rid]);
+      renderRouteDetail(rid);
+    });
+  });
+}
+// ---------- 路線地圖：站點連線、行車路徑、預計到達時間（電腦版路線管理） ----------
+// 地圖用 Leaflet＋OpenStreetMap，路徑用 OSRM，地址轉座標用 Nominatim——全部免費、不用金鑰、直接從瀏覽器連線，
+// 不經過 Supabase（不佔你的資料庫流量）。座標存在店點／任務起點上，第一次補齊之後就不用再查。
+// 預計時間 ＝ 行車時間（不含塞車）＋ 每站停留時間，只是估算，給調整順序時參考。
+let _leafletP = null;
+function loadLeaflet(){
+  if(window.L) return Promise.resolve();
+  if(_leafletP) return _leafletP;
+  _leafletP = new Promise((res, rej)=>{
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css'; css.integrity = LIB_SRI[css.href]; css.crossOrigin = 'anonymous'; document.head.appendChild(css);
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js'; sc.integrity = LIB_SRI[sc.src]; sc.crossOrigin = 'anonymous';
+    sc.onload = ()=>res(); sc.onerror = ()=>{ _leafletP = null; rej(new Error('地圖元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _leafletP;
+}
+const ROUTE_DWELL_DEFAULT_MIN = 5;
+function fmtClock(startHHMM, addMin){
+  const [h, m] = (startHHMM||'08:00').split(':').map(Number);
+  const t = (h*60 + m + Math.round(addMin)) % (24*60);
+  return String(Math.floor(t/60)).padStart(2,'0') + ':' + String(t%60).padStart(2,'0');
+}
+async function renderRouteMap(rid){
+  const el = document.getElementById('rvMap'); if(!el) return;
+  const route = state.data.routes.find(x=>x.id===rid), draft = routeDraft[rid];
+  if(!route || !draft) return;
+  const summary = document.getElementById('rvMapSummary'), etaEl = document.getElementById('rvEta');
+  summary.textContent = '地圖載入中…';
+  try{ await loadLeaflet(); }catch(e){ summary.textContent = e.message; return; }
+  if(!el.isConnected) return;
+  if(window._rvMap){ try{ window._rvMap.remove(); }catch(e){} window._rvMap = null; }
+  const og = state.data.origins.find(o=>o.address===route.originAddr);
+  // 任務起點沒有座標就先查一次（只查一次，存起來）
+  if(og && (og.lat==null || og.lng==null) && !og._geoTried){
+    og._geoTried = true; // 查不到就不要每次重畫地圖都再查一輪（很慢），改用「指定起點位置」手動補
+    summary.textContent = '正在查詢任務起點位置…';
+    const g = await geocodeAddress(og.address);
+    if(g){ try{ await saveOriginCoord(og.id, g.lat, g.lng); }catch(e){ og.lat = g.lat; og.lng = g.lng; } }
+  }
+  const pts = draft.order.map(id=>state.data.dropPoints.find(d=>d.id===id)).filter(Boolean);
+  const located = pts.filter(d=>d.lat!=null && d.lng!=null);
+  const missing = pts.filter(d=>d.lat==null || d.lng==null);
+  const originOk = og && og.lat!=null && og.lng!=null;
+  if(!located.length && !originOk){
+    summary.innerHTML = '這條路線的店點還沒有地圖座標。請先到「店點資料庫」按「補齊地圖座標」，或在下面一家一家點地圖設定位置。';
+  }
+  const map = L.map(el, { scrollWheelZoom:true });
+  window._rvMap = map;
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+  const mk = (n, bg)=> L.divIcon({ className:'', html:`<div style="background:${bg};color:#fff;border-radius:50%;width:26px;height:26px;line-height:22px;text-align:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);font-size:13px;">${n}</div>`, iconSize:[26,26], iconAnchor:[13,13] });
+  const all = [];
+  if(originOk){ L.marker([og.lat, og.lng], { icon: mk('⌂', '#5B6472') }).addTo(map).bindTooltip('出發：'+(og.label||og.address)); all.push([og.lat, og.lng]); }
+  pts.forEach((d, i)=>{
+    if(d.lat==null || d.lng==null) return;
+    const m = L.marker([d.lat, d.lng], { icon: mk(i+1, '#E0902E'), draggable:true }).addTo(map).bindTooltip(`${i+1}. ${dpLabel(d)}（拖曳可修正位置）`);
+    m.on('dragend', async ()=>{
+      const ll = m.getLatLng();
+      if(!confirm(`把「${dpLabel(d)}」的位置改到這裡？`)){ renderRouteMap(rid); return; }
+      try{ await saveDropPointCoord(d.id, ll.lat, ll.lng); toast('位置已更新', { type:'ok' }); }catch(e){ toast(e.message, { type:'error' }); }
+      renderRouteMap(rid);
+    });
+    all.push([d.lat, d.lng]);
+  });
+  if(all.length) map.fitBounds(all, { padding:[30,30], maxZoom:16 }); else map.setView([25.05, 121.52], 11);
+  // 沒座標的店：一家一家在地圖上點選位置
+  let placing = null;
+  const missHtml = missing.length ? `<div class="note" style="margin:8px 0;">這 ${missing.length} 家還沒有位置，路線沒有算進去：${missing.map(d=>`<button class="btn ghost" data-place="${d.id}" style="padding:2px 8px; font-size:12px; margin:2px;">${escapeHtml(dpLabel(d))}：點地圖設定</button>`).join('')}</div>` : '';
+  map.on('click', async e=>{
+    if(!placing) return;
+    const d = placing; placing = null; el.style.cursor = '';
+    if(!confirm(`把「${dpLabel(d)}」設在這個位置？`)) return;
+    try{ await saveDropPointCoord(d.id, e.latlng.lat, e.latlng.lng); toast('位置已儲存', { type:'ok' }); }catch(err){ toast(err.message, { type:'error' }); }
+    renderRouteMap(rid);
+  });
+  // 路徑
+  const seq = [];
+  if(originOk) seq.push({ ll:[og.lat, og.lng], label:'出發' });
+  pts.forEach((d,i)=>{ if(d.lat!=null && d.lng!=null) seq.push({ ll:[d.lat, d.lng], dp:d, n:i+1 }); });
+  let rt = null;
+  if(seq.length >= 2){ summary.textContent = '計算路線中…'; rt = await fetchRoadRoute(seq.map(s=>s.ll)); }
+  if(!el.isConnected || window._rvMap !== map) return;
+  if(seq.length >= 2){
+    if(rt){ L.polyline(rt.line, { color:'#E0902E', weight:5, opacity:.85 }).addTo(map); }
+    else { L.polyline(seq.map(s=>s.ll), { color:'#E0902E', weight:4, dashArray:'6 8', opacity:.8 }).addTo(map); }
+  }
+  const dwell = Number(draft.dwell ?? ROUTE_DWELL_DEFAULT_MIN);
+  const start = draft.startTime || '08:00';
+  let html = '';
+  if(rt){
+    const driveMin = rt.sec/60;
+    const stopsN = pts.filter(d=>d.lat!=null && d.lng!=null).length;
+    const totalMin = driveMin + dwell*stopsN;
+    html += `<div style="display:flex; gap:14px; flex-wrap:wrap; align-items:baseline; margin:6px 0;">
+      <span>地圖里程 <b>${rt.km.toFixed(1)} km</b></span><span>行車約 <b>${Math.round(driveMin)} 分</b></span><span>含停留約 <b>${Math.round(totalMin)} 分</b>（${fmtClock(start,0)} 出發 → ${fmtClock(start,totalMin)} 完成）</span>
+      <button class="btn ghost" id="rvUseKm" style="padding:3px 10px; font-size:12px;">採用地圖里程 ${rt.km.toFixed(1)} km</button></div>`;
+    // 每站預計到達
+    let acc = 0, legIdx = 0; const rows = [];
+    seq.forEach((s, idx)=>{
+      if(idx>0){ acc += rt.legs[legIdx] ? rt.legs[legIdx].s/60 : 0; legIdx++; }
+      if(s.dp){ rows.push(`<tr><td>${s.n}</td><td>${escapeHtml(dpLabel(s.dp))}</td><td class="amount">${idx>0 && rt.legs[legIdx-1] ? (rt.legs[legIdx-1].m/1000).toFixed(1)+' km' : '—'}</td><td class="amount">${fmtClock(start, acc + dwell*(rows.length))}</td></tr>`); }
+    });
+    html += `<table style="margin-top:6px;"><thead><tr><th>站</th><th>店點</th><th>距上一點</th><th>預計到達</th></tr></thead><tbody>${rows.join('')}</tbody></table>
+      <div style="font-size:11.5px; color:var(--ink-soft); margin-top:4px;">預計時間＝行車時間（不含塞車）＋每站停留 ${dwell} 分，僅供調整順序時參考。路徑資料來自 OpenStreetMap／OSRM。</div>`;
+  } else if(seq.length>=2){
+    html += '<div class="note" style="margin:6px 0;">路徑服務暫時連不上，先用虛線連接各站（只是直線示意）。</div>';
+  }
+  summary.innerHTML = missHtml + (originOk ? '' : (og ? `<div class="note" style="margin:6px 0;">任務起點的位置查不到，路線從第一站開始算。 <button class="btn amber" data-locog="${og.id}" style="padding:2px 10px; font-size:12px;">指定起點位置</button></div>` : ''));
+  etaEl.innerHTML = html;
+  summary.querySelectorAll('[data-locog]').forEach(b=>{ b.onclick = ()=> openLocate('origin', b.dataset.locog, ()=>renderRouteMap(rid)); });
+  summary.querySelectorAll('[data-place]').forEach(b=>{ b.onclick = ()=>{ placing = state.data.dropPoints.find(d=>d.id===b.dataset.place); el.style.cursor = 'crosshair'; toast(`請在地圖上點一下「${dpLabel(placing)}」的位置`, { type:'info' }); }; });
+  const useKm = etaEl.querySelector('#rvUseKm');
+  if(useKm) useKm.onclick = ()=>{ draft.distanceKm = Math.round(rt.km*10)/10; applyAutoFees(draft); toast(`已採用地圖里程 ${draft.distanceKm} km，夥伴費用與請款總額已依公式重算。`, { type:'ok' }); renderRouteDetail(rid); };
+}
+function bindRouteMap(detailEl, rid){
+  const draft = routeDraft[rid]; if(!draft) return;
+  const tg = detailEl.querySelector('#rvMapToggle'), body = detailEl.querySelector('#rvMapBody');
+  if(!tg || !body) return;
+  const sync = ()=>{ body.style.display = draft.mapOpen ? 'block' : 'none'; tg.textContent = draft.mapOpen ? '收起地圖' : '顯示地圖與預計時間'; };
+  sync();
+  tg.onclick = ()=>{ draft.mapOpen = !draft.mapOpen; sync(); if(draft.mapOpen) renderRouteMap(rid); else if(window._rvMap){ try{ window._rvMap.remove(); }catch(e){} window._rvMap = null; } };
+  const st = detailEl.querySelector('#rvStartTime'), dw = detailEl.querySelector('#rvDwell');
+  if(st) st.onchange = ()=>{ draft.startTime = st.value || '08:00'; if(draft.mapOpen) renderRouteMap(rid); };
+  if(dw) dw.onchange = ()=>{ draft.dwell = Math.max(0, Number(dw.value)||0); if(draft.mapOpen) renderRouteMap(rid); };
+  if(draft.mapOpen) renderRouteMap(rid);
+}
+function bindVersionFix(container, route){
+  container.querySelectorAll('[data-verfix]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const v = route.versions.find(x=>x.id===btn.dataset.verfix); if(!v) return;
+      const box = container.querySelector(`[data-verfixbox="${v.id}"]`);
+      if(box.innerHTML){ box.innerHTML = ''; return; }
+      const sorted = [...route.versions].sort((x,y)=>x.start.localeCompare(y.start));
+      const isFirst = sorted[0].id === v.id;
+      const cids = [...new Set([...Object.keys(v.billingByChannel||{}), ...(v.dropPointIds||[]).map(id=>(state.data.dropPoints.find(d=>d.id===id)||{}).channelId).filter(Boolean)])];
+      const quote = findMondayQuoteRoute(route);
+      const quoteNote = (quote && quote.id!==route.id) ? `<div class="note" style="margin:6px 0;">這條路線的請款金額是依「${escapeHtml(routeDisplayName(quote.name))}」那條的版本計算，要修正金額請到那一條改拆賬；日期則兩條要一起對齊。</div>` : '';
+      box.innerHTML = `<div class="note" style="margin-top:8px;">
+        <b>修正這個版本（${v.start} 起）</b>
+        ${quoteNote}
+        <div style="margin:8px 0 4px; font-weight:600;">① 生效開始日</div>
+        ${isFirst ? '<div style="font-size:12px; color:var(--ink-soft);">這是第一個版本，不能改開始日。</div>' : `<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;"><input type="date" class="vfDate" value="${v.start}" style="width:auto;"><button class="btn amber vfSaveDate" style="padding:5px 12px; font-size:12px;">儲存日期</button></div>
+        <div class="vfDateImpact" style="font-size:12px; color:var(--ink-soft); margin-top:4px;">改日期時，上一個版本的結束日會自動跟著調整。</div>`}
+        <div style="margin:12px 0 4px; font-weight:600;">② 各通路拆賬金額（請款總額＝加總）</div>
+        ${cids.length ? `<div style="display:flex; gap:10px; flex-wrap:wrap;">${cids.map(cid=>`<div class="field" style="margin:0; max-width:150px;"><label>${escapeHtml(channelName(cid))}</label><input type="number" class="vfSplit" data-cid="${cid}" value="${v.billingByChannel?.[cid] ?? 0}"></div>`).join('')}</div>
+        <div class="vfSum" style="font-size:12px; margin:4px 0;"></div>
+        <button class="btn amber vfSaveSplit" style="padding:5px 12px; font-size:12px;">儲存拆賬</button>` : '<div style="font-size:12px; color:var(--ink-soft);">這個版本沒有可拆的通路。</div>'}
+      </div>`;
+      // 日期：選了新日期就即時顯示影響
+      const dateEl = box.querySelector('.vfDate');
+      if(dateEl){
+        let seq = 0;
+        dateEl.onchange = async ()=>{
+          const my = ++seq, nd = dateEl.value, out = box.querySelector('.vfDateImpact');
+          if(!nd || nd===v.start){ out.textContent = '改日期時，上一個版本的結束日會自動跟著調整。'; return; }
+          out.textContent = '計算影響…';
+          try{
+            const im = await versionDateImpact(route, v, nd);
+            if(my!==seq || !im.range) return;
+            out.innerHTML = `${im.range[0]}${im.range[0]===im.range[1]?'':'～'+im.range[1]} 這段會改用「${im.dst.start} 起」的版本（原本是「${im.src.start} 起」），這段有 <b>${im.dates.length}</b> 趟已完成的任務，請款金額約 ${im.delta>=0?'增加':'減少'} <b>$${money(Math.abs(im.delta))}</b>（夥伴薪資不變）。`;
+          }catch(e){ out.textContent = e.message; }
+        };
+        box.querySelector('.vfSaveDate').onclick = async ()=>{
+          const nd = dateEl.value;
+          try{
+            const im = await versionDateImpact(route, v, nd);
+            const msg = im.range ? `把這個版本的開始日從 ${v.start} 改成 ${nd}？\n\n${im.range[0]}${im.range[0]===im.range[1]?'':'～'+im.range[1]} 這段會改用「${im.dst.start} 起」的版本，有 ${im.dates.length} 趟已完成的任務，請款金額約${im.delta>=0?'增加':'減少'} $${money(Math.abs(im.delta))}。\n夥伴薪資不變；上一個版本的結束日會自動調整。` : '確定要改嗎？';
+            if(!confirm(msg)) return;
+            await updateVersionStart(route.id, v.id, nd);
+            toast('已更新版本開始日，請款結算會自動重算。', { type:'ok' });
+            renderContent();
+          }catch(e){ toast(e.message, { type:'error' }); }
+        };
+      }
+      // 拆賬
+      const sumEl = box.querySelector('.vfSum');
+      const upd = ()=>{ if(!sumEl) return; const tot = [...box.querySelectorAll('.vfSplit')].reduce((sum,i)=>sum+(Number(i.value)||0),0); const old = Number(v.billingTotal)||0; sumEl.innerHTML = `請款總額 <b>$${money(tot)}</b>（原本 $${money(old)}${tot!==old?`，${tot>old?'增加':'減少'} $${money(Math.abs(tot-old))}／趟`:''}）`; };
+      box.querySelectorAll('.vfSplit').forEach(i=> i.oninput = upd); upd();
+      const saveSplit = box.querySelector('.vfSaveSplit');
+      if(saveSplit) saveSplit.onclick = async ()=>{
+        const map = {}; box.querySelectorAll('.vfSplit').forEach(i=>{ map[i.dataset.cid] = i.value===''?0:i.value; });
+        try{
+          const nTrips = (await completedTripDatesInRange(route.id, v.start, v.end || '9999-12-31')).length;
+          const tot = Object.values(map).reduce((sum,n)=>sum+(Number(n)||0),0), old = Number(v.billingTotal)||0;
+          if(!confirm(`修正「${v.start} 起」這個版本的拆賬？\n\n請款總額 $${money(old)} → $${money(tot)}（每趟${tot>=old?'增加':'減少'} $${money(Math.abs(tot-old))}）。\n這個版本期間有 ${nTrips} 趟已完成的任務，請款合計約${tot>=old?'增加':'減少'} $${money(Math.abs(tot-old)*nTrips)}。\n夥伴薪資不變；請款結算與首頁利潤會自動重算。\n\n如果這段期間的請款單已經開給客戶，建議改用請款結算的「調整項」補差額。`)) return;
+          await updateVersionSplit(route.id, v.id, map);
+          delete routeDraft[route.id]; // 草稿是舊金額拆出來的，丟掉讓編輯畫面依新金額重建
+          toast('已更新拆賬金額，請款結算會自動重算。', { type:'ok' });
+          renderContent();
+        }catch(e){ toast(e.message, { type:'error' }); }
+      };
+    };
+  });
+}
+function renderRouteDetail(rid){
+  const detailEl = expandedRouteBox;
+  if(!detailEl) return;
+  const r = state.data.routes.find(x=>x.id===rid);
+  if(!r){ detailEl.innerHTML=''; return; }
+  const versions = [...(r.versions||[])].sort((a,b)=>a.start.localeCompare(b.start));
+  const hasHistory = versions.some(v=>v.end);
+  const openVersion = versions.find(v=>!v.end);
+  const closedVersions = versions.filter(v=>v.end);
+  const og = state.data.origins.find(o=>o.address===r.originAddr);
+  const renderVer = v => `
+      <div class="version-block ${!v.end?'open':''}">
+        <div class="mono" style="font-size:12px;">${v.start} ~ ${v.end||'目前生效中'}</div>
+        <div style="font-size:12.5px; margin:4px 0;">任務起點：${v.origin||'—'} ・ 里程 ${v.distanceKm??'—'}km</div>
+        <div class="tag-list">${(v.dropPointIds||[]).map((id,i)=>{ const dp=state.data.dropPoints.find(x=>x.id===id); return dp?`<span>${i+1}. ${dp.code||dp.address}</span>`:''; }).join('')}</div>
+        ${(v.extraFees||[]).length ? `<div style="font-size:12px; margin-top:4px; color:var(--ink-soft);">額外固定費：${(v.extraFees||[]).map(x=>`${escapeHtml(channelName(x.channelId))} $${money(x.amount)}${x.solo!==false?'（只收固定費）':''}${x.note?`（${escapeHtml(x.note)}）`:''}`).join('、')}（已含在請款總額內）</div>` : ''}
+        <div style="font-size:12.5px; margin:8px 0 0;">夥伴費用 <strong>$${money(v.driverFare||0)}</strong></div>
+        ${(()=>{ const link = buildMultiStopMapsLink(v.origin, (v.dropPointIds||[]).map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn ghost" href="${link}" target="_blank" rel="noopener" style="margin-top:6px; display:inline-block; text-decoration:none;"><span class="rm-hide">開啟Google地圖多點導航</span><span class="rm-only">導航</span></a>` : ''; })()}
+        <div style="font-size:12.5px; margin:8px 0 0;">請款總額 $${money(v.billingTotal||0)}</div>
+        ${v.billingTotal!=null ? `<div style="font-size:11.5px; color:var(--ink-soft);">拆賬：${Object.entries(v.billingByChannel||{}).map(([cid,amt])=>`${channelName(cid)} $${money(amt)}`).join('、')}</div>` : ''}
+        <button class="btn ghost" data-verfix="${v.id}" style="margin-top:8px; padding:4px 12px; font-size:12px;">修正這個版本的日期／拆賬…</button>
+        <div data-verfixbox="${v.id}"></div>
+      </div>`;
+  const draft = ensureDraft(r);
+  detailEl.innerHTML = `
+    <div class="route-detail-inner">
+      <div class="toolbar"><strong>${routeDisplayName(r.name)}</strong>
+        <span>
+          ${r.status==='inactive' ? `<span class="badge pending">已停用</span> <button class="btn amber" data-routestatus="active">恢復使用</button>` : `<button class="btn ghost" data-routestatus="inactive">停用路線</button>`}
+          ${hasHistory ? '<span class="badge locked">已有歷史版本，路線不可整條刪除</span>' : `<button class="btn danger" data-delroute="${r.id}">刪除路線</button>`}
+        </span>
+      </div>
+      <p style="font-size:12.5px; color:var(--ink-soft);">任務起點：${og?(og.label||og.address):(r.originAddr||'—')}<span class="rm-hide">（固定跟隨路線設定，如需更改任務起點請新增一條路線）</span></p>
+      <div class="field" style="max-width:260px;"><label>地區（選填，用於路線列表收合分組）</label>
+        <div style="display:flex; gap:6px;">
+          <input id="rvRegion" list="regionOptionsDetail" value="${r.region||''}" style="flex:1;">
+          <button class="btn ghost" data-saveregion="${r.id}" style="flex-shrink:0;">儲存</button>
+        </div>
+      </div>
+      <datalist id="regionOptionsDetail">${distinctRegions().map(rg=>`<option value="${rg}"></option>`).join('')}</datalist>
+      ${openVersion ? `<h4 style="margin:10px 0 4px;">目前生效版本</h4>${renderVer(openVersion)}` : ''}
+      ${closedVersions.length ? `
+        <div class="toolbar" style="margin-top:10px;">
+          <label style="font-size:12.5px; font-weight:600;">查看歷史版本（共${closedVersions.length}筆，唯讀不可修改或刪除）</label>
+          <select id="verHistorySelect" style="max-width:260px;">
+            <option value="">－請選擇－</option>
+            ${closedVersions.slice().reverse().map(v=>`<option value="${v.id}">${v.start} ~ ${v.end}</option>`).join('')}
+          </select>
+        </div>
+        <div id="verHistoryDetail"></div>
+      ` : ''}
+      ${!versions.length ? '<div class="empty">尚無版本，請於下方建立</div>' : ''}
+      <div class="field" style="margin-top:10px; max-width:220px;"><label>生效日期</label><input type="date" value="${todayStr()}" data-effdate="${r.id}"></div>
+
+      <label>搜尋店點加入路線（輸入地址或代號關鍵字）</label>
+      <input id="dpSearchInput" value="${draft.dpSearch||''}" placeholder="例：忠孝東路，或代號A">
+      <div id="dpSearchResults" style="margin-top:6px;"></div>
+
+      <label style="margin-top:10px; display:block;">目前順序（可用↑↓調整，實際跑車順序以此為準）</label>
+      ${(()=>{ const link = buildMultiStopMapsLink(r.originAddr, draft.order.map(id=>state.data.dropPoints.find(x=>x.id===id))); return link ? `<a class="btn amber" href="${link}" target="_blank" rel="noopener" style="margin-bottom:8px; display:inline-block; text-decoration:none;"><span class="rm-hide">開啟Google地圖多點導航（依下面目前順序）</span><span class="rm-only">導航</span></a>` : ''; })()}
+      <div data-orderlist="${r.id}">
+        ${draft.order.map((id,i)=>{
+          const dp = state.data.dropPoints.find(x=>x.id===id);
+          return `<div class="drop-point" ${desktopDnd()?`draggable="true" data-dragidx="${i}"`:''} style="display:flex; align-items:center; justify-content:space-between;">
+            <span>${desktopDnd()?'<span class="dnd-handle" title="按住拖拉調整順序">⠿</span>':''}${i+1}. ${dp?dpLabel(dp):'（已刪除的店點）'}${dp?`（${channelName(dp.channelId)}）`:''}</span>
+            <span>
+              <button class="btn ghost" data-up="${r.id}|${i}" ${i===0?'disabled':''}>↑</button>
+              <button class="btn ghost" data-down="${r.id}|${i}" ${i===draft.order.length-1?'disabled':''}>↓</button>
+              <button class="btn danger" data-remove="${r.id}|${i}"><span class="rm-hide">移除</span><span class="rm-only">✕</span></button>
+            </span>
+          </div>`;
+        }).join('') || '<div class="empty">尚未加入任何店點</div>'}
+      </div>
+      ${desktopDnd() ? `<div class="note" style="margin-top:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <b>地圖路線與預計時間</b>
+          <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <label style="margin:0; display:flex; align-items:center; gap:4px;">出發 <input type="time" id="rvStartTime" value="${draft.startTime||'08:00'}" style="width:auto;"></label>
+            <label style="margin:0; display:flex; align-items:center; gap:4px;">每站停留 <input type="number" id="rvDwell" min="0" max="60" value="${draft.dwell ?? ROUTE_DWELL_DEFAULT_MIN}" style="width:64px;"> 分</label>
+            <button class="btn ghost" id="rvMapToggle" style="padding:5px 12px; font-size:12.5px;">顯示地圖與預計時間</button>
+          </span>
+        </div>
+        <div id="rvMapBody" style="display:none; margin-top:8px;"><div id="rvMapSummary" style="font-size:12.5px;"></div><div id="rvMap" style="height:380px; border:1px solid var(--border); border-radius:8px; z-index:0;"></div><div id="rvEta" style="font-size:13px;"></div></div>
+      </div>` : ''}
+      <h4 style="margin:14px 0 4px;">費用資料（人工輸入，跟著這個版本走）</h4>
+      <div class="grid3">
+        <div class="field"><label>里程（km）</label><input id="rvDistance" type="number" value="${draft.distanceKm}"></div>
+        <div class="field"><label>夥伴費用（元）</label><input id="rvFare" type="number" value="${draft.driverFare}"></div>
+        <div class="field"><label>請款總額（元<span class="rm-hide">｜僅用於下方自動建議拆賬比例</span>）</label><input id="rvBilling" type="number" value="${draft.billingTotal}"></div>
+      </div>
+      <div id="rvFeeHint" style="font-size:12px; color:var(--ink-soft); margin:2px 0 6px;"></div>
+      <label style="margin-top:8px; display:block;">額外固定費（另計：不受里程、店數影響，每跑一趟加收；例如某家店另有一筆固定物流費）</label>
+      <div id="rvExtra" style="margin:4px 0 8px;"></div>
+      <label style="margin-top:8px; display:block;">通路拆賬金額<span class="rm-hide">（人工輸入，系統僅提供依店數比例的建議值，可自行修改覆蓋；實際請款與夥伴結算金額一律以此為準，儲存時請款總額會自動改成這裡的加總）</span></label>
+      <div id="rvSplitInputs" style="margin:4px 0 10px;"></div>
+      <button class="btn ghost" data-savever="${r.id}" style="margin-top:10px;">儲存為新版本（自動封存舊版）</button>
+    </div>
+  `;
+  bindVersionFix(detailEl, r);
+  bindStopDrag(detailEl, r.id);
+  bindRouteMap(detailEl, r.id);
+  const verHistorySelect = document.getElementById('verHistorySelect');
+  if(verHistorySelect){
+    verHistorySelect.onchange = ()=>{
+      const v = closedVersions.find(x=>x.id===verHistorySelect.value);
+      document.getElementById('verHistoryDetail').innerHTML = v ? renderVer(v) : '';
+      bindVersionFix(document.getElementById('verHistoryDetail'), r);
+    };
+  }
+  function renderDpSearchResults(){
+    const kw = (draft.dpSearch||'').trim().toLowerCase();
+    const resultsEl = document.getElementById('dpSearchResults');
+    if(!resultsEl) return;
+    const matches = kw
+      ? state.data.dropPoints.filter(dp=> dp.status!=='inactive' && (dp.address.toLowerCase().includes(kw) || (dp.code||'').toLowerCase().includes(kw))).slice(0,30)
+      : [];
+    resultsEl.innerHTML = kw ? (matches.map(dp=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>${dpLabel(dp)}（${channelName(dp.channelId)}）</span>
+        <button class="btn ghost" data-dpaddbtn="${r.id}|${dp.id}">加入</button>
+      </div>`).join('') || '<div class="empty">找不到符合的店點</div>') : '<p class="rm-hide" style="font-size:11.5px; color:var(--ink-soft);">輸入關鍵字開始搜尋（店點數量多時，不會一次全部列出）</p>';
+    resultsEl.querySelectorAll('[data-dpaddbtn]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const [routeId, dpId] = btn.dataset.dpaddbtn.split('|');
+        const dr = ensureDraft(state.data.routes.find(x=>x.id===routeId));
+        dr.order.push(dpId);
+        applyAutoFees(dr);
+        renderRouteDetail(routeId);
+      };
+    });
+  }
+  renderDpSearchResults();
+  const dpInputEl = document.getElementById('dpSearchInput');
+  let composing = false;
+  dpInputEl.addEventListener('compositionstart', ()=>{ composing = true; });
+  dpInputEl.addEventListener('compositionend', (e)=>{ composing = false; draft.dpSearch = e.target.value; renderDpSearchResults(); });
+  dpInputEl.addEventListener('input', (e)=>{
+    if(composing) return;
+    draft.dpSearch = e.target.value;
+    renderDpSearchResults();
+  });
+  detailEl.querySelectorAll('[data-routestatus]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const target = btn.dataset.routestatus;
+      let msg;
+      if(target==='inactive'){
+        const future = state.data.assignments.filter(a=>a.routeId===r.id && a.date>=todayStr() && (a.status==='scheduled'||a.status==='in_progress')).length;
+        const pv = previewRouteChange(r.id, todayStr(), []);
+        const names = pv.newlyMissing.slice(0,8).map(dp=>dpLabel(dp)).join('、') + (pv.newlyMissing.length>8?` …等 ${pv.newlyMissing.length} 家`:'');
+        msg = `確定要停用「${routeDisplayName(r.name)}」嗎？\n\n停用後：週期任務清單、批次建立、下週自動延續都不再使用這條路線；歷史版本、已完成的任務與請款報酬紀錄全部保留，可隨時恢復。`
+          + (future ? `\n\n⚠️ 這條路線還有 ${future} 趟未完成的任務（今天起），不會被刪除；不需要的話到週期任務清單用「批量修改」刪除。` : '')
+          + (pv.newlyMissing.length ? `\n\n🔴 只在這條路線的店（${pv.newlyMissing.length} 家）停用後會變成「未排入任何路線」：${names}` : '');
+      } else {
+        msg = `確定要恢復使用「${routeDisplayName(r.name)}」嗎？恢復後會重新出現在週期任務清單，也會再算進店點涵蓋檢查。`;
+      }
+      if(!confirm(msg)) return;
+      try{ await setRouteStatus(r.id, target); renderContent(); }catch(err){ alert(err.message); }
+    };
+  });
+  detailEl.querySelectorAll('[data-delroute]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm(`確定要刪除路線「${routeDisplayName(r.name)}」嗎？這條路線還沒有任何歷史版本紀錄，刪除後會永久消失、無法復原。`)) return;
+      try{
+        await deleteRoute(btn.dataset.delroute);
+        delete routeDraft[btn.dataset.delroute]; expandedRouteId=null;
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  detailEl.querySelectorAll('[data-saveregion]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{
+        await updateRouteRegion(btn.dataset.saveregion, document.getElementById('rvRegion').value.trim());
+        renderRouteList();
+      }catch(err){ alert(err.message); }
+    };
+  });
+  detailEl.querySelectorAll('[data-up]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [rid2, idx] = btn.dataset.up.split('|').map((v,i)=> i===1?Number(v):v);
+      const order = routeDraft[rid2].order;
+      [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
+      renderRouteDetail(rid2);
+    };
+  });
+  detailEl.querySelectorAll('[data-down]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [rid2, idx] = btn.dataset.down.split('|').map((v,i)=> i===1?Number(v):v);
+      const order = routeDraft[rid2].order;
+      [order[idx+1], order[idx]] = [order[idx], order[idx+1]];
+      renderRouteDetail(rid2);
+    };
+  });
+  detailEl.querySelectorAll('[data-remove]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const [rid2, idx] = btn.dataset.remove.split('|').map((v,i)=> i===1?Number(v):v);
+      routeDraft[rid2].order.splice(idx,1);
+      applyAutoFees(routeDraft[rid2]);
+      renderRouteDetail(rid2);
+    };
+  });
+  // 拆賬金額改成人工輸入：只要admin還沒手動改過任何一格，這裡就依「里程/請款總額」
+  // 變動自動重新建議一組預設值（沿用原本依店數比例分攤的公式）方便快速上手；
+  // admin只要改過其中一格，就不再自動覆蓋，全部以人工輸入的數字為準存檔。
+  // 「只收固定費」的通路：店數照算進里程費／店數公式，但請款總額的拆款不分給它，它只收那一筆固定費
+  function soloChannels(){ return new Set((draft.extraFees||[]).filter(x=>x.channelId && x.solo!==false && Number(x.amount)).map(x=>x.channelId)); }
+  function channelsInDraft(){
+    const ids = new Set(), solo = soloChannels();
+    draft.order.forEach(dpId=>{
+      const dp = state.data.dropPoints.find(x=>x.id===dpId);
+      if(dp) ids.add(dp.channelId);
+    });
+    if(draft.billingByChannel) Object.keys(draft.billingByChannel).forEach(cid=>ids.add(cid));
+    (draft.extraFees||[]).forEach(x=>{ if(x.channelId && x.solo===false) ids.add(x.channelId); });
+    solo.forEach(cid=>ids.delete(cid)); // 「只收固定費」的通路不參與基本拆款
+    return Array.from(ids);
+  }
+  function renderSplitInputs(){
+    const el = document.getElementById('rvSplitInputs');
+    if(!el) return;
+    if(!draft.splitManuallyEdited){
+      const solo = soloChannels();
+      const suggested = computeChannelSplitByStoreCount(draft.order.filter(id=>{ const d = state.data.dropPoints.find(x=>x.id===id); return !(d && solo.has(d.channelId)); }), draft.billingTotal);
+      draft.billingByChannel = suggested;
+    }
+    const cids = channelsInDraft();
+    if(!cids.length){ el.innerHTML = '<span style="font-size:12px;color:var(--ink-soft);">尚未加入店點</span>'; return; }
+    el.innerHTML = cids.map(cid=>`
+      <div class="field" style="display:inline-block; max-width:160px; margin-right:10px;">
+        <label>${channelName(cid)}</label>
+        <input type="number" data-splitch="${cid}" value="${draft.billingByChannel?.[cid] ?? 0}">
+      </div>`).join('') + `<div id="rvSplitSum" style="font-size:11.5px; margin-top:4px;"></div>`;
+    updateSplitSum();
+    // 拆賬金額輸入框故意用 onchange（欄位失焦才觸發）去重繪整組輸入框，不是 oninput——
+    // oninput 每打一個字就整組input重新產生一次，會讓輸入框失去焦點/游標位置，
+    // 手動輸入多位數金額時打到一半就被打斷（例如打"500"，打完"5"整組就重繪一次，
+    // 游標跑掉，後面"0""0"打不連續）。輸入中只更新合計那一行文字（updateSplitSum），
+    // 不動到 input 本身，欄位失焦後才用 onchange 做一次完整重繪（例如切換到別的畫面
+    // 元素時）。
+    el.querySelectorAll('[data-splitch]').forEach(input=>{
+      input.oninput = ()=>{
+        draft.splitManuallyEdited = true;
+        if(!draft.billingByChannel) draft.billingByChannel = {};
+        draft.billingByChannel[input.dataset.splitch] = Number(input.value)||0;
+        updateSplitSum();
+      };
+      input.onchange = ()=>{ renderSplitInputs(); };
+    });
+  }
+  function updateSplitSum(){
+    const sumEl = document.getElementById('rvSplitSum');
+    if(!sumEl) return;
+    const cids = channelsInDraft();
+    const sum = cids.reduce((s,cid)=> s + (Number(draft.billingByChannel?.[cid])||0), 0);
+    const billingTotal = Number(draft.billingTotal)||0;
+    sumEl.style.color = sum!==billingTotal ? '#B5493A' : 'var(--ink-soft)';
+    const ex = extraTotal();
+    refreshExtraSum();
+    sumEl.textContent = `拆賬合計 $${money(sum)}${sum!==billingTotal?`（跟請款總額 $${money(billingTotal)} 對不起來，請確認）`:''}` + (ex ? `　＋ 額外固定費 $${money(ex)} ＝ 最終請款 $${money(sum+ex)}` : '');
+  }
+  function renderFeeHint(){
+    const el = document.getElementById('rvFeeHint');
+    if(!el) return;
+    if(draft.distanceKm==='' || draft.distanceKm==null || isNaN(Number(draft.distanceKm))){
+      el.textContent = `填入里程後會自動計算：夥伴費用＝里程×${ROUTE_FEE_RATES.driverPerKm}＋店數×${ROUTE_FEE_RATES.driverPerStore}；請款總額＝里程×${ROUTE_FEE_RATES.billingPerKm}＋店數×${ROUTE_FEE_RATES.billingPerStore}（算好後仍可手動修改；之後只要里程或店數再變動，會重新計算覆蓋）。`;
+      return;
+    }
+    const f = calcRouteFees(draft.distanceKm, draft.order.length);
+    const same = Number(draft.driverFare)===f.driverFare && Number(draft.billingTotal)===f.billingTotal;
+    const ex = extraTotal();
+    el.innerHTML = `計算值：夥伴費用 ${draft.distanceKm}km×${ROUTE_FEE_RATES.driverPerKm}＋${draft.order.length}店×${ROUTE_FEE_RATES.driverPerStore}＝<b>$${money(f.driverFare)}</b>；請款總額 ${draft.distanceKm}km×${ROUTE_FEE_RATES.billingPerKm}＋${draft.order.length}店×${ROUTE_FEE_RATES.billingPerStore}＝<b>$${money(f.billingTotal)}</b>。`
+      + (same ? ' ✅ 目前就是計算值。' : ` 目前填的數字跟計算值不同（手動修改的數字，會在里程或店數再變動時被重新計算覆蓋）。 <button class="btn ghost" id="rvApplyFee" style="padding:2px 8px; font-size:11.5px;">套用計算值</button>`);
+    if(ex) el.insertAdjacentHTML('beforeend', `<br>另有額外固定費 <b>$${money(ex)}</b>（見下方），儲存後最終請款總額 ＝ $${money((Number(draft.billingTotal)||0)+ex)}。`);
+    const b = el.querySelector('#rvApplyFee');
+    if(b) b.onclick = ()=>{
+      applyAutoFees(draft);
+      document.getElementById('rvFare').value = draft.driverFare;
+      document.getElementById('rvBilling').value = draft.billingTotal;
+      renderSplitInputs(); renderFeeHint();
+    };
+  }
+  function extraTotal(){ return (draft.extraFees||[]).reduce((s,x)=> s + (Number(x.amount)||0), 0); }
+  function refreshExtraSum(){
+    const s = document.getElementById('rvExtraSum'); if(!s) return;
+    const ex = extraTotal();
+    s.textContent = ex ? `額外固定費合計 $${money(ex)}；儲存後請款總額 ＝ 基本 $${money(Number(draft.billingTotal)||0)}（拆給上面的通路）＋ 固定費 $${money(ex)} ＝ $${money((Number(draft.billingTotal)||0)+ex)}` : '';
+  }
+  function renderExtra(){
+    const el = document.getElementById('rvExtra');
+    if(!el) return;
+    if(!draft.extraFees) draft.extraFees = [];
+    const chOpts = (sel)=> state.data.channels.filter(ch=>ch.status!=='inactive' || ch.id===sel).map(ch=>`<option value="${ch.id}" ${ch.id===sel?'selected':''}>${escapeHtml(ch.name)}</option>`).join('');
+    el.innerHTML = draft.extraFees.map((x,i)=>`<div style="display:flex; gap:8px; align-items:center; margin:4px 0; flex-wrap:wrap;">
+        <select data-exch="${i}" style="max-width:190px;"><option value="">－選擇通路－</option>${chOpts(x.channelId)}</select>
+        <input type="number" data-examt="${i}" value="${x.amount||''}" placeholder="金額（元）" style="max-width:130px;">
+        <input data-exnote="${i}" value="${escapeHtml(x.note||'')}" placeholder="備註（例：興隆門市固定物流費）" style="flex:1; min-width:170px;">
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; margin:0; color:var(--ink);" title="勾選：請款總額只拆給其他通路，這個通路只收這筆固定費；不勾：這個通路也照店數分攤總額，再另外加這筆"><input type="checkbox" data-exsolo="${i}" ${x.solo!==false?'checked':''} style="width:auto;"> 只收固定費（不參與拆款）</label>
+        <button class="btn ghost" data-exdel="${i}" style="padding:4px 10px;">移除</button>
+      </div>`).join('')
+      + `<button class="btn ghost" data-exadd="1" style="padding:4px 12px; font-size:12.5px;">＋ 新增一筆額外固定費</button>`
+      + `<div id="rvExtraSum" style="font-size:12px; color:var(--ink-soft); margin-top:4px;"></div>`;
+    const sum = refreshExtraSum;
+    sum();
+    el.querySelectorAll('[data-exch]').forEach(s=>{ s.onchange = ()=>{ draft.extraFees[Number(s.dataset.exch)].channelId = s.value; renderSplitInputs(); renderFeeHint(); refreshExtraSum(); }; });
+    el.querySelectorAll('[data-examt]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.examt)].amount = Number(s.value)||0; renderSplitInputs(); sum(); renderFeeHint(); }; });
+    el.querySelectorAll('[data-exsolo]').forEach(s=>{ s.onchange = ()=>{ draft.extraFees[Number(s.dataset.exsolo)].solo = s.checked; renderSplitInputs(); renderFeeHint(); }; });
+    el.querySelectorAll('[data-exnote]').forEach(s=>{ s.oninput = ()=>{ draft.extraFees[Number(s.dataset.exnote)].note = s.value; }; });
+    el.querySelectorAll('[data-exdel]').forEach(b=>{ b.onclick = ()=>{ draft.extraFees.splice(Number(b.dataset.exdel),1); renderExtra(); renderSplitInputs(); renderFeeHint(); }; });
+    el.querySelector('[data-exadd]').onclick = ()=>{ draft.extraFees.push({ channelId:'', amount:0, note:'', solo:true }); renderExtra(); };
+  }
+  ['rvDistance','rvFare','rvBilling'].forEach(id=>{
+    const el = document.getElementById(id);
+    el.oninput = ()=>{
+      draft.distanceKm = document.getElementById('rvDistance').value;
+      if(id==='rvDistance' && applyAutoFees(draft)){
+        document.getElementById('rvFare').value = draft.driverFare;
+        document.getElementById('rvBilling').value = draft.billingTotal;
+      } else {
+        draft.driverFare = document.getElementById('rvFare').value;
+        draft.billingTotal = document.getElementById('rvBilling').value;
+      }
+      renderSplitInputs();
+      renderFeeHint();
+    };
+  });
+  renderExtra();
+  renderSplitInputs();
+  renderFeeHint();
+  detailEl.querySelectorAll('[data-savever]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const rid2 = btn.dataset.savever;
+      const effDate = detailEl.querySelector(`[data-effdate="${rid2}"]`).value;
+      const ids = routeDraft[rid2].order;
+      if(!effDate || ids.length===0){ alert('請設定生效日期並至少加入一個店點'); return; }
+      // 儲存前先預覽這次調整對「店點涵蓋」的影響：有店因此變成不在任何路線、同班次重複、
+      // 或把已停用的店加進來，先跟你確認，避免調整中不小心漏掉。
+      {
+        const pv = previewRouteChange(rid2, effDate, ids);
+        const names = list=>{ const t = list.slice(0,8).map(dp=>dpLabel(dp)).join('、'); return t + (list.length>8?` …等 ${list.length} 家`:''); };
+        const warn = [];
+        if(pv.newlyMissing.length) warn.push(`🔴 調整後不在任何路線（${pv.newlyMissing.length} 家）：${names(pv.newlyMissing)}`);
+        if(pv.newDups.length) warn.push(`🟡 同一班次變成重複排入（${pv.newDups.length} 家）：${names(pv.newDups)}`);
+        if(pv.inactiveAdded.length) warn.push(`⚠️ 加進了已停用的店（${pv.inactiveAdded.length} 家）：${names(pv.inactiveAdded)}`);
+        if(warn.length && !confirm(`這次調整：新增 ${pv.added.length} 家、移出 ${pv.removed.length} 家（${effDate} 起）。\n\n${warn.join('\n')}\n\n確定要儲存嗎？`)) return;
+      }
+      // 生效日（含）以後如果已經有「已完成」的任務，那些是用舊內容跑完的，請款卻會改套新版本金額：先確認日期沒設早。
+      {
+        const done = await completedTripDatesFrom(rid2, effDate);
+        if(done.length && !confirm(`⚠️ 生效日期 ${effDate} 起，這條路線已經有 ${done.length} 趟「已完成」的任務（${done.slice(0,6).map(d=>d.slice(5).replace('-','/')).join('、')}${done.length>6?'…':''}）。\n\n這幾天夥伴是照舊內容跑的，新版本一生效，這幾天的請款金額會改用新版本，夥伴薪資不變。\n\n如果新內容其實是之後才開始，請取消，把生效日期改成實際開始的那天。\n\n確定生效日期沒設早嗎？`)) return;
+      }
+      try{
+        // 請款總額一律以「通路拆賬金額」加總為準存檔——不直接信任 rvBilling 輸入框
+        // 目前打的數字，避免兩者不小心存成不一致（實際請款/夥伴結算只認拆賬金額，
+        // 見 effectiveByChannelForAssignment()，總額欄位只是給人看跟給自動建議拆賬用）。
+        // 額外固定費（例如某家店另有一筆固定物流費）加在對應通路上：存進去的拆賬金額與請款總額是「含額外固定費」的最終數字，
+        // 下游的請款、報酬、報表都不用改；另外把「哪幾筆是額外的」記在 extraFees，編輯時才能分開顯示。
+        const extraFees = (routeDraft[rid2].extraFees||[]).filter(x=>x.channelId && Number(x.amount)).map(x=>({ channelId:x.channelId, amount:Number(x.amount), note:(x.note||'').trim(), solo:x.solo!==false }));
+        // 「只收固定費」的通路：最終請款就是那幾筆固定費，不含基本拆款；其他通路是你手動輸入（或系統建議）的拆款金額
+        const soloIds = new Set(extraFees.filter(x=>x.solo).map(x=>x.channelId));
+        const billingByChannel = {};
+        Object.entries(routeDraft[rid2].billingByChannel || {}).forEach(([cid,v])=>{ if(!soloIds.has(cid)) billingByChannel[cid] = v; });
+        extraFees.forEach(x=>{ billingByChannel[x.channelId] = (Number(billingByChannel[x.channelId])||0) + x.amount; });
+        const billingTotal = Object.values(billingByChannel).reduce((s,v)=> s+(Number(v)||0), 0);
+        await saveRouteVersion(rid2, effDate, ids, {
+          distanceKm: document.getElementById('rvDistance').value,
+          driverFare: document.getElementById('rvFare').value,
+          billingTotal,
+          billingByChannel,
+          extraFees
+        });
+        delete routeDraft[rid2];
+        // 週期任務清單裡已經排好、還沒完成的未來車次不會自動跟著新版本走（建立當下就
+        // 複製成快照了），這裡問一次要不要一鍵套用，避免每一趟都要手動重建。
+        const futureCount = state.data.assignments.filter(a=>
+          a.routeId===rid2 && a.date>=effDate && (a.status==='scheduled'||a.status==='in_progress')).length;
+        if(futureCount>0 && confirm(`週期任務清單中有 ${futureCount} 趟尚未完成的未來車次使用這條路線。要把剛儲存的新版本內容（店點、里程、夥伴費用、請款拆賬）套用到這些車次嗎？夥伴與日期不會改變，已完成的車次不受影響。`)){
+          try{
+            const { updated } = await regenerateFutureAssignments(rid2, effDate);
+            alert(`已套用到 ${updated} 趟未來車次。`);
+          }catch(err){ alert('套用到未來車次時發生錯誤：' + err.message); }
+        }
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+
+// ---------- 週期任務清單（直接指派夥伴＋任務起點，這裡才產生實際任務） ----------
+const WEEKDAY_ZH = ['一','二','三','四','五','六','日'];
+// 車次排序用：從「第X車...」抓出中文數字X換算成阿拉伯數字，抓不到的排到最後面
+// （維持原本相對順序，不會亂跳）。支援到「第十九車」，車隊規模通常用不到更多。
+function seqSortKey(seq){
+  const m = /^第([一二三四五六七八九十]+)車/.exec((seq||'').trim());
+  if(!m) return 9999;
+  const digit = { 一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9 };
+  const s = m[1];
+  if(s === '十') return 10;
+  if(s.length === 1) return digit[s] || 9999;
+  if(s[0] === '十') return 10 + (digit[s[1]] || 0);
+  if(s[1] === '十') return (digit[s[0]] || 0) * 10 + (s[2] ? (digit[s[2]] || 0) : 0);
+  return 9999;
+}
+// 所有列出多條路線的地方都用這個排序：先依任務起點名稱、再依車次數字（第一車
+// ～第十車…）、同車次再讓上午排在下午前面——不管是路線管理列表、批次建立
+// 的路線選單、還是其他任何要列出多條路線的畫面，統一套用這個順序。
+function routeSortCompare(a,b){
+  const oa = originLabel(a.originAddr), ob = originLabel(b.originAddr);
+  if(oa !== ob) return oa.localeCompare(ob, 'zh-Hant');
+  const sa = seqSortKey(a.seq), sb = seqSortKey(b.seq);
+  if(sa !== sb) return sa-sb;
+  if(a.shift !== b.shift) return a.shift==='AM' ? -1 : 1;
+  return (a.seq||'').localeCompare(b.seq||'', 'zh-Hant');
+}
+function sortedRoutes(){
+  return state.data.routes.slice().sort(routeSortCompare);
+}
+// 雙大腦計劃「後台」第二塊（2026-10-30）：週期任務清單本來就會自動把本週班表
+// 延續到下週（rolloverNextWeekIfNeeded()，見上面呼叫處的註解），但這個延續是
+// 「照抄上週」，完全不知道夥伴在Friday/Saturday/Sunday已經回報下週請假
+// （driver_unavailabilities，語音助理/請假面板建的那張表）——這支就是補這個
+// 落差：掃目前畫面顯示的這一週，找出「已經回報請假的那一天，班表上還是排了
+// 這個人」的衝突，列出來提醒主控去改，不自動改掉任何指派（AI只能提案、人要
+// 點頭才算數，跟財務稽核同一個原則）。故意不做「自動找人補位」——找誰補位
+// 牽涉到路線熟悉度、這幾個月的狀態等主控的主觀判斷，不是規則能決定的，交給
+// 人用下面原本就有的格子點選功能處理即可。
+async function renderScheduleConflicts(startDate, endDate){
+  const box = document.getElementById('schedConflictBox');
+  if(!box) return;
+  let list;
+  try{ list = await fetchDriverUnavailabilities(startDate, endDate); }
+  catch(e){ return; } // 這面板只是提醒用，悄悄失敗不影響主要排班功能
+  if(state.tab!=='schedule' || !document.getElementById('schedConflictBox')) return; // 使用者可能已經切走這一頁或翻了別週
+  const conflicts = computeScheduleConflicts(list, state.data.assignments);
+  if(!conflicts.length){ box.innerHTML = ''; return; } // 沒有衝突就不顯示面板，不佔畫面空間（保險起見明確清空，不假設box本來就是空的）
+  box.innerHTML = `<div class="panel" style="border-color:var(--danger); border-width:2px; margin-bottom:8px;">
+    <h3 style="margin-top:0;">⚠️ ${conflicts.length}筆排班衝突：夥伴已回報請假，但這天還是排了班</h3>
+    ${conflicts.map(x=>`<div style="padding:5px 0; border-top:1px solid var(--border); font-size:13px;">${x.date} ${escapeHtml(routeName(x.routeId))}・${escapeHtml(driverName(x.driverId))}${x.note?`（請假備註：${escapeHtml(x.note)}）`:''}${x.published===false?' <span class="badge pending" style="font-size:10.5px;">草稿</span>':''}</div>`).join('')}
+    <p class="section-sub" style="margin:8px 0 0 0;">通常是系統「延續上週班表」時沒注意到這筆請假——請在下面的表格點格子改派給別的夥伴。</p>
+  </div>`;
+}
+async function renderScheduleAdmin(c){
+  const week1 = getWeekDates(state.weekOffset);
+  // 每週第一次打開：下週還是空的就自動延續本週（草稿，夥伴看不到，按「發佈」才開放）。背景進行，不擋畫面。
+  rolloverNextWeekIfNeeded().then(r=>{
+    if(!r) return;
+    state._rolloverMsg = r.created ? `已自動把本週期任務清單延續到下週（${r.created} 趟，目前是草稿，夥伴看不到；有異動請手動改，排好後按「發佈」）。${r.skippedForLeave ? `有${r.skippedForLeave}格因為夥伴已回報下週請假，特意沒有複製、維持未排，請手動指派別的夥伴。` : ''}` : '';
+    if(state.tab==='schedule') renderContent();
+  }).catch(err=>{ state._rolloverChecked = null; console.error('自動延續下週期任務清單失敗', err); });
+  // 往前翻週（state.weekOffset 可以一直往負的翻）翻超過近14天的預設窗口時，
+  // 要先補齊那一週的資料再畫格子，不然會看到格子是空的、以為那週沒排班。
+  if(state.data.assignmentsWindowStart && week1[0] < state.data.assignmentsWindowStart){
+    c.innerHTML = '<h2 class="section-title">週期任務清單</h2><div class="empty">載入中...</div>';
+    try{ await ensureAssignmentsRange(week1[0]); }
+    catch(e){ c.innerHTML = `<h2 class="section-title">週期任務清單</h2><div class="empty">載入失敗：${e.message}</div>`; return; }
+    if(state.tab!=='schedule') return; // 使用者可能已經切走這一頁
+  }
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+  // 路線依「任務起點」分組（optgroup），任務起點順序跟任務起點資料庫一致，組內維持原本的車次排序。
+  const routeOpts = (()=>{
+    const all = sortedRoutes().filter(r=>r.status!=='inactive');
+    const groups = state.data.origins.map(og=>({ label: og.label||og.address, list: all.filter(r=>r.originAddr===og.address) }));
+    const known = new Set(state.data.origins.map(og=>og.address));
+    const rest = all.filter(r=>!known.has(r.originAddr));
+    if(rest.length) groups.push({ label: '（未指定任務起點）', list: rest });
+    return groups.filter(g=>g.list.length).map(g=>`<optgroup label="${escapeHtml(g.label)}">${g.list.map(r=>`<option value="${r.id}">${escapeHtml(routeDisplayName(r.name))}</option>`).join('')}</optgroup>`).join('');
+  })();
+  const originFilterOpts = '<option value="">全部任務起點</option>' + state.data.origins.map(og=>`<option value="${og.address}">${og.label||og.address}</option>`).join('');
+  c.innerHTML = `
+    <h2 class="section-title">週期任務清單</h2>
+    <p class="section-sub sched-help">格式對照您原本的紙本班表：依任務起點分區塊，車次為列、日期＋班次為欄。灰底為排定中、有名字為已指派夥伴、黑底表示該車次沒有這個班次。點格子可直接指派或檢視。夥伴費用與請款金額跟著路線管理裡設定的版本走，不用在這裡填。建議每週末確認並編輯下週期任務清單。</p>
+    <div class="panel no-print" id="batchPanel">
+      <p style="font-size:12.5px; font-weight:600; margin:0 0 8px;">批次建立（例如整週一~五都跑同一路線）</p>
+      <div class="grid4">
+        <div class="field"><label>路線</label><select id="sRoute"><option value="">選擇路線</option>${routeOpts}</select></div>
+        <div class="field"><label>夥伴（車輛隨夥伴）</label><select id="sDriver"><option value="">選擇夥伴</option>${driverOpts}</select></div>
+        <div class="field"><label>起始日期</label><input id="sStart" type="date" value="${todayStr()}"></div>
+        <div class="field"><label>結束日期（單日則同起始日）</label><input id="sEnd" type="date" value="${todayStr()}"></div>
+      </div>
+      <div class="field">
+        <label>套用星期（僅勾選的星期會建立任務）</label>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          ${WEEKDAY_ZH.map((l,i)=>`<label style="display:flex;align-items:center;gap:4px;font-size:12.5px;"><input type="checkbox" class="wdcheck" value="${i}" checked style="width:auto;">${l}</label>`).join('')}
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:2px 0 10px; color:var(--ink);"><input type="checkbox" id="sOverwrite" style="width:auto;"> 覆蓋已排的：這段期間如果那個車次已經排了別人，直接換成這位夥伴（只換還沒出發的；已出發、已完成的不動）</label>
+      <button class="btn amber" id="addAssign">批次建立指派</button>
+    </div>
+    <div id="schedConflictBox" class="no-print"></div>
+    <div class="sched-top">
+    <div class="toolbar no-print">
+      <div class="week-nav">
+        <button class="btn ghost" id="prevWeek">← 往前一週</button>
+        <span class="mono">${week1[0]} ~ ${week1[6]}</span>
+        <button class="btn ghost" id="nextWeek">往後一週 →</button>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <select id="originFilter" style="max-width:200px;">${originFilterOpts}</select>
+        <button class="btn ghost m-only" id="mBatchBtn">批次建立</button>
+        <button class="btn ${bulkOn()?'amber':'ghost'}" id="bulkToggle">${bulkOn()?'結束批量修改':'批量修改'}</button>
+        <button class="btn ghost" id="printWeek">另存PDF（本週）</button>
+      </div>
+    </div>
+    ${(()=>{
+      const drafts = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
+      const msg = state._rolloverMsg ? `<div class="note no-print" style="margin-bottom:8px;">${escapeHtml(state._rolloverMsg)}</div>` : '';
+      if(!drafts) return msg;
+      // 依夥伴統計草稿數：可以只發佈勾選的夥伴（提前發佈），也保留「整週一起發佈」。
+      const perDriver = new Map();
+      state.data.assignments.forEach(a=>{ if(a.published===false && a.date>=week1[0] && a.date<=week1[6]) perDriver.set(a.driverId, (perDriver.get(a.driverId)||0)+1); });
+      const list = [...perDriver.entries()].sort((x,y)=> driverName(x[0]).localeCompare(driverName(y[0]), 'zh-Hant'));
+      return msg + `<div class="panel no-print" style="border-color:var(--amber); border-width:2px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span>📝 這週有 <b>${drafts}</b> 趟尚未發佈（草稿，夥伴目前看不到），涉及 ${list.length} 位夥伴</span>
+          <button class="btn amber" id="publishWeekBtn">全部一起發佈（${week1[0].slice(5)}～${week1[6].slice(5)}）</button>
+        </div>
+        <details style="margin-top:8px;"><summary style="cursor:pointer; font-size:13px; font-weight:600;">只發佈部分夥伴（提前發佈）</summary>
+          <div style="display:flex; gap:8px; margin:6px 0;"><button class="btn ghost" id="pubAll" style="padding:3px 10px; font-size:12px;">全選</button><button class="btn ghost" id="pubNone" style="padding:3px 10px; font-size:12px;">全不選</button></div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:2px 12px;">
+            ${list.map(([id,n])=>`<label style="display:flex; align-items:center; gap:6px; font-size:13px; padding:4px 0;"><input type="checkbox" class="pubDriver" value="${id}" style="width:auto;"> ${escapeHtml(driverName(id))}<span style="color:var(--ink-soft); font-size:11.5px;">（${n}）</span></label>`).join('')}
+          </div>
+          <button class="btn amber" id="publishSelectedBtn" style="margin-top:6px;">發佈勾選的夥伴</button>
+        </details>
+      </div>`;
+    })()}
+    </div>
+    <h3 class="sched-grid-title">${week1[0]} ~ ${week1[6]}</h3>
+    <div class="sched-legend no-print">
+      <span><i style="--c:#9AA3AF"></i>已排定</span><span><i style="--c:#2C5F8A; --bg:#EEF4FB"></i>進行中</span><span><i style="--c:#2C6B44; --bg:#F1F8F3"></i>已完成</span><span><i style="--c:#B5493A; --bg:#FBEAE6"></i>有異常</span><span><i style="--c:#E0902E; --bg:#FFF8EA"></i>草稿（夥伴看不到）</span><span><i style="--c:transparent; --bg:#FBEAE6"></i>未排</span>
+    </div>
+    <div class="m-sched ${bulkOn()?'bulk-on':''}" id="mSchedule"></div>
+    <div id="mSheetBackdrop"></div>
+    ${desktopDnd() && !bulkOn() ? `<details id="dndPalette" class="panel no-print" ${state._palOpen?'open':''}><summary>拖拉排班：把夥伴拖到格子（空格＝排進去、有人的格子＝換人；格子之間互拖＝對調）</summary>
+      <input id="dndFilter" placeholder="搜尋夥伴" style="max-width:200px; margin-top:8px;"><div class="dnd-chips" id="dndChips"></div></details>` : ''}
+    <div id="gridWeek1" class="${bulkOn()?'bulk-on':''}"></div>
+    <div id="assignDetail"></div>
+    ${bulkOn()?'<div style="height:150px;"></div><div id="bulkBar" class="bulk-bar no-print"></div>':''}
+  `;
+  renderScheduleConflicts(week1[0], week1[6]); // 背景抓請假紀錄比對排班衝突，不擋畫面（見函式定義）
+  document.getElementById('prevWeek').onclick = ()=>{ state.weekOffset--; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
+  document.getElementById('nextWeek').onclick = ()=>{ state.weekOffset++; if(state._bulk) state._bulk.sel.clear(); renderContent(); };
+  document.getElementById('bulkToggle').onclick = ()=>{ state._bulk = bulkOn() ? null : { on:true, sel:new Set() }; renderContent(); };
+  document.getElementById('originFilter').onchange = ()=>{ renderWeekGrid('gridWeek1', week1); bindGridDnd(document.getElementById('gridWeek1')); renderMobileSchedule(week1); if(bulkOn()) renderBulkBar(week1); };
+  document.getElementById('printWeek').onclick = ()=> exportPanelPrint(document.getElementById('gridWeek1'), `週期任務清單_${week1[0]}_${week1[6]}`);
+  const publishBtn = document.getElementById('publishWeekBtn');
+  if(publishBtn) publishBtn.onclick = async ()=>{
+    const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6]).length;
+    if(!confirm(`確定要發佈 ${week1[0]}～${week1[6]} 的 ${n} 個任務嗎？發佈後夥伴馬上看得到自己的行程。`)) return;
+    publishBtn.disabled = true;
+    try{ await publishWeek(week1[0], week1[6]); state._rolloverMsg = ''; renderContent(); }
+    catch(err){ alert(err.message); publishBtn.disabled = false; }
+  };
+  const pubSel = document.getElementById('publishSelectedBtn');
+  if(pubSel){
+    document.getElementById('pubAll').onclick = ()=> document.querySelectorAll('.pubDriver').forEach(x=>x.checked = true);
+    document.getElementById('pubNone').onclick = ()=> document.querySelectorAll('.pubDriver').forEach(x=>x.checked = false);
+    pubSel.onclick = async ()=>{
+      const ids = [...document.querySelectorAll('.pubDriver:checked')].map(x=>x.value);
+      if(!ids.length){ alert('請至少勾選一位夥伴'); return; }
+      const n = state.data.assignments.filter(a=>a.published===false && a.date>=week1[0] && a.date<=week1[6] && ids.includes(a.driverId)).length;
+      if(!confirm(`只發佈 ${ids.map(driverName).join('、')} 這週的 ${n} 趟任務嗎？發佈後這幾位夥伴馬上看得到自己的行程，其他夥伴的草稿不受影響。`)) return;
+      pubSel.disabled = true;
+      try{ await publishWeek(week1[0], week1[6], ids); renderContent(); }
+      catch(err){ alert(err.message); pubSel.disabled = false; }
+    };
+  }
+  enhanceDriverSelect(document.getElementById('sDriver'), { getOrigin: ()=>{ const r = state.data.routes.find(x=>x.id===document.getElementById('sRoute').value); return r ? r.originAddr : null; } });
+  document.getElementById('sRoute').addEventListener('change', ()=>{ const d = document.getElementById('sDriver'); if(d && d.syncPicker) d.syncPicker(); });
+  document.getElementById('addAssign').onclick = async ()=>{
+    const routeId = document.getElementById('sRoute').value;
+    const driverId = document.getElementById('sDriver').value;
+    const start = document.getElementById('sStart').value;
+    const end = document.getElementById('sEnd').value || start;
+    const overwrite = document.getElementById('sOverwrite').checked;
+    const weekdays = Array.from(document.querySelectorAll('.wdcheck:checked')).map(cb=>Number(cb.value));
+    if(!routeId || !driverId || !start){ alert('請選擇路線、夥伴與日期'); return; }
+    const route = state.data.routes.find(r=>r.id===routeId);
+    try{ await ensureAssignmentsRange(start); }catch(e){ alert(e.message); return; }
+    // 先算出要做什麼：沒排的日期新建；已經排了的，勾「覆蓋」就換成這位夥伴（只換還沒出發的），沒勾就略過。
+    const toCreate = [], toReassign = [];
+    let skippedNoVersion=0, skippedExisting=0, skippedLocked=0, alreadySame=0;
+    for(let cursor = start; cursor <= end; cursor = ymd(addDays(cursor,1))){
+      const jsWeekday = new Date(cursor+'T00:00:00').getDay();
+      const isoWeekday = jsWeekday===0 ? 6 : jsWeekday-1;
+      if(!weekdays.includes(isoWeekday)) continue;
+      const existing = state.data.assignments.filter(a=>a.date===cursor && a.routeId===routeId && a.status!=='cancelled' && !a.isSupport);
+      if(existing.length){
+        if(!overwrite){ skippedExisting++; continue; }
+        existing.forEach(a=>{
+          if(a.status!=='scheduled') skippedLocked++;
+          else if(a.driverId===driverId) alreadySame++;
+          else toReassign.push(a);
+        });
+        continue;
+      }
+      if(!getActiveVersion(route, cursor)){ skippedNoVersion++; continue; }
+      toCreate.push(cursor);
+    }
+    if(toReassign.length && !confirm(`這段期間有 ${toReassign.length} 趟已經排好的任務（${[...new Set(toReassign.map(a=>driverName(a.driverId)))].join('、')}），會被覆蓋成「${driverName(driverId)}」。\n已出發、已完成的不會動。確定要覆蓋嗎？`)) return;
+    let created=0, replaced=0;
+    try{
+      if(toReassign.length){ await reassignAssignmentsBulk(toReassign.map(a=>a.id), driverId); replaced = toReassign.length; }
+      for(const d of toCreate){ await createAssignment({ date:d, routeId, driverId }); created++; }
+    }catch(err){ alert(err.message); }
+    alert(`已建立 ${created} 筆任務${overwrite?`、覆蓋 ${replaced} 筆`:''}。${skippedNoVersion? `\n${skippedNoVersion} 天因路線當日無生效版本而略過。`:''}${skippedExisting? `\n${skippedExisting} 天該車次已有指派而略過（要換掉的話，勾選「覆蓋已排的」）。`:''}${alreadySame? `\n${alreadySame} 天本來就是這位夥伴，不變。`:''}${skippedLocked? `\n${skippedLocked} 趟已出發／已完成，不能覆蓋。`:''}`);
+    renderContent();
+  };
+  renderWeekGrid('gridWeek1', week1);
+  bindGridDnd(document.getElementById('gridWeek1'));
+  renderMobileSchedule(week1);
+  if(bulkOn()) renderBulkBar(week1);
+}
+// ---------- 主控手機版：一天一頁＋點一下換人（電腦版格子完全不動，這段只在窄螢幕顯示） ----------
+// 每個「時段」＝(任務起點, 車次, 上午/下午)；跟電腦版格子用同一套規則挑路線（星期一／週二到五兩個版本）。
+function mobileSlotsFor(date, originFilter){
+  const origins = originFilter ? state.data.origins.filter(og=>og.address===originFilter) : state.data.origins;
+  return origins.map(og=>{
+    // 已停用的路線不出現在排班畫面；但那天如果已經有任務，還是要看得到，才不會有任務憑空消失。
+    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address && (r.status!=='inactive' || state.data.assignments.some(a=>a.routeId===r.id && a.date===date)));
+    const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
+    const routes = baseSeqs.map(baseSeq=>{
+      const family = routesHere.filter(r=>stripWeekdayLabel(r.seq)===baseSeq);
+      const slots = ['AM','PM'].map(shift=>{
+        const candidates = family.filter(r=>r.shift===shift);
+        let route = null;
+        if(candidates.length===1) route = candidates[0];
+        else if(candidates.length>1){
+          const isMonday = new Date(date+'T00:00:00').getDay()===1;
+          const mondayRoute = candidates.find(r=>/星期一|週一/.test(r.seq));
+          const otherRoute = candidates.find(r=>r!==mondayRoute);
+          route = isMonday ? (mondayRoute||otherRoute) : (otherRoute||mondayRoute);
+        }
+        if(!route) return null;
+        const ids = new Set(candidates.map(r=>r.id));
+        const items = state.data.assignments.filter(a=>a.date===date && ids.has(a.routeId) && a.status!=='cancelled')
+          .sort((x,y)=> (x.routeId===route.id?0:1)-(y.routeId===route.id?0:1));
+        return { shift, route, candidates, items, origin: og.address, baseSeq };
+      }).filter(Boolean);
+      return { baseSeq, slots };
+    }).filter(r=>r.slots.length);
+    return { origin: og, routes };
+  }).filter(o=>o.routes.length);
+}
+async function copyDayAssignments(sourceDate, targetDate){
+  try{ await ensureAssignmentsRange(sourceDate); }catch(e){ alert(e.message); return; }
+  const src = state.data.assignments.filter(a=>a.date===sourceDate && a.status!=='cancelled');
+  if(!src.length){ alert(`${sourceDate} 沒有任務可以複製`); return; }
+  const key = (origin, baseSeq, shift)=> `${origin}|${baseSeq}|${shift}`;
+  const targetMap = new Map();
+  mobileSlotsFor(targetDate, '').forEach(o=>o.routes.forEach(r=>r.slots.forEach(sl=> targetMap.set(key(sl.origin, sl.baseSeq, sl.shift), sl))));
+  const activeIds = new Set(state.data.drivers.filter(d=>d.status==='active').map(d=>d.id));
+  const todo = [], seen = new Set(); let skipped = 0;
+  src.forEach(a=>{
+    const rt = state.data.routes.find(r=>r.id===a.routeId); if(!rt){ skipped++; return; }
+    const sl = targetMap.get(key(rt.originAddr, stripWeekdayLabel(rt.seq), rt.shift));
+    if(!sl || sl.items.length || seen.has(sl.route.id) || !activeIds.has(a.driverId) || !getActiveVersion(sl.route, targetDate)){ skipped++; return; }
+    seen.add(sl.route.id);
+    todo.push({ routeId: sl.route.id, driverId: a.driverId });
+  });
+  if(!todo.length){ alert('沒有可以複製的任務（目標日期的時段已經排好，或對應路線／夥伴不可用）。'); return; }
+  if(!confirm(`把 ${sourceDate} 的排法複製到 ${targetDate}：將新增 ${todo.length} 個任務${skipped?`（略過 ${skipped} 個：已經有人、或路線／夥伴不可用）`:''}。\n只會補上空的時段，不會動已經排好的。確定嗎？`)) return;
+  let ok = 0, fail = 0;
+  for(const t of todo){
+    try{ await createAssignment({ date: targetDate, routeId: t.routeId, driverId: t.driverId }); ok++; }
+    catch(e){ fail++; }
+  }
+  alert(`已複製 ${ok} 個任務${fail?`，${fail} 個失敗`:''}。`);
+  renderContent();
+}
+// ---------- 排班模式（手機）：點格子 → 直接選夥伴，兩下搞定 ----------
+function getSchedMode(){
+  if(!state._schedMode){ let m = 'browse'; try{ m = localStorage.getItem('schedMode')==='edit' ? 'edit' : 'browse'; }catch(e){} state._schedMode = m; }
+  return state._schedMode;
+}
+function setSchedMode(m){ state._schedMode = m; try{ localStorage.setItem('schedMode', m); }catch(e){} renderContent(); }
+// 排好一格之後，自動捲到下一個還沒排的空格並閃一下，連續排班不用自己找。
+function advanceToNextEmpty(){
+  setTimeout(()=>{
+    const host = document.getElementById('mSchedule'); if(!host) return;
+    const el = host.querySelector('.m-slot.empty');
+    if(el){ el.scrollIntoView({ behavior:'smooth', block:'center' }); el.classList.add('pulse'); }
+  }, 250);
+}
+// 全系統共用的「選夥伴」畫面：手機是底部彈出的清單、電腦是置中的小視窗。
+// 空格＝指派（新增任務）、已排的任務＝換人；排班模式、電腦版點空格、任務明細的「換夥伴」都走這一個。
+//   opts.assignment：有＝換人；沒有就用 routeId+date 新增
+//   opts.advanced：電腦版空格多一個「進階（調整金額）」連到舊表單
+//   opts.compact：從任務明細進來時不再放「看詳細／移除」（明細本來就有）
+async function openPartnerPicker(opts){
+  const a = opts.assignment || null;
+  const rid = a ? a.routeId : opts.routeId, dt = a ? a.date : opts.date;
+  const route = state.data.routes.find(r=>r.id===rid);
+  if(!route) return;
+  if(!a && !getActiveVersion(route, dt)){ toast(`這條路線在 ${dt} 還沒有生效的店點版本，請先到「路線管理」建立版本再排班。`, { type:'error' }); return; }
+  const isMobile = window.matchMedia('(max-width:700px)').matches;
+  let host, close;
+  if(isMobile){
+    host = document.getElementById('assignDetail');
+    const backdrop = document.getElementById('mSheetBackdrop');
+    close = ()=>{ host.innerHTML = ''; backdrop.classList.remove('show'); };
+    backdrop.classList.add('show');
+  } else {
+    document.getElementById('partnerModal')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'partnerModal'; wrap.className = 'modal-backdrop';
+    wrap.innerHTML = '<div class="modal-box" style="max-width:420px;"></div>';
+    document.body.appendChild(wrap);
+    host = wrap.firstChild;
+    close = ()=> wrap.remove();
+    wrap.onclick = e=>{ if(e.target===wrap) close(); };
+  }
+  let freq = new Map();
+  try{ freq = (await loadDriverOriginStats()).get(route.originAddr) || new Map(); }catch(e){}
+  const busy = new Map();
+  state.data.assignments.forEach(x=>{ if(x.date===dt && x.status!=='cancelled' && !x.isSupport && (!a || x.id!==a.id)) busy.set(x.driverId, (busy.get(x.driverId)||0)+1); });
+  const drivers = state.data.drivers.filter(d=>d.status==='active').slice()
+    .sort((x,y)=> (a&&x.id===a.driverId?-1:0)-(a&&y.id===a.driverId?-1:0) || (freq.get(y.id)||0)-(freq.get(x.id)||0) || x.name.localeCompare(y.name,'zh-Hant'));
+  const dow = '日一二三四五六'[new Date(dt+'T00:00:00').getDay()];
+  const rowHtml = d=>{
+    const f = freq.get(d.id)||0, b = busy.get(d.id)||0;
+    return `<div class="pp-row ${a&&a.driverId===d.id?'cur':''}" data-pp="${d.id}" data-name="${escapeHtml(d.name)}"><span class="pp-n">${escapeHtml(d.name)}</span>${a&&a.driverId===d.id?'<span class="pp-tag now">目前</span>':''}${f>=2?`<span class="pp-tag freq">常跑 ${f} 趟</span>`:''}${b?`<span class="pp-tag busy">當天已排 ${b} 趟</span>`:''}</div>`;
+  };
+  host.innerHTML = `
+    <div class="pp-head"><b style="font-size:15px;">${dt.slice(5).replace('-','/')}（${dow}）${escapeHtml(routeDisplayName(route.name))}</b><button class="btn ghost" id="ppClose" style="padding:4px 12px;">關閉 ✕</button></div>
+    <div class="pp-cur">${a ? `目前是「${escapeHtml(driverName(a.driverId))}」，點下面的夥伴直接換人` : '點下面的夥伴就直接排進去'}（常跑這個任務起點的排前面）</div>
+    <input id="ppSearch" placeholder="搜尋夥伴姓名" autocomplete="off">
+    <div class="pp-list" id="ppList">${drivers.map(rowHtml).join('') || '<div class="empty">沒有在職的夥伴</div>'}</div>
+    ${a && !opts.compact ? `<div style="display:flex; gap:8px;"><button class="btn ghost" id="ppDetail" style="flex:1;">看詳細／例外調整</button><button class="btn danger" id="ppRemove" style="flex:1;">移除這趟</button></div>` : ''}
+    ${!a && opts.advanced ? `<button class="btn ghost" id="ppAdvanced" style="width:100%;">進階：調整這趟夥伴費用…</button>` : ''}`;
+  host.querySelector('#ppClose').onclick = close;
+  const search = host.querySelector('#ppSearch');
+  const filter = ()=>{ const q = search.value.trim().toLowerCase(); host.querySelectorAll('#ppList .pp-row').forEach(r=>{ r.style.display = !q || r.dataset.name.toLowerCase().includes(q) ? '' : 'none'; }); };
+  let composing = false;
+  search.addEventListener('compositionstart', ()=>{ composing = true; });
+  search.addEventListener('compositionend', ()=>{ composing = false; filter(); });
+  search.addEventListener('input', ()=>{ if(!composing) filter(); });
+  search.addEventListener('keydown', e=>{ if(e.key==='Enter'){ const first = [...host.querySelectorAll('#ppList .pp-row')].find(r=>r.style.display!=='none'); if(first) first.click(); } if(e.key==='Escape') close(); });
+  host.querySelectorAll('#ppList .pp-row').forEach(row=>{
+    row.onclick = async ()=>{
+      const driverId = row.dataset.pp;
+      if(a && a.driverId===driverId){ close(); return; }
+      row.classList.add('saving');
+      try{
+        if(a) await reassignAssignmentDriver(a.id, driverId);
+        else await createAssignment({ date:dt, routeId:rid, driverId });
+        toast(`${a?'已換成':'已排'}「${driverName(driverId)}」：${dt.slice(5).replace('-','/')} ${routeDisplayName(route.name)}`, { type:'ok' });
+        close();
+        renderContent();
+        if(!a && isMobile) advanceToNextEmpty();
+      }catch(err){ row.classList.remove('saving'); toast(err.message, { type:'error' }); }
+    };
+  });
+  const rm = host.querySelector('#ppRemove');
+  if(rm) rm.onclick = async ()=>{
+    if(!confirm(`確定要移除 ${dt.slice(5).replace('-','/')} ${routeDisplayName(route.name)}（${driverName(a.driverId)}）這趟嗎？無法復原。`)) return;
+    try{ await deleteAssignment(a.id); close(); renderContent(); }catch(err){ toast(err.message, { type:'error' }); }
+  };
+  const dtl = host.querySelector('#ppDetail');
+  if(dtl) dtl.onclick = ()=>{
+    if(isMobile){
+      host.innerHTML = '';
+      renderAssignmentDetail(a.id, host);
+      host.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
+      host.querySelector('#mSheetClose').onclick = close;
+    } else { close(); toast('點週期任務清單裡的那一格可以看詳細。', { type:'info' }); }
+  };
+  const adv = host.querySelector('#ppAdvanced');
+  if(adv) adv.onclick = ()=>{ close(); renderQuickCreate(rid, dt); };
+  setTimeout(()=>{ try{ search.focus({preventScroll:true}); }catch(e){} }, 50);
+}
+function renderMobileSchedule(week){
+  const host = document.getElementById('mSchedule');
+  if(!host) return;
+  const originFilter = document.getElementById('originFilter').value;
+  const today = todayStr();
+  if(!state._mDay || !week.includes(state._mDay)) state._mDay = week.includes(today) ? today : week[0];
+  const day = state._mDay;
+  const DOW = ['一','二','三','四','五','六','日'];
+  const strip = week.map((d,i)=>{
+    const slots = mobileSlotsFor(d, originFilter).flatMap(o=>o.routes.flatMap(r=>r.slots));
+    const filled = slots.filter(sl=>sl.items.length).length;
+    const lack = slots.length && filled < slots.length;
+    return `<div class="m-day ${d===day?'sel':''} ${d===today?'today':''} ${lack?'lack':''}" data-mday="${d}"><small>${DOW[i]}</small><b>${d.slice(8)}</b><small>${filled}/${slots.length}</small></div>`;
+  }).join('');
+  const origins = mobileSlotsFor(day, originFilter);
+  const editMode = getSchedMode()==='edit';
+  const slotHtml = sl=>{
+    const sh = sl.shift==='AM' ? '上午' : '下午';
+    if(!sl.items.length) return `<div class="m-slot empty ${editMode?'edit':''}" data-mquick="${sl.route.id}|${day}"><span class="sh">${sh}</span><span class="nm">（未排）</span><span class="go">${editMode?'選夥伴 ›':'＋ 指派'}</span></div>`;
+    return sl.items.map(a=>{
+      const issue = (a.hasIssue || (a.dropPoints||[]).some(dp=>dp.status!=='completed')) ? ' ⚠️' : '';
+      const icons = (a.status==='completed'?'🔒':a.status==='in_progress'?'▶':'') + issue + (a.published===false?' 📝草稿':'') + ((Number(a.extraPay)||0)?` ${a.extraPay>0?'+':'−'}${money(Math.abs(a.extraPay))}`:'') + ((Number(a.paidAmount)||0)>0?' ✅':'');
+      return `<div class="m-slot ${a.published===false?'draft':''} ${taskStateClass(a)} ${editMode&&a.status==='scheduled'?'edit':''}" data-mview="${a.id}"><span class="sh">${sh}</span><span class="nm">${escapeHtml(driverName(a.driverId))}</span><span class="ic">${icons}</span><span class="go">›</span></div>`;
+    }).join('');
+  };
+  const prevOpen = state._mOpenOrigins;
+  const body = origins.length ? origins.map((o,i)=>{
+    const open = prevOpen ? prevOpen.includes(o.origin.address) : i===0;
+    return `<details class="m-origin" data-morigin="${escapeHtml(o.origin.address)}" ${open?'open':''}><summary>${escapeHtml(o.origin.label||o.origin.address)}</summary>
+      ${o.routes.map(r=>`<div class="m-route"><div class="m-route-title">${escapeHtml(seqToR(r.baseSeq))}</div>${r.slots.map(slotHtml).join('')}</div>`).join('')}
+    </details>`;
+  }).join('') : '<div class="empty">這天沒有可排的路線</div>';
+  const weekEmpty = editMode ? bulkWeekInfo().empties.length : 0;
+  host.innerHTML = `
+    <div class="m-modebar no-print"><button data-smode="browse" class="${editMode?'':'on'}">👀 瀏覽</button><button data-smode="edit" class="${editMode?'on':''}">✏️ 排班</button></div>
+    ${editMode ? `<div class="m-editbanner no-print">排班模式：點<b>空格</b>直接選夥伴、點<b>已排的格子</b>換人；排完會自動跳到下一個空格。本週還有 <b>${weekEmpty}</b> 個空格沒排。</div>` : ''}
+    <div class="m-strip">${strip}</div>
+    <div class="m-actions no-print">
+      <button class="btn ghost" id="mCopyYesterday">複製昨天</button>
+      <button class="btn ghost" id="mCopyLastWeek">複製上週同一天</button>
+    </div>
+    <h3 style="margin:0 0 8px;">${day.slice(5).replace('-','/')}（星期${DOW[week.indexOf(day)]}）${day===today?'・今天':''}</h3>
+    ${body}`;
+  host.querySelectorAll('[data-smode]').forEach(b=>{ b.onclick = ()=>{ if(b.dataset.smode!==getSchedMode()) setSchedMode(b.dataset.smode); }; });
+  host.querySelectorAll('[data-mday]').forEach(el=>{ el.onclick = ()=>{ state._mDay = el.dataset.mday; renderMobileSchedule(week); }; });
+  host.querySelectorAll('[data-morigin]').forEach(el=>{
+    el.addEventListener('toggle', ()=>{ state._mOpenOrigins = [...host.querySelectorAll('[data-morigin]')].filter(d=>d.open).map(d=>d.dataset.morigin); });
+  });
+  const sheet = document.getElementById('assignDetail');
+  const backdrop = document.getElementById('mSheetBackdrop');
+  const closeSheet = ()=>{ sheet.innerHTML = ''; backdrop.classList.remove('show'); };
+  backdrop.onclick = closeSheet;
+  // 面板被清空（例如按「取消」）時，一併收掉背景遮罩
+  if(!sheet._mObs){ sheet._mObs = new MutationObserver(()=>{ if(!sheet.innerHTML.trim()) backdrop.classList.remove('show'); }); sheet._mObs.observe(sheet, { childList:true }); }
+  host.querySelectorAll('[data-mview]').forEach(el=>{
+    el.onclick = ()=>{
+      if(bulkOn()){ bulkClick([el]); return; }
+      if(editMode){
+        const ax = state.data.assignments.find(x=>x.id===el.dataset.mview);
+        if(ax && ax.status==='scheduled'){ openPartnerPicker({ assignment: ax }); return; }
+      }
+      sheet.innerHTML = '';
+      backdrop.classList.add('show');
+      renderAssignmentDetail(el.dataset.mview, sheet);
+      sheet.insertAdjacentHTML('afterbegin', '<div style="text-align:right; margin-bottom:6px;"><button class="btn ghost" id="mSheetClose" style="padding:4px 12px;">關閉 ✕</button></div>');
+      document.getElementById('mSheetClose').onclick = closeSheet;
+    };
+  });
+  host.querySelectorAll('[data-mquick]').forEach(el=>{
+    el.onclick = ()=>{
+      if(bulkOn()){ bulkClick([el]); return; }
+      const [routeId, date] = el.dataset.mquick.split('|');
+      openPartnerPicker({ routeId, date, advanced:true });
+    };
+  });
+  host.querySelectorAll('.m-route-title').forEach(t=>{ t.onclick = ()=>{ if(bulkOn()) bulkClick([t.parentElement]); }; });
+  bulkRefresh();
+  document.getElementById('mCopyYesterday').onclick = ()=> copyDayAssignments(ymd(addDays(day,-1)), day);
+  document.getElementById('mCopyLastWeek').onclick = ()=> copyDayAssignments(ymd(addDays(day,-7)), day);
+  const mb = document.getElementById('mBatchBtn');
+  if(mb) mb.onclick = ()=>{ const bp = document.getElementById('batchPanel'); bp.classList.toggle('open'); if(bp.classList.contains('open')) bp.scrollIntoView({behavior:'smooth', block:'start'}); };
+}
+// ---------- 週期任務清單：電腦版拖拉排班 ----------
+// 拖「夥伴」到格子：空格＝排進去、有人的格子＝換人；拖「任務格子」到另一格：兩格對調夥伴（空格＝移過去）。
+// 只動「還沒出發」的任務；每個動作都有「復原」按鈕。
+async function dndExecute(src, targetEl){
+  const dropAssign = targetEl.dataset.viewassign ? state.data.assignments.find(a=>a.id===targetEl.dataset.viewassign) : null;
+  const quick = targetEl.dataset.quickcreate ? targetEl.dataset.quickcreate.split('|') : null;
+  const nameOf = id=> driverName(id);
+  const done = (msg, undo)=>{ toast(msg, { type:'ok', action: undo ? { label:'復原', fn: async ()=>{ await undo(); renderContent(); toast('已復原', { type:'ok' }); } } : null }); renderContent(); };
+  const mustBeScheduled = a=>{ if(a.status!=='scheduled'){ toast('這一趟已經出發或完成，不能再換。', { type:'error' }); return false; } return true; };
+  try{
+    if(src.kind==='driver'){
+      if(quick){
+        const [routeId, date] = quick;
+        const route = state.data.routes.find(r=>r.id===routeId);
+        if(!route || !getActiveVersion(route, date)){ toast(`這條路線在 ${date} 沒有生效的店點版本，請先到路線管理建立。`, { type:'error' }); return; }
+        const created = await createAssignment({ date, routeId, driverId: src.id });
+        done(`已把「${nameOf(src.id)}」排進 ${date.slice(5)} ${routeDisplayName(route.name)}`, async ()=>{ await deleteAssignment(created.id); });
+      } else if(dropAssign){
+        if(!mustBeScheduled(dropAssign)) return;
+        if(dropAssign.driverId===src.id) return;
+        const prev = dropAssign.driverId;
+        await reassignAssignmentDriver(dropAssign.id, src.id);
+        done(`已把 ${dropAssign.date.slice(5)} ${routeName(dropAssign.routeId)} 從「${nameOf(prev)}」換成「${nameOf(src.id)}」`, async ()=>{ await reassignAssignmentDriver(dropAssign.id, prev); });
+      }
+    } else if(src.kind==='task'){
+      const S = state.data.assignments.find(a=>a.id===src.id); if(!S || !mustBeScheduled(S)) return;
+      if(dropAssign){
+        if(dropAssign.id===S.id) return;
+        if(!mustBeScheduled(dropAssign)) return;
+        const a1 = S.driverId, a2 = dropAssign.driverId;
+        if(a1===a2) return;
+        await reassignAssignmentDriver(S.id, a2); await reassignAssignmentDriver(dropAssign.id, a1);
+        done(`已對調：${S.date.slice(5)} ${routeName(S.routeId)}「${nameOf(a2)}」⇄ ${dropAssign.date.slice(5)} ${routeName(dropAssign.routeId)}「${nameOf(a1)}」`, async ()=>{ await reassignAssignmentDriver(S.id, a1); await reassignAssignmentDriver(dropAssign.id, a2); });
+      } else if(quick){
+        const [routeId, date] = quick;
+        const route = state.data.routes.find(r=>r.id===routeId);
+        if(!route || !getActiveVersion(route, date)){ toast(`這條路線在 ${date} 沒有生效的店點版本，請先到路線管理建立。`, { type:'error' }); return; }
+        const driverId = S.driverId, oldRoute = S.routeId, oldDate = S.date;
+        const created = await createAssignment({ date, routeId, driverId });
+        await deleteAssignment(S.id);
+        done(`已把「${nameOf(driverId)}」從 ${oldDate.slice(5)} ${routeName(oldRoute)} 移到 ${date.slice(5)} ${routeDisplayName(route.name)}`, async ()=>{ await deleteAssignment(created.id); await createAssignment({ date: oldDate, routeId: oldRoute, driverId }); });
+      }
+    }
+  }catch(err){ toast(err.message, { type:'error' }); }
+}
+function bindGridDnd(wrap){
+  if(!desktopDnd() || bulkOn()) return;
+  let src = null;
+  const targets = [...wrap.querySelectorAll('[data-viewassign],[data-quickcreate]')];
+  const clearOver = ()=> targets.forEach(t=>t.classList.remove('dnd-over','dnd-no'));
+  const canDrop = t=>{
+    if(!src) return false;
+    const a = t.dataset.viewassign ? state.data.assignments.find(x=>x.id===t.dataset.viewassign) : null;
+    if(a && a.status!=='scheduled') return false;
+    if(src.kind==='task' && a && a.id===src.id) return false;
+    return true;
+  };
+  targets.forEach(t=>{
+    const a = t.dataset.viewassign ? state.data.assignments.find(x=>x.id===t.dataset.viewassign) : null;
+    if(a && a.status==='scheduled'){
+      t.setAttribute('draggable','true');
+      t.addEventListener('dragstart', e=>{ src = { kind:'task', id:a.id }; t.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain','task:'+a.id); e.stopPropagation(); });
+      t.addEventListener('dragend', ()=>{ t.classList.remove('dragging'); clearOver(); src = null; });
+    }
+    t.addEventListener('dragover', e=>{ if(!src) return; e.preventDefault(); clearOver(); t.classList.add(canDrop(t) ? 'dnd-over' : 'dnd-no'); e.dataTransfer.dropEffect = canDrop(t) ? 'move' : 'none'; });
+    t.addEventListener('dragleave', ()=> t.classList.remove('dnd-over','dnd-no'));
+    t.addEventListener('drop', e=>{ if(!src) return; e.preventDefault(); const ok = canDrop(t), s = src; src = null; clearOver(); if(ok) dndExecute(s, t); });
+  });
+  // 夥伴調色盤
+  const chipsEl = document.getElementById('dndChips'), filter = document.getElementById('dndFilter'), pal = document.getElementById('dndPalette');
+  if(pal){
+    pal.addEventListener('toggle', ()=>{ state._palOpen = pal.open; });
+    const weekCounts = new Map();
+    state.data.assignments.forEach(a=>{ if(a.status!=='cancelled' && !a.isSupport) weekCounts.set(a.driverId, (weekCounts.get(a.driverId)||0)+1); });
+    const drivers = state.data.drivers.filter(d=>d.status==='active').sort((x,y)=>(weekCounts.get(y.id)||0)-(weekCounts.get(x.id)||0) || x.name.localeCompare(y.name,'zh-Hant'));
+    const draw = ()=>{
+      const q = (filter.value||'').trim().toLowerCase();
+      chipsEl.innerHTML = drivers.filter(d=>!q || d.name.toLowerCase().includes(q)).map(d=>`<span class="dnd-chip" draggable="true" data-chip="${d.id}">${escapeHtml(d.name)}</span>`).join('') || '<span style="font-size:12px; color:var(--ink-soft);">找不到夥伴</span>';
+      chipsEl.querySelectorAll('[data-chip]').forEach(ch=>{
+        ch.addEventListener('dragstart', e=>{ src = { kind:'driver', id:ch.dataset.chip }; ch.classList.add('dragging'); e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain','driver:'+ch.dataset.chip); });
+        ch.addEventListener('dragend', ()=>{ ch.classList.remove('dragging'); clearOver(); src = null; });
+      });
+    };
+    filter.oninput = draw; draw();
+  }
+}
+// ---------- 批量修改（週期任務清單）----------
+// 開啟後，點格子不再開明細，而是「選取」：已排任務和空格都能選。選好之後一次：
+// ‧指派給某位夥伴（已排任務＝換人、空格＝新增任務）　‧刪除選取的任務。
+// 點日期標題＝選那一天全部、點車次名稱＝選那一車整週；也有「全週草稿／某位夥伴」等快速選取。
+// 只動「已排定、尚未出發」的任務；已出發、已完成的會自動略過。下週自動延續的草稿正好適合這樣一次改完再發佈。
+const BULK_SEL = '[data-viewassign],[data-quickcreate],[data-mview],[data-mquick]';
+function bulkOn(){ return !!(state._bulk && state._bulk.on); }
+function bulkKeyOf(el){
+  const d = el.dataset;
+  if(d.viewassign) return 'a:'+d.viewassign;
+  if(d.mview) return 'a:'+d.mview;
+  if(d.quickcreate) return 'e:'+d.quickcreate;
+  if(d.mquick) return 'e:'+d.mquick;
+  return null;
+}
+function bulkClick(roots){
+  if(!bulkOn()) return;
+  const keys = [];
+  roots.forEach(r=>{ (r.matches && r.matches(BULK_SEL) ? [r] : [...r.querySelectorAll(BULK_SEL)]).forEach(el=>{ const k = bulkKeyOf(el); if(k) keys.push(k); }); });
+  if(!keys.length) return;
+  const sel = state._bulk.sel;
+  const allSel = keys.every(k=>sel.has(k));
+  keys.forEach(k=> allSel ? sel.delete(k) : sel.add(k));
+  bulkRefresh();
+}
+// 這一週（套用目前的任務起點篩選）所有任務與空格
+function bulkWeekInfo(){
+  const week = getWeekDates(state.weekOffset);
+  const of = (document.getElementById('originFilter')||{}).value || '';
+  const tasks = [], empties = [];
+  week.forEach(d=> mobileSlotsFor(d, of).forEach(o=>o.routes.forEach(r=>r.slots.forEach(sl=>{
+    if(sl.items.length) sl.items.forEach(a=>tasks.push(a));
+    else empties.push({ routeId: sl.route.id, date: d, shift: sl.shift });
+  }))));
+  return { week, tasks, empties };
+}
+function bulkSelection(){
+  const tasks = [], empties = [];
+  state._bulk.sel.forEach(k=>{
+    if(k.startsWith('a:')){ const a = state.data.assignments.find(x=>x.id===k.slice(2)); if(a) tasks.push(a); }
+    else { const [routeId, date] = k.slice(2).split('|'); const r = state.data.routes.find(x=>x.id===routeId); if(r) empties.push({ routeId, date, shift: r.shift }); }
+  });
+  return { tasks, empties };
+}
+function bulkRefresh(){
+  if(!bulkOn()) return;
+  const sel = state._bulk.sel;
+  document.querySelectorAll('#gridWeek1 '+BULK_SEL.split(',').join(', #gridWeek1 ')+', #mSchedule '+BULK_SEL.split(',').join(', #mSchedule ')).forEach(el=>{
+    const k = bulkKeyOf(el);
+    el.classList.toggle('bulk-sel', !!k && sel.has(k));
+  });
+  const cnt = document.getElementById('bulkCount');
+  if(cnt){
+    const { tasks, empties } = bulkSelection();
+    cnt.textContent = `已選 ${tasks.length} 個任務、${empties.length} 個空格`;
+  }
+}
+function renderBulkBar(week){
+  const bar = document.getElementById('bulkBar');
+  if(!bar) return;
+  const info = bulkWeekInfo();
+  const perDriver = new Map();
+  info.tasks.forEach(a=> perDriver.set(a.driverId, (perDriver.get(a.driverId)||0)+1));
+  const srcOpts = [...perDriver.entries()].sort((x,y)=> driverName(x[0]).localeCompare(driverName(y[0]), 'zh-Hant'))
+    .map(([id,n])=>`<option value="${id}">${escapeHtml(driverName(id))}（${n}）</option>`).join('');
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+  bar.innerHTML = `
+    <div class="bulk-row"><b>批量修改</b><span id="bulkCount"></span><button class="btn ghost" id="bulkClear">清除選取</button></div>
+    <div class="bulk-row"><span>指派給：</span><div class="bulk-pick"><select id="bulkDriver"><option value="">選擇夥伴</option>${driverOpts}</select></div>
+      <button class="btn amber" id="bulkApply">套用（換人／空格新增）</button>
+      <button class="btn danger" id="bulkDelete">刪除選取的任務</button>
+    </div>
+    <details class="bulk-row" style="display:block;"><summary style="cursor:pointer; font-weight:600;">快速選取／說明</summary>
+      <div class="bulk-row" style="color:var(--ink-soft);">點格子選取／取消；電腦版可點日期標題選整天、點車次名稱選整車；手機版點車次名稱選那一車。</div>
+      <div class="bulk-row"><button class="btn ghost" id="bulkQDraft">全週草稿</button>
+        <button class="btn ghost" id="bulkQAll">全週所有任務</button>
+        <button class="btn ghost" id="bulkQEmpty">全週空格</button>
+        <button class="btn ghost m-only" id="bulkQDay">這一天全部</button>
+        <select id="bulkSrc"><option value="">某位夥伴的全週任務…</option>${srcOpts}</select>
+      </div>
+    </details>`;
+  const pick = bar.querySelector('#bulkDriver');
+  enhanceDriverSelect(pick, {});
+  const list = pick.nextElementSibling && pick.nextElementSibling.children[1];
+  if(list){ list.style.top = 'auto'; list.style.bottom = '100%'; } // 底部工具列：選單往上展開
+  const add = keys=>{ keys.forEach(k=>state._bulk.sel.add(k)); bulkRefresh(); };
+  bar.querySelector('#bulkClear').onclick = ()=>{ state._bulk.sel.clear(); bulkRefresh(); };
+  bar.querySelector('#bulkQDraft').onclick = ()=> add(info.tasks.filter(a=>a.published===false).map(a=>'a:'+a.id));
+  bar.querySelector('#bulkQAll').onclick = ()=> add(info.tasks.map(a=>'a:'+a.id));
+  bar.querySelector('#bulkQEmpty').onclick = ()=> add(info.empties.map(e=>'e:'+e.routeId+'|'+e.date));
+  bar.querySelector('#bulkQDay').onclick = ()=>{
+    const day = state._mDay;
+    add(info.tasks.filter(a=>a.date===day).map(a=>'a:'+a.id).concat(info.empties.filter(e=>e.date===day).map(e=>'e:'+e.routeId+'|'+e.date)));
+  };
+  bar.querySelector('#bulkSrc').onchange = e=>{
+    const id = e.target.value; if(!id) return;
+    add(info.tasks.filter(a=>a.driverId===id).map(a=>'a:'+a.id));
+    e.target.value = '';
+  };
+  bar.querySelector('#bulkApply').onclick = bulkApply;
+  bar.querySelector('#bulkDelete').onclick = bulkDelete;
+  bulkRefresh();
+}
+async function bulkApply(){
+  const driverId = document.getElementById('bulkDriver').value;
+  if(!driverId){ alert('請先選擇要指派的夥伴'); return; }
+  const { tasks, empties } = bulkSelection();
+  if(!tasks.length && !empties.length){ alert('還沒有選任何格子'); return; }
+  const toChange = tasks.filter(a=>a.status==='scheduled' && a.driverId!==driverId);
+  const sameAlready = tasks.filter(a=>a.status==='scheduled' && a.driverId===driverId).length;
+  const locked = tasks.filter(a=>a.status!=='scheduled').length;
+  const toCreate = [], noVersion = [];
+  empties.forEach(e=>{
+    const route = state.data.routes.find(r=>r.id===e.routeId);
+    if(!route || !getActiveVersion(route, e.date)) noVersion.push(e); else toCreate.push(e);
+  });
+  if(!toChange.length && !toCreate.length){ alert('沒有需要異動的格子' + (locked?`（${locked} 個已出發／已完成的任務不能改）`:'') + (noVersion.length?`（${noVersion.length} 個空格當天路線沒有生效版本，無法新增）`:'')); return; }
+  // 同一位夥伴同一天同一班次已經有別的任務（或這次一起被排到同一格）→ 提醒，不阻擋
+  const shiftOf = a=>{ const r = state.data.routes.find(x=>x.id===a.routeId); return r ? r.shift : ''; };
+  const targetIds = new Set(toChange.map(a=>a.id));
+  const occupied = new Map();
+  state.data.assignments.forEach(a=>{ if(a.driverId===driverId && a.status!=='cancelled' && !targetIds.has(a.id)) occupied.set(a.date+'|'+shiftOf(a), (occupied.get(a.date+'|'+shiftOf(a))||0)+1); });
+  const batch = new Map();
+  let clash = 0;
+  toChange.map(a=>a.date+'|'+shiftOf(a)).concat(toCreate.map(e=>e.date+'|'+e.shift)).forEach(k=>{
+    batch.set(k, (batch.get(k)||0)+1);
+    if(occupied.has(k) || batch.get(k)>1) clash++;
+  });
+  const lines = [];
+  if(toChange.length) lines.push(`把 ${toChange.length} 個已排任務換成「${driverName(driverId)}」`);
+  if(toCreate.length) lines.push(`在 ${toCreate.length} 個空格新增任務給「${driverName(driverId)}」`);
+  if(sameAlready) lines.push(`${sameAlready} 個本來就是他，不變`);
+  if(locked) lines.push(`${locked} 個已出發／已完成的任務略過`);
+  if(noVersion.length) lines.push(`${noVersion.length} 個空格當天路線沒有生效版本，略過`);
+  if(clash) lines.push(`⚠️ 有 ${clash} 格會讓他同一天同一班次有 2 趟以上，請確認`);
+  if(!confirm(lines.join('\n') + '\n\n確定要套用嗎？')) return;
+  const btn = document.getElementById('bulkApply'); if(btn) btn.disabled = true;
+  const failed = [];
+  try{
+    if(toChange.length) await reassignAssignmentsBulk(toChange.map(a=>a.id), driverId);
+    for(let i=0; i<toCreate.length; i+=5){
+      await Promise.all(toCreate.slice(i, i+5).map(e=> createAssignment({ date:e.date, routeId:e.routeId, driverId }).catch(err=>{ failed.push(`${e.date} ${routeName(e.routeId)}：${err.message}`); })));
+    }
+  }catch(err){ alert(err.message); }
+  if(failed.length) alert(`有 ${failed.length} 格新增失敗：\n` + failed.slice(0,5).join('\n'));
+  state._bulk.sel.clear();
+  renderContent();
+}
+async function bulkDelete(){
+  const { tasks } = bulkSelection();
+  if(!tasks.length){ alert('還沒有選任何任務（空格不需要刪除）'); return; }
+  const del = tasks.filter(a=>a.status==='scheduled');
+  const locked = tasks.length - del.length;
+  if(!del.length){ alert('選到的任務都已出發或已完成，不能刪除。'); return; }
+  const pubN = del.filter(a=>a.published!==false).length;
+  if(!confirm(`確定要刪除 ${del.length} 個已排定的任務嗎？無法復原。` + (pubN?`\n其中 ${pubN} 個已發佈，夥伴會看不到這幾趟。`:'') + (locked?`\n${locked} 個已出發／已完成的任務不會刪。`:''))) return;
+  try{ await deleteAssignmentsBulk(del.map(a=>a.id)); }
+  catch(err){ alert(err.message); }
+  state._bulk.sel.clear();
+  renderContent();
+}
+// 任務在週期任務清單的狀態分類（決定格子左邊的色條）：
+// 草稿＝琥珀、有異常（夥伴回報異常，或已完成但有店點沒送達）＝紅、進行中＝藍、已完成＝綠、已排定＝灰。
+function taskStateClass(a){
+  if(a.published===false) return 'st-draft';
+  if(a.hasIssue || (a.status==='completed' && (a.dropPoints||[]).some(dp=>dp.status!=='completed'))) return 'st-issue';
+  if(a.status==='in_progress') return 'st-prog';
+  if(a.status==='completed') return 'st-done';
+  return 'st-sched';
+}
+function renderWeekGrid(containerId, dates){
+  const wrap = document.getElementById(containerId);
+  const originFilterVal = document.getElementById('originFilter').value;
+  const origins = originFilterVal ? state.data.origins.filter(og=>og.address===originFilterVal) : state.data.origins;
+
+  const todayD = todayStr();
+  const colCls = d=> d===todayD ? 'today-col' : '';
+  function cellHtml(route, date){
+    if(!route) return `<td class="grid-black"></td>`;
+    const a = state.data.assignments.find(x=>x.routeId===route.id && x.date===date);
+    if(!a) return `<td class="grid-cell st-empty ${colCls(date)}" data-bdate="${date}" data-quickcreate="${route.id}|${date}">　</td>`;
+    // 驚嘆號的判斷改成「這趟只要有任何一個店點沒有status=completed」就顯示，
+    // 不管是還沒處理、還是夥伴已經填了未完成原因（通路未下單/央廚未出貨等）——
+    // 只要沒送達，不論理由，主控在週期任務清單就該一眼看到要留意；原本只看 a.hasIssue
+    // 會漏掉「夥伴把每個店點都填了原因、allHandled視為true、結案時沒觸發
+    // has_issue」的情況（詳細是哪個店點、什麼原因，只在點進去的任務明細顯示，
+    // 這裡週期任務清單格子維持簡單，不重複塞理由文字）。
+    return `<td class="grid-cell ${taskStateClass(a)} ${colCls(date)}" data-bdate="${date}" data-viewassign="${a.id}">${assignmentInner(a)}</td>`;
+  }
+  function assignmentInner(a){
+    const anyUndelivered = (a.dropPoints||[]).some(dp=>dp.status!=='completed');
+    const issue = (a.hasIssue || anyUndelivered) ? ' ⚠️' : '';
+    const tag = (a.status==='completed' ? ' 🔒' : a.status==='in_progress' ? ' ▶' : '') + (a.published===false ? ' <span title="草稿：尚未發佈，夥伴看不到" style="font-size:10px; color:var(--amber);">📝草稿</span>' : '');
+    const extra = Number(a.extraPay)||0;
+    const extraTag = extra ? ` <b style="color:${extra>0?'var(--ok,#2E7D32)':'var(--danger)'};">${extra>0?'+':'−'}${money(Math.abs(extra))}</b>` : '';
+    const paidTag = (Number(a.paidAmount)||0)>0 ? ` <span title="${escapeHtml((a.paidDate||'')+'支付'+(a.paidPeriodStart?'　區間 '+a.paidPeriodStart+'～'+a.paidPeriodEnd:''))}" style="font-size:10px; color:var(--ok,#2E7D32);">✅${a.paidDate?a.paidDate.slice(5).replace('-','/')+'付':'已付'}</span>` : '';
+    const feeLine = (a.fare || a.distanceKm || extra || paidTag) ? `<br><span style="font-weight:400; font-size:10.5px; color:var(--ink-soft);">$${money(Number(a.payrollFareSnapshot ?? a.fare)||0)}・${a.distanceKm||0}km${extraTag}${paidTag}</span>` : '';
+    return `${driverName(a.driverId)}${tag}${issue}${feeLine}`;
+  }
+  // 「星期一」／「週二到五」這種分成兩條路線、但在週期任務清單合併成同一格的車次：不能只看
+  // 依星期幾挑中的那一條路線，如果同一天同一班另一條路線底下也有任務（例如星期一那天
+  // 實際用了「週二到五」版本，或同一位夥伴兩條路線都排了），也要一起列出來，不然點
+  // 夥伴名字只看得到其中一趟、另一趟被藏起來。同一格有多趟時，每趟各自可以點擊，
+  // 並標出是哪一條路線版本。
+  function slotCellHtml(candidates, preferred, date){
+    if(!preferred) return cellHtml(preferred, date);
+    const byId = new Map(candidates.map(r=>[r.id, r]));
+    // 同一格有多趟時，順序固定：先放這一天預設該用的那條路線，其餘依路線名稱（沒有標註的在前）排，
+    // 每一天都同一個順序，不會一天上面是「星期二到五」、隔天上面變成沒標註的。
+    const rank = a=> (a.routeId===preferred.id ? 0 : 1);
+    const list = state.data.assignments.filter(x=>x.date===date && byId.has(x.routeId))
+      .sort((x,y)=> rank(x)-rank(y) || (byId.get(x.routeId).seq||'').localeCompare(byId.get(y.routeId).seq||'', 'zh-Hant') || x.id.localeCompare(y.id));
+    if(list.length===0) return cellHtml(preferred, date);
+    if(list.length===1) return cellHtml(byId.get(list[0].routeId), date);
+    return `<td class="grid-cell grid-multi ${colCls(date)}" data-bdate="${date}">${list.map(a=>{
+      const label = (byId.get(a.routeId).seq.match(/[（(]([^）)]*)[）)]/)||[])[1] || '';
+      return `<div class="grid-sub ${taskStateClass(a)}" data-viewassign="${a.id}">${label?`<span class="grid-sub-label">${escapeHtml(label)}</span><br>`:''}${assignmentInner(a)}</div>`;
+    }).join('')}</td>`;
+  }
+  function headerHtml(){
+    const dateRow = dates.map(d=>{
+      const wd = new Date(d+'T00:00:00').getDay();
+      const isWeekend = wd===0||wd===6;
+      const holiday = holidayForDate(d);
+      return `<th colspan="2" data-bdate="${d}" class="${isWeekend?'weekend':''} ${d===todayD?'today-col':''}">${d===todayD?'今天 ':''}${d.slice(5)}（星期${WEEKDAY_ZH[wd===0?6:wd-1]}）${holiday?`<br><span style="font-weight:400; font-size:10.5px; color:var(--amber);">${escapeHtml(holiday.name)}</span>`:''}</th>`;
+    }).join('');
+    const shiftRow = dates.map(d=>{
+      const wd = new Date(d+'T00:00:00').getDay();
+      const isWeekend = wd===0||wd===6;
+      return `<th class="${isWeekend?'weekend':''} ${d===todayD?'today-col':''}">上午</th><th class="${isWeekend?'weekend':''} ${d===todayD?'today-col':''}">下午</th>`;
+    }).join('');
+    return `<thead><tr><th></th>${dateRow}</tr><tr><th>車次</th>${shiftRow}</tr></thead>`;
+  }
+  const weekRouteIds = new Set(state.data.assignments.filter(a=>dates.includes(a.date)).map(a=>a.routeId));
+  const blocks = origins.map(og=>{
+    const routesHere = state.data.routes.filter(r=>r.originAddr===og.address && (r.status!=='inactive' || weekRouteIds.has(r.id)));
+    if(!routesHere.length) return '';
+    // 第七車/第八車這種「星期一報價」跟「週二到五」分成兩條路線的車次，週期任務清單
+    // 這裡只是顯示合併成一列，依每個日期欄位實際的星期幾去挑對應的那條路線——
+    // 完全不影響請款/夥伴費用/公里，那些金額仍然是各自路線（各自版本）原本
+    // 存的資料，只是「同一列、不同欄位讀不同路線」而已。
+    const baseSeqs = [...new Set(routesHere.map(r=>stripWeekdayLabel(r.seq)))].sort((a,b)=>seqSortKey(a)-seqSortKey(b));
+    const rows = baseSeqs.map(baseSeq=>{
+      const family = routesHere.filter(r=>stripWeekdayLabel(r.seq)===baseSeq);
+      function routeForDate(shift, dateStr){
+        const candidates = family.filter(r=>r.shift===shift);
+        if(candidates.length<=1) return candidates[0]||null;
+        const isMonday = new Date(dateStr+'T00:00:00').getDay()===1;
+        const mondayRoute = candidates.find(r=>/星期一|週一/.test(r.seq));
+        const otherRoute = candidates.find(r=>r!==mondayRoute);
+        return isMonday ? (mondayRoute||otherRoute) : (otherRoute||mondayRoute);
+      }
+      const candidatesOf = shift => family.filter(r=>r.shift===shift);
+      const cells = dates.map(d=> slotCellHtml(candidatesOf('AM'), routeForDate('AM',d), d) + slotCellHtml(candidatesOf('PM'), routeForDate('PM',d), d)).join('');
+      return `<tr><td class="row-label">${seqToR(baseSeq)}</td>${cells}</tr>`;
+    }).join('');
+    return `<div class="origin-title">${og.label||og.address}</div>
+      <div class="panel" style="overflow-x:auto; padding:8px;">
+        <table class="route-grid"><colgroup><col style="width:60px">${dates.map(()=>'<col><col>').join('')}</colgroup>${headerHtml()}<tbody>${rows}</tbody></table>
+      </div>`;
+  }).join('');
+  wrap.innerHTML = blocks || '<div class="empty">此任務起點尚無路線，請先到「路線管理」建立</div>';
+  // 任務明細改成直接展開在點擊的那一列下方（同一張表格裡插入一列），不用再滑到
+  // 最底部看；同一列（同一個車次/班次）再點一次收合，點別的任務就換成顯示那一趟。
+  wrap.querySelectorAll('[data-viewassign]').forEach(td=>{
+    td.onclick = ()=>{
+      if(bulkOn()){ bulkClick([td]); return; }
+      const tr = td.closest('tr');
+      const next = tr.nextElementSibling;
+      const alreadyOpenForThis = next && next.classList.contains('assign-detail-row') && next.dataset.forId===td.dataset.viewassign;
+      if(next && next.classList.contains('assign-detail-row')) next.remove();
+      if(alreadyOpenForThis) return;
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'assign-detail-row';
+      detailTr.dataset.forId = td.dataset.viewassign;
+      const detailTd = document.createElement('td');
+      detailTd.colSpan = tr.children.length;
+      // 這一列橫跨整張週期任務清單（7天×2班，比螢幕寬很多），明細面板如果跟著撐滿，
+      // 右上角的「刪除」跟狀態標籤會被擠到畫面外看不到；限制成可視寬度並固定在
+      // 左邊（sticky），表格橫向捲動時面板也不會跟著跑掉。
+      const holder = document.createElement('div');
+      const scroller = tr.closest('.panel') || wrap;
+      holder.style.cssText = 'position:sticky; left:0; box-sizing:border-box;';
+      holder.style.width = Math.max(300, scroller.clientWidth - 36) + 'px';
+      detailTd.appendChild(holder);
+      detailTr.appendChild(detailTd);
+      tr.after(detailTr);
+      renderAssignmentDetail(td.dataset.viewassign, holder);
+    };
+  });
+  wrap.querySelectorAll('[data-quickcreate]').forEach(td=>{
+    td.onclick = ()=>{
+      if(bulkOn()){ bulkClick([td]); return; }
+      const [routeId, date] = td.dataset.quickcreate.split('|');
+      openPartnerPicker({ routeId, date, advanced:true });
+    };
+  });
+  // 批量修改模式：點日期標題＝選那一天全部、點車次名稱＝選那一車整週
+  wrap.querySelectorAll('th[data-bdate]').forEach(th=>{
+    th.onclick = ()=>{ if(bulkOn()) bulkClick([...wrap.querySelectorAll('td[data-bdate="'+th.dataset.bdate+'"]')]); };
+  });
+  wrap.querySelectorAll('td.row-label').forEach(td=>{
+    td.onclick = ()=>{ if(bulkOn()) bulkClick([...td.closest('tr').querySelectorAll('td[data-bdate]')]); };
+  });
+  bulkRefresh();
+}
+function renderQuickCreate(routeId, date){
+  const box = document.getElementById('assignDetail');
+  const route = state.data.routes.find(r=>r.id===routeId);
+  const version = getActiveVersion(route, date);
+  if(!version){
+    box.innerHTML = `<div class="panel"><div class="note" style="border-color:var(--danger); color:var(--danger);">此路線在 ${date} 尚無生效的店點版本，請先到「路線管理」建立對應版本後再指派，避免任務店點是空的。</div></div>`;
+    return;
+  }
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+  const og = state.data.origins.find(o=>o.address===route.originAddr);
+  box.innerHTML = `
+    <div class="panel">
+      <h3 style="margin-top:0;">指派：${date} · ${routeDisplayName(route.name)}</h3>
+      <p style="font-size:12.5px;">任務起點：${og?(og.label||og.address):(route.originAddr||'—')}（跟隨路線設定，不可個別更改）</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">里程 ${version.distanceKm??'—'}km ・ 請款總額 $${money(version.billingTotal||0)}（跟隨路線目前生效版本，如需調整請到「路線管理」修改）</p>
+      <div class="field"><label>夥伴</label><select id="qDriver">${driverOpts}</select></div>
+      <div class="field"><label>調整金額（元，選填，留空則使用路線目前生效版本的夥伴費用 $${money(version.driverFare||0)}）</label><input id="qFareAdjust" type="number" placeholder="$${money(version.driverFare||0)}"></div>
+      <button class="btn amber" id="qSave">確認指派</button>
+      <button class="btn ghost" id="qCancel">取消</button>
+    </div>
+  `;
+  enhanceDriverSelect(document.getElementById('qDriver'), { getOrigin: ()=> route.originAddr });
+  document.getElementById('qCancel').onclick = ()=>{ box.innerHTML=''; };
+  document.getElementById('qSave').onclick = async ()=>{
+    const driverId = document.getElementById('qDriver').value;
+    if(!driverId){ alert('請選擇夥伴'); return; }
+    const fareAdjust = document.getElementById('qFareAdjust').value;
+    try{
+      await createAssignment({ date, routeId, driverId, fare: fareAdjust });
+      box.innerHTML=''; renderContent();
+    }catch(err){ alert(err.message); }
+  };
+}
+// 週期任務清單任務明細的「額外金額（臨時加錢／拆店調撥）」與「已付款」區塊（主控端）。
+// 額外金額併進這一趟的報酬（我的報酬、報酬結算、勞報單、即時利潤自動跟著變，勞報單不單獨列項）；
+// 已付款只影響可領淨額，不影響勞報單金額，跟預支是兩個獨立功能。
+// 主控：把這個任務還沒完成的幾個店點「臨時交給支援夥伴」。只改店點由誰到場，不動任何帳；
+// 拆分金額（選填）只是顯示給支援夥伴看，不計入報酬／請款／勞報單。
+function renderSupportSection(a, el){
+  if(!el) return;
+  if(a.status==='completed' || a.published===false){ el.innerHTML = ''; return; }
+  const free = a.dropPoints.filter(dp=>dp.status!=='completed' && !dp.helperId);
+  if(!free.length){ el.innerHTML = ''; return; }
+  el.innerHTML = `<details class="note" style="margin-top:8px;"><summary style="cursor:pointer; font-weight:600;">臨時交給支援夥伴（只移店點，帳不動）</summary>
+    <div style="font-size:12px; color:var(--ink-soft); margin:6px 0;">勾選要交出去的店點，支援夥伴會在他的「今日任務」看到並自己拍照上傳；原夥伴那幾個店點就不能再拍。報酬、請款、拆店調撥完全不變。</div>
+    ${free.map(dp=>`<label style="display:flex; align-items:center; gap:8px; padding:4px 0; font-size:13px;"><input type="checkbox" class="sdPick" value="${dp.id}" style="width:auto;"> ${escapeHtml(dpLabel(dp))}（${escapeHtml(channelName(dp.channelId))}）</label>`).join('')}
+    <div class="field" style="margin-top:6px;"><label>支援夥伴</label><select id="sdHelper"><option value="">選擇支援夥伴</option>${state.data.drivers.filter(d=>d.status==='active' && d.id!==a.driverId).map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>拆分金額（選填，只顯示給支援夥伴看，不計入任何帳）</label><input id="sdAmount" type="number" inputmode="numeric"></div>
+    <button class="btn amber" id="sdSave" style="padding:6px 12px;">交給支援夥伴</button>
+  </details>`;
+  const rt = state.data.routes.find(x=>x.id===a.routeId);
+  enhanceDriverSelect(el.querySelector('#sdHelper'), { getOrigin: ()=> rt ? rt.originAddr : null });
+  el.querySelector('#sdSave').onclick = async ()=>{
+    const ids = [...el.querySelectorAll('.sdPick:checked')].map(x=>x.value);
+    const helperId = el.querySelector('#sdHelper').value;
+    if(!ids.length){ alert('請至少勾選一個店點'); return; }
+    if(!helperId){ alert('請選擇支援夥伴'); return; }
+    if(!confirm(`把 ${ids.length} 個店點交給 ${driverName(helperId)} 支援嗎？\n他會在今日任務看到並自己拍照；原夥伴那幾個店點就不能再拍。帳完全不動。`)) return;
+    try{ await createDelegation({ assignmentId:a.id, helperId, dropPointIds:ids, amount: el.querySelector('#sdAmount').value }); renderContent(); }
+    catch(err){ alert(err.message); }
+  };
+}
+async function renderTripPaySection(a, el){
+  if(!el) return;
+  let logs = [];
+  try{
+    logs = await fetchTripPayLogs([a.id]);
+    // 拆店調撥同組的其他趟（顯示「來自／拆給」）
+    const groupIds = [...new Set(logs.filter(l=>l.group_id).map(l=>l.group_id))];
+    if(groupIds.length){
+      const supabase = getSupabase();
+      const { data } = await supabase.from('trip_pay_adjustments').select('*').in('group_id', groupIds);
+      (data||[]).forEach(l=>{ if(!logs.some(x=>x.id===l.id)) logs.push(l); });
+    }
+  }catch(err){ el.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; return; }
+  if(!el.isConnected) return;
+  const own = logs.filter(l=>l.assignment_id===a.id);
+  const sig = x=> `${x>0?'+':'−'}$${money(Math.abs(x))}`;
+  const tripLabel = id=>{ const t = state.data.assignments.find(x=>x.id===id); return t ? `${routeName(t.routeId)}（${driverName(t.driverId)}）` : '其他任務'; };
+  const extra = Number(a.extraPay)||0;
+  const frozen = findCoveringStatement(a.driverId, a.date);
+  const paid = Number(a.paidAmount)||0;
+  const sameDay = state.data.assignments.filter(x=>x.date===a.date && x.id!==a.id && x.status!=='cancelled');
+  el.innerHTML = `
+    <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center;">
+      <strong>額外金額（臨時加錢／拆店調撥）</strong>
+      <span>本趟報酬 <b>$${money(tripPay(a))}</b>${extra?`（車資 $${money(Number(a.payrollFareSnapshot ?? a.fare)||0)} ${sig(extra)}）`:''}</span>
+    </div>
+    ${frozen ? `<div style="color:var(--danger); font-size:12px; margin:4px 0;">已被勞報單（${statementLabel(frozen)}）涵蓋並凍結，額外金額不能再改；如需調整請先收回那份勞報單。</div>` : ''}
+    ${own.length ? `<table style="margin:6px 0;"><tbody>${own.map(l=>{
+      const mates = l.group_id ? logs.filter(x=>x.group_id===l.group_id && x.id!==l.id) : [];
+      return `<tr><td>${l.kind==='split'?'拆店調撥':'臨時加減'}</td><td class="amount">${sig(Number(l.amount))}</td><td>${escapeHtml(l.note||'')}${mates.length?`<br><span style="font-size:11px; color:var(--ink-soft);">同組：${mates.map(m=>`${tripLabel(m.assignment_id)} ${sig(Number(m.amount))}`).join('、')}</span>`:''}</td><td>${frozen?'':`<button class="btn danger" data-dellog="${l.id}" style="padding:2px 8px; font-size:11.5px;">${l.group_id?'刪除整組':'刪除'}</button>`}</td></tr>`;
+    }).join('')}</tbody></table>` : '<div style="font-size:12px; color:var(--ink-soft); margin:4px 0;">目前沒有額外金額。</div>'}
+    ${frozen ? '' : `<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0;">
+      <input id="tpAmt" type="number" placeholder="金額（減錢填負數）" style="width:150px;">
+      <input id="tpNote" placeholder="原因（選填）" maxlength="60" style="flex:1; min-width:120px;">
+      <button class="btn ghost" id="tpAdd" style="padding:5px 10px; font-size:12px;">新增臨時加減</button>
+      <button class="btn ghost" id="tpSplitToggle" style="padding:5px 10px; font-size:12px;">拆店調撥…</button>
+    </div>
+    <div id="tpSplitBox"></div>`}
+    <hr style="border:none; border-top:1px solid var(--border); margin:10px 0;">
+    <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center;">
+      <strong>已付款</strong>
+      <span>${paid>0 ? `<span class="badge completed">已付 $${money(paid)}</span>` : '<span class="badge pending">尚未付款</span>'}</span>
+    </div>
+    <div style="font-size:11.5px; color:var(--ink-soft); margin:2px 0 6px;">只影響「可領淨額」，不影響勞報單金額；預支功能不受影響。</div>
+    ${paid>0 ? `<div style="font-size:12.5px; margin-bottom:6px;">${a.paidDate||'—'} 以${a.paidMethod==='cash'?'現金':'轉帳'}支付${a.paidPeriodStart?`，區間 ${a.paidPeriodStart}～${a.paidPeriodEnd}`:''}。<button class="btn ghost" id="pdCancel" style="padding:3px 8px; font-size:11.5px;">${a.paidGroup?'取消這次付款（整個區間）':'取消已付款'}</button></div>` : ''}
+    <div style="font-size:12.5px; margin:6px 0 4px;">登記一次付款（${escapeHtml(driverName(a.driverId))}）：</div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+      <label style="font-size:12px;">區間</label><input id="pdStart" type="date" value="${a.date}"><span>～</span><input id="pdEnd" type="date" value="${a.date}">
+    </div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:4px;">
+      <label style="font-size:12px;">付款日期</label><input id="pdDate" type="date" value="${todayStr()}">
+      <select id="pdMethod" style="width:auto;"><option value="cash">現金</option><option value="transfer">轉帳</option></select>
+      <input id="pdAmt" type="number" placeholder="金額（空白＝區間全額）" style="width:170px;">
+      <button class="btn amber" id="pdSave" style="padding:5px 10px; font-size:12px;">登記已付款</button>
+    </div>
+    <div id="pdPreview" style="font-size:12px; color:var(--ink-soft); margin-top:4px;"></div>`;
+  const rerender = ()=>{ renderContent(); };
+  el.querySelectorAll('[data-dellog]').forEach(b=>{
+    b.onclick = async ()=>{
+      const l = logs.find(x=>x.id===b.dataset.dellog);
+      if(!confirm(l && l.group_id ? '這是拆店調撥，會把同組所有任務的金額一起刪除，確定嗎？' : '確定要刪除這筆額外金額嗎？')) return;
+      try{ await deleteTripPayLog(b.dataset.dellog); rerender(); }catch(err){ alert(err.message); }
+    };
+  });
+  const addBtn = el.querySelector('#tpAdd');
+  if(addBtn) addBtn.onclick = async ()=>{
+    try{ await addTripExtra(a.id, el.querySelector('#tpAmt').value, el.querySelector('#tpNote').value); rerender(); }
+    catch(err){ alert(err.message); }
+  };
+  const splitToggle = el.querySelector('#tpSplitToggle');
+  if(splitToggle) splitToggle.onclick = ()=>{
+    const sb = el.querySelector('#tpSplitBox');
+    if(sb.innerHTML){ sb.innerHTML=''; return; }
+    const P = tripPay(a);
+    sb.innerHTML = `
+      <div style="border:1px dashed var(--border); padding:8px; border-radius:8px;">
+        <div style="font-size:12px; margin-bottom:6px;">例如這趟 8 家 $800，拆 4／2／2：這趟保留 400，另外兩趟各加 200。總額不用一樣（距離變短可以少付）。</div>
+        <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;"><span style="font-size:12.5px;">這趟（${escapeHtml(driverName(a.driverId))}）調整後保留</span><input id="spKeep" type="number" value="${P}" style="width:100px;"></div>
+        ${sameDay.length ? sameDay.map(t=>`<div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;"><label style="display:flex; gap:4px; align-items:center; font-size:12.5px; flex:1;"><input type="checkbox" class="spPick" data-id="${t.id}" style="width:auto;"> ${escapeHtml(routeName(t.routeId))}（${escapeHtml(driverName(t.driverId))}）</label><span style="font-size:12px;">加</span><input type="number" class="spAdd" data-id="${t.id}" value="0" style="width:90px;"></div>`).join('') : '<div class="empty">當天沒有其他任務可以分</div>'}
+        <input id="spNote" placeholder="原因（選填，例如：第X車夥伴未到）" maxlength="60" style="margin:6px 0; width:100%;">
+        <div id="spSummary" style="font-size:12.5px; margin-bottom:6px;"></div>
+        <button class="btn amber" id="spSave" style="padding:5px 10px; font-size:12px;">儲存拆店調撥</button>
+      </div>`;
+    const keepEl = sb.querySelector('#spKeep');
+    let dirty = false;
+    const picks = ()=> [...sb.querySelectorAll('.spPick')].filter(x=>x.checked).map(x=>x.dataset.id);
+    const sumUp = ()=>{
+      const adds = picks().reduce((sum,id)=> sum+(Number(sb.querySelector(`.spAdd[data-id="${id}"]`).value)||0), 0);
+      const after = (Number(keepEl.value)||0) + adds;
+      const diff = after - P;
+      sb.querySelector('#spSummary').innerHTML = `原本這趟 <b>$${money(P)}</b> → 調整後合計 <b>$${money(after)}</b>（${diff===0?'總額不變':diff>0?`<span style="color:var(--danger);">多付 $${money(diff)}</span>`:`少付 $${money(-diff)}`}）`;
+    };
+    const applyDefaults = ()=>{
+      const ids = picks();
+      if(dirty || !ids.length){ sumUp(); return; }
+      const each = Math.round(P/(ids.length+1));
+      keepEl.value = P - each*ids.length;
+      sb.querySelectorAll('.spAdd').forEach(inp=>{ inp.value = ids.includes(inp.dataset.id) ? each : 0; });
+      sumUp();
+    };
+    sb.querySelectorAll('.spPick').forEach(x=> x.onchange = applyDefaults);
+    sb.querySelectorAll('.spAdd, #spKeep').forEach(x=> x.oninput = ()=>{ dirty = true; sumUp(); });
+    sumUp();
+    sb.querySelector('#spSave').onclick = async ()=>{
+      const ids = picks();
+      const targets = ids.map(id=>({ assignmentId:id, add: sb.querySelector(`.spAdd[data-id="${id}"]`).value }));
+      try{ await createSplitTransfer({ sourceId:a.id, keepAmount: keepEl.value, targets, note: sb.querySelector('#spNote').value }); rerender(); }
+      catch(err){ alert(err.message); }
+    };
+  };
+  // 區間預覽：輸入區間時即時顯示「已完成未付 N 趟、合計 $X」（只抓必要欄位，輕量）。
+  const pdPreview = el.querySelector('#pdPreview');
+  let pdTimer = null, pdSeq = 0, pdNetTotal = null;
+  const updatePreview = ()=>{
+    clearTimeout(pdTimer);
+    pdTimer = setTimeout(async ()=>{
+      const start = el.querySelector('#pdStart').value, end = el.querySelector('#pdEnd').value;
+      const mySeq = ++pdSeq;
+      try{ validatePaymentRange(start, end); }catch(err){ pdPreview.textContent = err.message; return; }
+      pdPreview.textContent = '計算區間任務…';
+      try{
+        const trips = await fetchDriverTripsInRange(a.driverId, start, end);
+        if(mySeq!==pdSeq || !pdPreview.isConnected) return;
+        const { list, total } = unpaidTripsOf(trips);
+        const paidAlready = trips.filter(t=>t.status==='completed').length - list.length;
+        const advanceTotal = advanceTotalInRange(a.driverId, start, end);
+        const netTotal = Math.max(0, total - advanceTotal);
+        pdNetTotal = netTotal;
+        pdPreview.innerHTML = `區間 ${start}～${end}：已完成未付 <b>${list.length}</b> 趟，合計 <b>$${money(total)}</b>${paidAlready?`（另有 ${paidAlready} 趟已標過已付，略過）`:''}${advanceTotal?`。預支 $${money(advanceTotal)}，實得金額 <b>$${money(netTotal)}</b>`:''}。金額留空＝全額。`;
+      }catch(err){ if(mySeq===pdSeq) pdPreview.textContent = err.message; }
+    }, 300);
+  };
+  ['#pdStart','#pdEnd'].forEach(sel=> el.querySelector(sel).oninput = updatePreview);
+  updatePreview();
+  el.querySelector('#pdSave').onclick = async ()=>{
+    const args = { driverId:a.driverId, start: el.querySelector('#pdStart').value, end: el.querySelector('#pdEnd').value,
+      payDate: el.querySelector('#pdDate').value, method: el.querySelector('#pdMethod').value, amount: el.querySelector('#pdAmt').value };
+    if(!confirm(`登記 ${driverName(a.driverId)} 於 ${args.payDate} 以${args.method==='cash'?'現金':'轉帳'}支付 ${args.start}～${args.end} 的任務報酬${args.amount?`（金額 $${args.amount}）`:(pdNetTotal!=null?`（全額，已扣預支，實得 $${money(pdNetTotal)}）`:'（全額）')}嗎？`)) return;
+    try{ const r = await recordPeriodPayment(args); alert(`已登記：${r.count} 趟，合計 $${r.total}${r.skipped?`（略過 ${r.skipped} 趟已付過的）`:''}`); rerender(); }
+    catch(err){ alert(err.message); }
+  };
+  const cancelBtn = el.querySelector('#pdCancel');
+  if(cancelBtn) cancelBtn.onclick = async ()=>{
+    if(!confirm(a.paidGroup ? '會取消同一次付款的所有任務（整個區間），確定嗎？' : '確定要取消這趟的已付款記錄嗎？')) return;
+    try{
+      if(a.paidGroup) await cancelPaymentGroup(a.paidGroup);
+      else { const supabase = getSupabase(); const { error } = await supabase.from('assignments').update({ paid_amount: 0, paid_date: null, paid_method: null }).eq('id', a.id); if(error) throw new Error(error.message); a.paidAmount=0; a.paidDate=null; a.paidMethod=null; }
+      rerender();
+    }catch(err){ alert(err.message); }
+  };
+}
+function renderAssignmentDetail(id, box){
+  const a = state.data.assignments.find(x=>x.id===id);
+  if(!a){ box.innerHTML=''; return; }
+  const canReassign = a.status!=='completed';
+  // 請款總額要跟請款結算/路線管理看到的數字一致：優先用「星期一報價路線」
+  // 當天生效版本手動輸入的拆賬金額，不是任務完成當下資料庫自動算出來的
+  // a.billingSnapshot（那只是formula估算值，例如第七車/第八車平日是跑
+  // 「週二到五」版本，路線管理裡本來就沒在那個版本填請款金額，不能直接
+  // 顯示資料庫的估算snapshot，否則會跟路線管理顯示的對不起來）。
+  const effByChannel = effectiveByChannelForAssignment(a);
+  const effTotal = Object.values(effByChannel).reduce((s,v)=>s+(Number(v)||0), 0);
+  box.innerHTML = `
+    <div class="panel">
+      <div class="toolbar">
+        <strong>${a.date} · ${routeName(a.routeId)} · ${driverName(a.driverId)}</strong>
+        <span>
+          ${a.status==='completed' ? '<span class="badge locked">已完成・已封存不可編輯</span>' : a.status==='in_progress' ? '<span class="badge progress">夥伴執行中</span>' : '<span class="badge pending">排定中</span>'}
+          ${a.status==='scheduled'? `<button class="btn danger" data-delassign="${a.id}">刪除</button>` : ''}
+        </span>
+      </div>
+      <p style="font-size:12.5px;">任務起點：${a.origin||'—'}</p>
+      <p style="font-size:12.5px; color:var(--ink-soft);">夥伴費用 $${money(a.fare)}${a.fareManual?' <b style="color:var(--amber);">人工</b>':''} ・ 里程 ${a.distanceKm??'—'}km ・ 請款總額 ${effTotal?`$${money(effTotal)}`:'—'}${a.billingManual?' <b style="color:var(--amber);">人工</b>':''}（${a.fareManual||a.billingManual?'標示「人工」的是你在這一趟手動填的，請款與報酬以它為準、重新套用路線也不會蓋掉；改回跟路線一樣的數字即解除':'跟隨路線版本，如需調整請到「路線管理」修改該版本'}）</p>
+      ${a.hasIssue ? `<div class="note" style="border-color:var(--danger); color:var(--danger);"><strong>夥伴回報異常：</strong>${escapeHtml(a.issueNote)}</div>` : ''}
+      ${canReassign ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>臨時異動（例如夥伴請假換人）：</span>
+        <button class="btn ghost" id="afReassignBtn" style="padding:5px 12px; font-size:12px;">換夥伴…</button>
+      </div>` : ''}
+      <p class="note" style="margin:8px 0;">完成狀態由夥伴端自行操作，完成後會自動封存，主控端無需再次確認。</p>
+      ${a.status==='in_progress' && a.published!==false ? `<div class="note" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-color:var(--amber);">
+        <span>夥伴忘了按「完成任務」（過了那天他自己也能補按，但你也可以直接處理）：</span>
+        <button class="btn amber" id="afForceComplete" style="padding:5px 10px; font-size:12px;">主控代為完成</button>
+      </div>` : ''}
+      ${a.dropPoints.map(dp=>`<div class="drop-point">${dpLabel(dp)}（${channelName(dp.channelId)}） ${dp.status==='completed'?'<span class="badge completed">已完成</span>':dp.issueReason?`<span class="badge pending">未完成：${dp.issueReason}</span>`:'<span class="badge pending">待完成</span>'}${dp.helperId?` <span class="badge" style="background:#E3EEF7; color:#2F6EA5;">${dp.status==='completed'?'支援完成':'支援中'}：${escapeHtml(dp.helperName||'')}</span>${dp.status!=='completed'?` <button class="btn ghost" data-revokedel="${dp.delegationId}" style="padding:2px 8px; font-size:11.5px;">收回</button>`:''}`:''}</div>`).join('')}
+      <div id="afSupportSection"></div>
+      <div class="note" id="afPaySection" style="margin-top:10px;"><div class="empty">載入額外金額與已付款…</div></div>
+      <button class="btn ghost" id="afOverrideToggle" style="margin-top:10px;">例外覆寫這一趟的費用</button>
+      <div id="afOverrideBox"></div>
+    </div>
+  `;
+  const db = box.querySelector('[data-delassign]');
+  if(db) db.onclick = async ()=>{
+    if(!confirm(`確定要刪除 ${a.date} ${routeName(a.routeId)}（${driverName(a.driverId)}）這趟排定中的車次嗎？刪除後這位夥伴當天就不會再看到這趟行程，無法復原。`)) return;
+    try{ await deleteAssignment(a.id); renderContent(); }
+    catch(err){ alert(err.message); }
+  };
+  // 換夥伴改用全系統共用的選夥伴畫面（常跑排前面、顯示當天已排趟數）
+  if(canReassign) box.querySelector('#afReassignBtn').onclick = ()=> openPartnerPicker({ assignment: a, compact: true });
+  const forceBtn = box.querySelector('#afForceComplete');
+  if(forceBtn) forceBtn.onclick = async ()=>{
+    if(!confirm(`確定要代 ${driverName(a.driverId)} 完成 ${a.date} ${routeName(a.routeId)} 嗎？\n完成後金額會依這趟目前的報酬與請款鎖定、自動封存，之後不能再改。`)) return;
+    forceBtn.disabled = true;
+    try{ await markAssignmentComplete(a.id, '主控代為完成'); renderContent(); }
+    catch(err){ alert(err.message); forceBtn.disabled = false; }
+  };
+  renderSupportSection(a, box.querySelector('#afSupportSection'));
+  box.querySelectorAll('[data-revokedel]').forEach(b=>{
+    b.onclick = async ()=>{ if(!confirm('把這批交給支援夥伴、還沒完成的店點收回嗎？（已完成的不會動）')) return; try{ await revokeDelegation(a.id, b.dataset.revokedel); renderContent(); }catch(err){ alert(err.message); } };
+  });
+  renderTripPaySection(a, box.querySelector('#afPaySection'));
+  box.querySelector('#afOverrideToggle').onclick = ()=>{
+    const box2 = box.querySelector('#afOverrideBox');
+    if(box2.innerHTML){ box2.innerHTML=''; return; }
+    const channelIds = [...new Set(a.dropPoints.map(dp=>dp.channelId).filter(Boolean))];
+    const byChannel = effByChannel;
+    box2.innerHTML = `
+      <div class="grid2" style="margin-top:8px;">
+        <div class="field"><label>夥伴費用（元）</label><input id="afFare" type="number" value="${a.fare||0}"></div>
+        <div class="field"><label>里程（km）</label><input id="afDistance" type="number" value="${a.distanceKm||''}"></div>
+      </div>
+      ${channelIds.length ? `<label style="margin-top:4px; display:block;">各通路請款金額（元）</label><div class="grid3">${channelIds.map(cid=>`
+        <div class="field"><label>${channelName(cid)}</label><input class="afBillingInput" data-channel="${cid}" type="number" value="${byChannel[cid] ?? ''}"></div>
+      `).join('')}</div>` : '<p class="note">這趟車還沒有店點，無法輸入請款金額。</p>'}
+      <button class="btn amber" id="afSave">儲存這一趟的費用</button>
+    `;
+    box2.querySelector('#afSave').onclick = async ()=>{
+      const fare = box2.querySelector('#afFare').value;
+      const distanceKm = box2.querySelector('#afDistance').value;
+      const billingByChannel = {};
+      box2.querySelectorAll('.afBillingInput').forEach(inp=>{
+        if(inp.value !== '') billingByChannel[inp.dataset.channel] = Number(inp.value)||0;
+      });
+      try{
+        await updateAssignmentFinance(a.id, { fare, distanceKm: distanceKm===''?null:distanceKm, billingByChannel });
+        renderContent();
+      }catch(err){ alert(err.message); }
+    };
+  };
+}
+
+// ---------- 報酬結算 ----------
+// 給付單位資訊固定不變，不隨夥伴/月份變動。
+const PAYROLL_PAYER_NAME = '信興行銷有限公司';
+const PAYROLL_PAYER_TAX_ID = '62091835';
+// 正式的「勞務報酬單」樣式（取代原本單純的摘要表格），單一夥伴、單一月份、
+// 直式A4剛好一頁。r 是 driverMonthly() 或月結凍結後的資料（見 renderPayrollPage()
+// 呼叫端怎麼組出 r），ded 是 computePayrollDeductions() 算出來的稅務欄位
+// （月結確認前是即時預覽用系統自動判斷的結果，確認後就是當時凍結的數字，
+// 兩種情況欄位長得一樣，呼叫端統一組好再傳進來）。
+// 代墊款明細附件（勞報單第2頁）：一位夥伴一份，條列每一筆代墊款的加油日期、
+// 發票號碼、金額；由加油申報確認轉進來的有完整日期／發票號碼，主控手動輸入的
+// 代墊款沒有這兩項就顯示「—」並把備註列出來。沒有代墊款回傳空字串（不產生第2頁）。
+// 新版勞報單文字（貨物配送及到店協助理貨勞務）對全體夥伴生效。已經簽名的勞報單，夥伴簽名
+// 時看到的是舊文字，事後不能把內容換掉卻仍顯示他的簽名，所以「新版上線之前就簽回的」維持
+// 舊文字；還沒簽回的、新版上線之後才簽的、以及主控退回簽名後重簽的，都用新版。
+const PAYROLL_SLIP_V2_CUTOVER = '2026-10-05T10:36:00Z';
+function slipUsesV2(record){
+  if(!record || record.status==='awaiting_signature') return true;
+  return !!record.signedAt && record.signedAt >= PAYROLL_SLIP_V2_CUTOVER;
+}
+// 身分證正反面只需要夾帶一次——使用者要求「第一次出勞報單就需要夾帶，第二次起毋須
+// 夾帶」，不是每張勞報單都附（會計師第一次收到留底後，之後每張都附反而是重複資料）。
+// 判斷依據：這位夥伴目前所有正式勞報單（月結＋區間）裡，依建立時間（createdAt）最早
+// 的那一張，才算「第一次出」；還沒有任何一張正式勞報單時（即將確認的第一張、或單純
+// 預覽還沒確認），也視為第一次。recordId傳null代表「預覽中、還沒存檔」的情況。
+function shouldAttachIdCard(driverId, recordId){
+  const list = state.data.statements.filter(s=>s.driverId===driverId).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  if(!list.length) return true;
+  return !!recordId && list[0].id===recordId;
+}
+// 夾帶身分證附件：跟查看/下載共用同一支getDriverIdCardUrl()，只是包成列印用的HTML頁。
+// signed URL效期5分鐘，匯出當下才去抓，不要提前存起來；抓不到（例如還沒上傳、網路
+// 問題）就安靜跳過，不要讓整份勞報單因此列印失敗。純讀取，不異動任何資料。
+async function idCardAttachmentHtml(driver){
+  if(!driver || !driver.idCardPath) return '';
+  try{
+    const url = await getDriverIdCardUrl(driver.idCardPath);
+    return `<div class="panel payroll-slip" style="max-width:720px;">
+      <h3 style="text-align:center; margin:0 0 14px;">附件：身分證正反面</h3>
+      <img src="${url}" style="width:100%; display:block;">
+    </div>`;
+  }catch(e){ return ''; }
+}
+function payrollAttachmentHtml(driver, monthStr, r, opts){
+  opts = opts || {};
+  const items = (r.adjustments||[]).filter(a=>a.type==='reimbursement').map(a=>{
+    const claim = (state.data.fuelClaims||[]).find(c=>c.adjustmentId===a.id);
+    return { kind: claim?(CLAIM_CATEGORY_LABEL[claim.category]||'代墊'):'—', date: claim?claim.date:'—', invoice: claim?claim.invoiceNo:'—', amount: Math.abs(Number(a.amount)||0), note: claim?(claim.note||''):(a.note||'') };
+  }).sort((x,y)=>(x.date==='—'?'9999':x.date).localeCompare(y.date==='—'?'9999':y.date));
+  if(!items.length) return '';
+  const total = items.reduce((sum,i)=>sum+i.amount, 0);
+  const [y,m] = monthStr.split('-');
+  return `
+    <div class="panel payroll-slip" style="max-width:720px;">
+      <h3 style="text-align:center; margin:0 0 14px;">附件：${opts.period ? '代墊款明細' : Number(m)+'月代墊款明細'}</h3>
+      <table>
+        <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
+        <tr><td>所得人姓名</td><td>${escapeHtml(driver.payrollName||driver.bank.holder||driver.name)}</td><td>${opts.period ? '所屬期間' : '所屬月份'}</td><td>${opts.period ? opts.period.start+'～'+opts.period.end : monthStr}</td></tr>
+      </table>
+      <p style="font-size:12px; margin:12px 0 4px;">以下為所得人代墊（加油、車輛保養等）、發票憑證開立公司統編之款項，已包含在${opts.period ? '本期間' : '本月'}報酬總額內一併給付，屬代墊款還款，不計入所得，不扣繳所得稅及補充保費。</p>
+      <table>
+        <thead><tr><th style="width:8%;">序號</th><th>項目</th><th>日期</th><th>發票號碼</th><th>金額</th><th>備註</th></tr></thead>
+        <tbody>${items.map((i,idx)=>`<tr><td>${idx+1}</td><td>${i.kind}</td><td>${i.date}</td><td>${i.invoice}</td><td class="amount">$${money(i.amount)}</td><td>${escapeHtml(i.note)||'—'}</td></tr>`).join('')}
+        <tr><td colspan="4"><strong>代墊款合計（共 ${items.length} 筆）</strong></td><td class="amount"><strong>$${money(total)}</strong></td><td></td></tr></tbody>
+      </table>
+    </div>`;
+}
+function payrollSlipHtml(driver, monthStr, r, ded, opts){
+  opts = opts || {};
+  const [y,m] = monthStr.split('-');
+  // 給付日期固定是「該薪資單所屬月份」的次月15日（例如9月的勞務，10/15撥款），
+  // 不是當月15日；跨年（12月→次年1月）要記得年份也要跟著加1。
+  const payMonthDate = new Date(Number(y), Number(m), 1); // Date月份參數0-indexed，剛好等於「下一個月」
+  // 區間勞報單（opts.period）用主控記錄的實際給付日；月結勞報單維持次月15日。
+  const payDateStr = opts.payDate || `${payMonthDate.getFullYear()}-${String(payMonthDate.getMonth()+1).padStart(2,'0')}-15`;
+  const dateLabel = opts.period ? `${opts.period.start}～${opts.period.end}` : monthStr;
+  const thisPeriod = opts.period ? '本期間' : '本月';
+  // 勞務內容列車趟服務報酬＋加項/減項明細——加項/減項會影響下面「報酬
+  // 總額」，也需要逐項列在這張正式勞報單上讓夥伴清楚知道明細；只有預支
+  // 不列出來，因為預支不算扣款、也不影響這裡的金額（是薪資提前請領，
+  // 不該在這張正式文件上再處理一次）。
+  const contentRows = [];
+  // 新版勞報單文字：勞務名稱「貨物配送及到店協助理貨勞務」共1式，聲明段落改成獨立承攬＋代墊費用
+  // 由公司依憑證支付；呼叫端用 slipUsesV2(record) 決定要不要用新版（opts.v2）。
+  const v2 = opts.v2 !== false;
+  const svcName = escapeHtml(opts.serviceName || DEFAULT_SERVICE_NAME);
+  if(r.trips.length){
+    contentRows.push(v2
+      ? `<tr><td>${dateLabel}</td><td>${svcName}</td><td>${thisPeriod}完成指定據點之${svcName}（共計 1 式）</td><td>1</td><td>式</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`
+      : `<tr><td>${dateLabel}</td><td>車趟服務報酬</td><td>${thisPeriod}共完成 ${r.trips.length} 趟車</td><td>${r.trips.length}</td><td>趟</td><td>—</td><td class="amount">$${money(r.tripTotal)}</td><td>—</td></tr>`);
+  }
+  r.adjustments.filter(a=>a.type!=='advance' && a.type!=='reimbursement').forEach(a=>{
+    const amt = a.type==='deduct' ? -Math.abs(Number(a.amount)) : Number(a.amount);
+    contentRows.push(`<tr><td>${dateLabel}</td><td>${adjTypeLabel(a.type)}</td><td>${a.note||'—'}</td><td>1</td><td>筆</td><td>—</td><td class="amount">${amt>=0?'':'-'}$${money(Math.abs(amt))}</td><td>—</td></tr>`);
+  });
+  // 代墊款（例如油資，憑證開公司統編）：這筆錢已經包含在車趟報酬裡一起付給
+  // 夥伴，但屬於代墊還款、不是所得，所以在這裡逐筆列為「減項」拆出來，所得額
+  // 才是扣稅／補充保費的計算基礎；報酬總額與夥伴實際拿到的錢都不受影響。
+  const reimb = Number(r.reimbursement)||0;
+  if(reimb>0){
+    const items = r.adjustments.filter(a=>a.type==='reimbursement');
+    contentRows.push(`<tr><td>${dateLabel}</td><td>減：代墊款（憑證歸公司，非所得）</td><td>共 ${items.length} 筆，明細詳見附件（第2頁）</td><td>${items.length}</td><td>筆</td><td>—</td><td class="amount">-$${money(reimb)}</td><td>—</td></tr>`);
+  }
+  const sigCell = opts.signatureDataUrl
+    ? `<img src="${opts.signatureDataUrl}" style="max-height:56px; max-width:100%;">`
+    : '<div style="height:56px;"></div>';
+  return `
+    <div class="panel payroll-slip" style="max-width:720px;">
+      <h3 style="text-align:center; margin:0 0 14px;">${opts.period ? '勞務報酬單' : Number(m)+'月勞務報酬單'}</h3>
+      <table>
+        <tr><td style="width:18%;">給付單位</td><td style="width:32%;">${PAYROLL_PAYER_NAME}</td><td style="width:18%;">統一編號</td><td>${PAYROLL_PAYER_TAX_ID}</td></tr>
+        <tr><td>所得人姓名</td><td>${escapeHtml(driver.payrollName||driver.bank.holder||driver.name)}</td><td>身分證／居留證號</td><td>${escapeHtml(driver.idNumber||'（未填寫）')}</td></tr>
+        <tr><td>所得類別</td><td>${ded.incomeType}</td><td>付款方式</td><td>${opts.payMethod==='cash'?'現金':'銀行轉帳'}</td></tr>
+        ${opts.payMethod==='cash' ? '' : `<tr><td>銀行／分行</td><td>${escapeHtml(driver.bank.bankName||'—')}／${escapeHtml(driver.bank.branch||'—')}</td><td>帳號</td><td>${escapeHtml(driver.bank.account||'—')}</td></tr>`}
+      </table>
+      <h4 style="margin:14px 0 6px;">勞務內容</h4>
+      <table>
+        <thead><tr><th>日期</th><th>勞務／案名</th><th>內容說明</th><th>數量</th><th>單位</th><th>單價</th><th>金額</th><th>備註</th></tr></thead>
+        <tbody>${contentRows.join('') || `<tr><td colspan="8"><div class="empty">${thisPeriod}無車趟或調整項</div></td></tr>`}</tbody>
+      </table>
+      <h4 style="margin:14px 0 6px;">扣款與實領</h4>
+      <table>
+        <tr><td style="width:18%;">報酬總額</td><td style="width:32%;" class="amount">$${money(r.net)}</td><td style="width:18%;">是否扣所得稅</td><td>${ded.withholdTax?'是':'否'}</td></tr>
+        ${reimb>0 ? `<tr><td>其中代墊款（非所得）</td><td class="amount">-$${money(reimb)}</td><td>所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-reimb)}</td></tr>` : ''}
+        <tr><td>參考稅率</td><td>${(PAYROLL_TAX_RATE*100).toFixed(0)}%</td><td>實際扣繳稅率</td><td>${(ded.taxRate*100).toFixed(2)}%</td></tr>
+        <tr><td>所得稅額</td><td class="amount">$${money(ded.taxAmount)}</td><td>是否扣補充保費</td><td>${ded.withholdNhi?'是':'否'}</td></tr>
+        <tr><td>補充保費率</td><td>${(PAYROLL_NHI_RATE*100).toFixed(2)}%</td><td>補充保費</td><td class="amount">$${money(ded.nhiAmount)}</td></tr>
+        <tr><td>其他扣款</td><td class="amount">$0</td><td><strong>實領金額</strong></td><td class="amount"><strong>$${money(ded.actualNet)}</strong></td></tr>
+      </table>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:12px 0;">${v2
+        ? `本人確認上述勞務內容及金額無誤。本單據所列報酬係本人以獨立承攬關係提供之${svcName}。雙方之法律關係與所得類別，悉依實質勞務事實與中華民國相關稅法規定認定辦理。本報酬不包含執行上述勞務所衍生之必要交通與車輛代墊費用，${reimb>0 ? '相關代墊費用悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，並詳列於附件代墊款明細。' : '如有代墊費用，悉依實際取得之合法憑證（如加油發票、維修單據）核實由貴公司支付，另列代墊款明細。'}`
+        : '本人確認上述勞務內容及金額無誤，並同意給付單位依法應適用之所得類別、扣繳率及補充保費規定辦理。所得類別與勞雇關係仍以實際事實認定。'}</p>
+      <table>
+        <tr><td style="width:18%;">所得人簽章</td><td style="width:32%;">${sigCell}</td><td style="width:18%;">給付日期</td><td>${payDateStr}</td></tr>
+      </table>
+    </div>`;
+}
+let payrollTripsExpanded = false; // 該夥伴配送明細（日期/路線/車資）預設收合，跟其他清單一致
+// 報酬結算＋勞報單合併成一個畫面（2026-11-01：原本拆兩個分頁、同一份資料要跳兩次頁才能做完
+// 一件事，使用者反饋操作太複雜）。調整項、報酬明細、可領淨額、月結與區間勞報單、簽名、下載，
+// 全部在同一頁依流程順序呈現；選了夥伴才會看到編輯／開單區塊，選「全部夥伴」只看收件匣與提醒。
+function renderPayrollPage(c){
+  const month = state._payrollMonth || todayStr().slice(0,7);
+  const driverOpts = state.data.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${d.name}</option>`).join('');
+  let scope = state._payDriverId || '';
+  if(scope && !state.data.drivers.some(d=>d.id===scope)) scope = '';
+  state._payDriverId = scope;
+  const inScope = x => !scope || x.driverId===scope;
+  const inbox = state.data.statements.filter(s=>inScope(s) && (s.status==='signed'||s.status==='confirmed') && !s.adminAcked).sort((a,b)=>(b.signedAt||'').localeCompare(a.signedAt||''));
+  c.innerHTML = `
+    <h2 class="section-title">報酬結算</h2>
+    <p class="section-sub">選夥伴後可管理調整項（預支、加減項、代墊款）、查看報酬明細與可領淨額，並開立勞報單（月結或區間）讓夥伴線上簽名；不選夥伴則看全體的回簽與提醒。</p>
+    <div class="panel no-print" style="position:sticky; top:0; z-index:20; box-shadow:0 2px 6px rgba(27,33,41,.12);">
+      <div class="grid2">
+        <div class="field"><label>夥伴</label><select id="pDriver"><option value="">全部夥伴</option>${driverOpts}</select></div>
+        <div class="field"><label>結算月份</label><select id="pMonth">${monthOptionsHtml(month)}</select></div>
+      </div>
+    </div>
+    <div id="payrollResult"></div>
+    ${inbox.length ? `<div class="panel">
+      <h3 style="margin-top:0;">已回簽待確認（${inbox.length}）</h3>
+      ${inbox.map(s=>`<div class="drop-point" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>${driverName(s.driverId)} － ${statementLabel(s)}，淨額 <span class="amount">$${money(s.net)}</span>，回簽時間 ${s.signedAt? new Date(s.signedAt).toLocaleString('zh-Hant-TW'):'—'} ${s.status==='confirmed'?'<span class="badge signed">已鎖定</span>':'<span class="badge progress">未鎖定</span>'}</span>
+        <span><button class="btn ghost" data-viewsigned="${s.id}">查看</button><button class="btn danger" data-reject="${s.id}">退回簽名</button><button class="btn ghost" data-ack="${s.id}">標記已確認</button></span>
+      </div>`).join('')}
+    </div>` : ''}
+    ${(()=>{
+      // 月結確認後、夥伴還沒線上回簽的勞報單（不分月份，舊月份沒簽的也列出來）。
+      const unsigned = state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature')
+        .sort((a,b)=> a.month.localeCompare(b.month) || driverName(a.driverId).localeCompare(driverName(b.driverId), 'zh-Hant'));
+      if(!unsigned.length) return `<div class="panel"><h3 style="margin:0;">夥伴回簽狀況</h3><div style="font-size:13px; margin-top:6px;">✅ 所有已月結確認的勞報單，夥伴都已回簽。</div></div>`;
+      const days = x=> x.confirmedAt ? Math.max(0, Math.floor((Date.now()-new Date(x.confirmedAt).getTime())/86400000)) : null;
+      return `<div class="panel" style="border-color:var(--amber); border-width:2px;">
+        <div class="toolbar"><h3 style="margin:0;">尚未回簽（${unsigned.length} 位）</h3><button class="btn danger" id="revokeAllUnsigned">全部收回（${unsigned.length} 份）</button></div>
+        <p class="note" style="margin-top:8px;">已月結確認、但夥伴還沒在系統上簽名的勞報單。帳務有問題時可以「收回」，月份會回到尚未月結確認，修正後再重新月結。</p>
+        <table>
+          <thead><tr><th>夥伴</th><th>月份</th><th>實領金額</th><th>已等待</th><th></th></tr></thead>
+          <tbody>${unsigned.map(x=>`<tr><td>${driverName(x.driverId)}</td><td>${statementLabel(x)}</td><td class="amount">$${money(x.actualNet)}</td><td>${days(x)===null?'—':days(x)===0?'今天確認':days(x)+' 天'}</td><td><button class="btn ghost" data-unsignedpick="${x.id}">查看</button> <button class="btn danger" data-revoke="${x.id}">收回</button></td></tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    })()}
+    ${(()=>{
+      const pending = (state.data.fuelClaims||[]).filter(f=>f.status==='pending' && (!scope || f.driverId===scope)).sort((a,b)=>a.date.localeCompare(b.date));
+      if(!pending.length) return '';
+      return `<div class="panel">
+        <h3 style="margin-top:0;">夥伴代墊申報待確認（${pending.length}）</h3>
+        <p class="note" style="margin-top:0;">請核對夥伴交來的發票（統編、日期、金額、發票號碼）後再按「確認」，確認後會轉成該日期所屬月份的代墊款，勞報單自動拆出不計所得。</p>
+        <table>
+          <thead><tr><th>夥伴</th><th>類別</th><th>日期</th><th>金額</th><th>發票號碼</th><th>備註</th><th></th></tr></thead>
+          <tbody>${pending.map(f=>`<tr><td>${driverName(f.driverId)}</td><td>${CLAIM_CATEGORY_LABEL[f.category]||'—'}</td><td>${f.date}</td><td class="amount">$${money(f.amount)}</td><td>${f.invoiceNo}</td><td>${escapeHtml(f.note)||'—'}</td>
+            <td><button class="btn amber" data-fcconfirm="${f.id}">確認（轉為代墊款）</button> <button class="btn danger" data-fcreject="${f.id}">刪除</button></td></tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    })()}
+    ${!scope ? `<div class="panel">
+      <div class="grid2">
+        <div class="field"><label>合併下載月份</label><select id="pAllMonth">${monthOptionsHtml(month)}</select></div>
+        <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="printAllStatements" style="width:100%;">產生全體夥伴勞報單（合併PDF）</button></div>
+      </div>
+      <p class="note">只會納入「已完成月結確認」的夥伴（每人各佔一頁，直式）；當月尚未月結確認的夥伴不會出現在合併檔案裡。</p>
+    </div>` : ''}
+    ${scope ? `<div class="panel">
+      <div class="grid3">
+        <div class="field"><label>調整類型</label><select id="aType"><option value="advance">預支</option><option value="add">加項</option><option value="deduct">減項</option><option value="reimbursement">代墊款（憑證開公司）</option><option value="defer">延後付款（掛帳，少用）</option></select></div>
+        <div id="aAmountField" class="field"><label>金額</label><input id="aAmount" type="number"></div>
+        <div id="aNoteField" class="field"><label>備註</label><input id="aNote"></div>
+      </div>
+      <div id="aDateField" class="field" style="max-width:240px;"><label>調整項日期（區間勞報單依此歸入；留空＝該月1日，只算進月結）</label><input id="aDate" type="date"></div>
+      <div id="aDeferFields" hidden>
+        <p class="note" style="margin-top:0;">夥伴同意晚點領時使用（例如 9月做的事併入10月薪資、11/15才撥款）：選區間、歸屬月份（算進哪個月的應付/匯款清單）、預計付款日（實際轉帳日），把那段期間已完成、還沒付的任務掛帳。到了歸屬月份，透過「夥伴匯款清單」的「登記全部已付款」一起處理即可，不用在這裡單獨標記付款。夥伴的「我的報酬」也會看到待領金額。不影響勞報單。</p>
+        <div class="grid3">
+          <div class="field"><label>區間開始</label><input id="dfStart" type="date"></div>
+          <div class="field"><label>區間結束</label><input id="dfEnd" type="date"></div>
+          <div class="field"><label>歸屬月份</label><select id="dfMonth"></select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>預計付款日（實際轉帳日）</label><input id="dfDue" type="date"></div>
+          <div class="field"><label>備註（選填，例如：夥伴要求）</label><input id="dfNote" maxlength="60"></div>
+        </div>
+        <div id="dfPreview" style="font-size:12px; color:var(--ink-soft); margin-bottom:6px;"></div>
+      </div>
+      <button class="btn ghost" id="addAdj">新增調整項</button>
+    </div>
+    <div id="deferredList"></div>` : ''}
+    <div id="payrollPending"></div>
+    ${scope ? (()=>{
+      // 這位夥伴的全部月份勞報單（月結＋區間），預設收合、點開才看——原本periodRefresh()
+      // 底下還另外列一份「已開的區間勞報單」，2026-11新增全月明細後整合進這裡單一份清單，
+      // 不重複列兩份一樣的資料。
+      const stText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">待簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
+      const d = state.data.drivers.find(x=>x.id===scope);
+      const list = state.data.statements.filter(x=>x.driverId===scope).sort((a,b)=> statementRange(b)[1].localeCompare(statementRange(a)[1]));
+      if(!d || !list.length) return '';
+      const wait = list.filter(x=>x.status==='awaiting_signature').length;
+      return `<div class="panel no-print">
+        <details>
+          <summary style="cursor:pointer; font-weight:600;">${escapeHtml(d.name)} 的勞報單記錄（全部月份，含已開的區間勞報單）　<span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">共 ${list.length} 份${wait?`，<span style="color:var(--danger);">${wait} 份待簽名</span>`:''}</span></summary>
+          <table style="margin-top:6px;"><thead><tr><th>月份／期間</th><th>給付日期</th><th>報酬總額</th><th>實領金額</th><th>狀態</th><th></th></tr></thead>
+            <tbody>${list.map(x=>`<tr><td>${statementLabel(x)}${x.periodStart?'':'（月結）'}</td><td>${x.payDate||'—'}</td><td class="amount">$${money(x.net)}</td><td class="amount">$${money(x.actualNet)}</td><td>${stText(x)}</td><td><button class="btn ghost" data-allview="${x.id}">查看</button></td></tr>`).join('')}</tbody></table>
+        </details>
+      </div>`;
+    })() : ''}
+    ${scope ? `<div class="panel no-print">
+      <h3 style="margin-top:0;">區間勞報單（依實際付款開單）</h3>
+      <p class="note">夥伴每週（或每次）請款時，選一段期間開一張勞報單，夥伴簽名後依實際轉帳日記錄給付日期。金額由系統依該期間的完成任務與調整項日期自動算出，不能手動修改；期間不能跟該夥伴其他勞報單（月結或區間）重疊。</p>
+      <p class="note" style="margin-top:0;">夥伴沿用上方「夥伴」選單。</p>
+      <div class="grid3">
+        <div class="field"><label>期間開始</label><input id="perStart" type="date"></div>
+        <div class="field"><label>期間結束</label><input id="perEnd" type="date"></div>
+        <div class="field"><label>實際給付日期</label><input id="perPay" type="date"></div>
+      </div>
+      <div class="field" style="max-width:200px;"><label>付款方式</label><select id="perMethod"><option value="transfer">銀行轉帳</option><option value="cash">現金</option></select></div>
+      <button class="btn amber" id="perPreview">預覽區間勞報單</button>
+    </div>
+    <div id="periodResult"></div>` : ''}
+  `;
+  // 收回月結（單筆／全部）：確認文字會寫清楚後果，已經簽名的特別提醒。
+  async function doRevoke(list){
+    const signedCount = list.filter(x=>x.status!=='awaiting_signature').length;
+    const names = list.map(x=>`${driverName(x.driverId)}（${statementLabel(x)}）`).join('、');
+    const msg = `確定要收回 ${list.length} 份月結嗎？\n${names}\n\n收回後這些勞報單會被刪除，夥伴看不到；對應月份回到「尚未月結確認」，可以重新新增／刪除調整項、修正帳務後再月結確認。`
+      + (signedCount ? `\n\n⚠️ 其中 ${signedCount} 份夥伴已經簽名，簽名會作廢，需要重新簽名。` : '');
+    if(!confirm(msg)) return;
+    try{ await revokeStatements(list.map(x=>x.id)); renderContent(); }
+    catch(err){ alert(err.message); }
+  }
+  c.querySelectorAll('[data-revoke]').forEach(btn=>{
+    btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.revoke); if(x) doRevoke([x]); };
+  });
+  const revokeAllBtn = document.getElementById('revokeAllUnsigned');
+  if(revokeAllBtn) revokeAllBtn.onclick = ()=> doRevoke(state.data.statements.filter(x=>inScope(x) && x.status==='awaiting_signature'));
+  c.querySelectorAll('[data-allview]').forEach(btn=>{
+    btn.onclick = ()=>{ const x = state.data.statements.find(y=>y.id===btn.dataset.allview); if(x) openStatementView(x); };
+  });
+  c.querySelectorAll('[data-unsignedpick]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const x = state.data.statements.find(y=>y.id===btn.dataset.unsignedpick);
+      if(x) openStatementView(x);
+    };
+  });
+  c.querySelectorAll('[data-fcconfirm]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcconfirm);
+      if(!f) return;
+      if(!confirm(`確認 ${driverName(f.driverId)} 的${CLAIM_CATEGORY_LABEL[f.category]||'代墊'}申報？\n日期 ${f.date}、金額 $${money(f.amount)}、發票號碼 ${f.invoiceNo}\n確認後會轉成 ${f.date.slice(0,7)} 的代墊款。`)) return;
+      try{ await confirmFuelClaim(f.id); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-fcreject]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const f = state.data.fuelClaims.find(x=>x.id===btn.dataset.fcreject);
+      if(!f || !confirm(`確定要刪除 ${driverName(f.driverId)} ${f.date} 的這筆代墊申報嗎？夥伴會看不到這筆紀錄，需要重新申報。`)) return;
+      try{ await deleteFuelClaim(f.id); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-ack]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      try{ await ackStatement(btn.dataset.ack); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-reject]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('確定要退回這份簽名嗎？退回後夥伴需要重新簽名，這份勞報單會回到「待回簽」狀態。')) return;
+      try{ await rejectStatementSignature(btn.dataset.reject); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+  });
+  c.querySelectorAll('[data-viewsigned]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const s = state.data.statements.find(x=>x.id===btn.dataset.viewsigned);
+      if(s) openStatementView(s);
+    };
+  });
+  const printAllBtn = document.getElementById('printAllStatements');
+  if(printAllBtn) printAllBtn.onclick = async ()=>{
+    const monthStr = document.getElementById('pAllMonth').value;
+    const records = state.data.statements.filter(s=>s.month===monthStr);
+    if(!records.length){ alert(`${monthStr} 沒有任何夥伴完成月結確認`); return; }
+    const rangeStart = records.reduce((m,x)=>{ const a=statementRange(x)[0]; return a<m?a:m; }, monthStr+'-01');
+    const rangeEnd = records.reduce((m,x)=>{ const b=statementRange(x)[1]; return b>m?b:m; }, monthEndStr(monthStr));
+    const btn = document.getElementById('printAllStatements');
+    btn.disabled = true; const originalText = btn.textContent; btn.textContent = '讀取資料中…';
+    let monthAssignments;
+    try{
+      monthAssignments = await fetchAssignmentsInRange(rangeStart, rangeEnd);
+      await ensureAdjustmentsRange(rangeStart); await ensureFuelClaimsRange(rangeStart);
+    }
+    catch(err){ alert(err.message); btn.disabled=false; btn.textContent=originalText; return; }
+    btn.textContent = 'PDF 產生中…';
+    const slipGroups = await Promise.all(records.map(async record=>{
+      const driver = state.data.drivers.find(d=>d.id===record.driverId);
+      if(!driver) return null;
+      // 一位夥伴勞報單第1頁＋（有代墊款才有的）代墊明細＋（第一次出勞報單才有的）
+      // 身分證正反面，依序放在一起。
+      const { slipHtml, attHtml } = buildSlipHtmls(driver, record, monthAssignments);
+      const idCardHtml = shouldAttachIdCard(driver.id, record.id) ? await idCardAttachmentHtml(driver) : '';
+      return [slipHtml, attHtml, idCardHtml].filter(Boolean);
+    }));
+    const slips = slipGroups.filter(Boolean).flat();
+    try{ await exportPayrollPortraitPdf(slips, `全體夥伴勞報單_${monthStr}`); }
+    finally{ btn.disabled = false; btn.textContent = originalText; }
+  };
+  // 尚未月結名單（勞報單頁）：只在每月 1～15 號顯示、只看上個月、可收合；每位夥伴有「查看並月結」與「無需月結」，
+  // 已標無需月結的可在底下恢復。16 號起整個消失，不論有沒有月結。
+  // 2026-11-11：使用者要求小碳幫忙批次處理，但勞報單是正式文件、確認後夥伴馬上能簽名，不該讓AI自己
+  // 送出去——改成「一鍵批次確認」：所得額（總額扣代墊，扣稅門檻基礎）$20,000以下、這個月完全沒開過
+  // 勞報單的夥伴，列成一組，主控看過金額後一次按確認（還是要主控自己點，不是AI自動做）；超過$20,000
+  // 或這個月已經有部分勞報單的，維持原本「開區間勞報單」逐一手動處理。
+  async function renderPendingSettlePanel(){
+    const el = document.getElementById('payrollPending');
+    if(!el) return;
+    // 選了特定夥伴時不顯示這個名單——這是「全部夥伴」才需要的總覽提醒，選了夥伴代表已經
+    // 在處理這一位，不需要再看一次跨夥伴的名單（跟這次合併畫面「選夥伴只看這一位」原則一致）。
+    const mon = scope ? null : settleReminderMonth();
+    if(!mon){ el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="panel"><div class="empty">載入上月尚未月結名單…</div></div>';
+    let rows, skipped;
+    try{
+      await ensureSettleSkips();
+      const lite = await getSettleTrips(mon);
+      rows = unsettledRows(mon, lite).filter(r=>!scope || r.d.id===scope);
+      skipped = state.data.drivers.filter(d=>(!scope || d.id===scope) && settleSkipped(d.id, mon));
+    }catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
+    if(!el.isConnected) return;
+    const total = rows.reduce((sum,r)=>sum+r.net, 0);
+    const autoRows = rows.filter(r=>r.clean && r.taxable<=PAYROLL_WITHHOLD_THRESHOLD);
+    const manualRows = rows.filter(r=>!(r.clean && r.taxable<=PAYROLL_WITHHOLD_THRESHOLD));
+    const rowHtml = r=>`<tr><td>${escapeHtml(r.d.name)}${r.d.status!=='active'?'（已停用）':''}</td><td class="amount">${r.trips}</td><td class="amount">$${money(r.net)}</td><td class="amount">$${money(r.reimbursement)}</td><td class="amount">$${money(r.taxable)}</td><td>${!r.clean?'<span class="badge" style="background:var(--chip);">已有部分勞報單</span>':r.taxable>PAYROLL_WITHHOLD_THRESHOLD?'<span class="badge pending">超過門檻</span>':''}</td><td><button class="btn amber" data-settlepick="${r.d.id}">開區間勞報單</button> <button class="btn ghost" data-settleskip="${r.d.id}">無需月結</button></td></tr>`;
+    el.innerHTML = `<details class="panel no-print" ${rows.length?'style="border-color:var(--amber); border-width:2px;"':''}>
+      <summary style="cursor:pointer; font-weight:700;">${mon} 尚未月結確認${rows.length?`（${rows.length} 位）`:'（已全部處理 ✅）'}</summary>
+      <div style="margin-top:8px;">
+      ${rows.length ? `<p class="note" style="margin-top:0;">總額＝任務報酬＋加減項；代墊＝憑證開公司的代墊款（非所得，不扣稅）；所得額＝總額扣代墊，是扣稅／補充保費起扣門檻（$${money(PAYROLL_WITHHOLD_THRESHOLD)}）的判斷基礎。</p>
+      ${autoRows.length ? `<div class="toolbar" style="margin-bottom:6px;"><h4 style="margin:0;">✅ 可一鍵確認（所得額$${money(PAYROLL_WITHHOLD_THRESHOLD)}以下，共${autoRows.length}位）</h4><button class="btn amber" id="batchConfirmBtn">一鍵確認這${autoRows.length}位（開區間勞報單）</button></div>
+        <table><thead><tr><th>夥伴</th><th>已完成趟數</th><th>總額</th><th>代墊</th><th>所得額</th><th></th><th></th></tr></thead>
+        <tbody>${autoRows.map(rowHtml).join('')}</tbody></table>` : ''}
+      ${manualRows.length ? `<h4 style="margin:${autoRows.length?'14px':'0'} 0 6px;">⚠️ 需個別確認（超過門檻，或這個月已有部分勞報單，共${manualRows.length}位）</h4>
+        <table><thead><tr><th>夥伴</th><th>已完成趟數</th><th>總額</th><th>代墊</th><th>所得額</th><th></th><th></th></tr></thead>
+        <tbody>${manualRows.map(rowHtml).join('')}</tbody></table>` : ''}
+        <table style="margin-top:8px;"><tr style="font-weight:700; background:var(--group);"><td style="width:50%;">合計（${rows.length}位）</td><td class="amount">${rows.reduce((sum,r)=>sum+r.trips,0)} 趟</td><td class="amount">$${money(total)}</td></tr></table>`
+      : '<div style="font-size:13px;">這個月所有有完成任務的夥伴都已月結確認或標為無需月結。</div>'}
+      ${skipped.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; color:var(--ink-soft);">已標為無需月結（${skipped.length} 位）</summary>
+        <div style="margin-top:4px;">${skipped.map(d=>`<span style="margin-right:12px; font-size:12.5px;">${escapeHtml(d.name)} <button class="btn ghost" data-settlerestore="${d.id}" style="padding:2px 8px; font-size:11.5px;">恢復</button></span>`).join('')}</div></details>` : ''}
+      </div></details>`;
+    const batchBtn = document.getElementById('batchConfirmBtn');
+    if(batchBtn) batchBtn.onclick = async ()=>{
+      const names = autoRows.map(r=>`${r.d.name}（$${money(r.net)}）`).join('、');
+      if(!confirm(`確定要一次開立這 ${autoRows.length} 位的區間勞報單（整個 ${mon} 月、給付日今天）並開放夥伴簽名嗎？凍結後金額不會再變動。\n${names}`)) return;
+      batchBtn.disabled = true; batchBtn.textContent = '處理中…';
+      try{
+        const monthAssignments = await fetchAssignmentsInRange(mon+'-01', monthEndStr(mon));
+        const { succeeded, failed } = await batchConfirmSettlements(mon, autoRows.map(r=>r.d.id), monthAssignments);
+        let msg = `已確認 ${succeeded.length} 位`;
+        if(failed.length) msg += `；${failed.length} 位失敗：${failed.map(f=>`${driverName(f.driverId)}（${f.message}）`).join('、')}`;
+        alert(msg);
+      }catch(err){ alert(err.message); }
+      renderPendingSettlePanel();
+    };
+    el.querySelectorAll('[data-settlepick]').forEach(b=>{
+      b.onclick = ()=>{
+        state._payDriverId = b.dataset.settlepick; state._payrollMonth = mon; state._scrollTo = 'periodResult';
+        state._periodSel = { driverId: b.dataset.settlepick, start: mon+'-01', end: monthEndStr(mon), payDate: todayStr() };
+        renderContent();
+      };
+    });
+    el.querySelectorAll('[data-settleskip]').forEach(b=>{
+      b.onclick = async ()=>{
+        const d = state.data.drivers.find(x=>x.id===b.dataset.settleskip);
+        if(!confirm(`確定 ${d?d.name:''} ${mon} 無需月結嗎？\n只是記錄，不影響任何金額；會從這個名單和首頁提醒消失，之後可以恢復。`)) return;
+        try{ await addSettleSkip(b.dataset.settleskip, mon); renderPendingSettlePanel(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    el.querySelectorAll('[data-settlerestore]').forEach(b=>{
+      b.onclick = async ()=>{
+        try{ await removeSettleSkip(b.dataset.settlerestore, mon); renderPendingSettlePanel(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+  }
+  // ---- 延後付款（報酬結算頁）：掛帳表單與待付款清單 ----
+  const dfStatusBadge = st => st==='overdue' ? '<span class="badge" style="background:#FBE9E7; color:var(--danger);">已逾期</span>' : st==='today' ? '<span class="badge pending">今天到期</span>' : st==='soon' ? '<span class="badge pending">3 天內</span>' : '';
+  async function renderDeferredPanel(){
+    const el = document.getElementById('deferredList');
+    if(!el) return;
+    const driverId = document.getElementById('pDriver').value;
+    let groups;
+    try{ groups = groupDeferred(await fetchDeferredTrips()); state._pendingPayCache = { at: Date.now(), groups }; }
+    catch(err){ el.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(err.message)}</div></div>`; return; }
+    if(!el.isConnected) return;
+    const mine = groups.filter(g=>g.driverId===driverId);
+    // 掛帳是極少數情況，沒有待付款時整個面板不顯示（不留「目前沒有待付款」這種常態性空面板佔畫面）；
+    // 有待付款時順便把上面收合的「延後付款」面板自動展開，提醒主控這位夥伴有掛帳在進行中。
+    if(!mine.length){ el.innerHTML = ''; return; }
+    const dfPanel = document.getElementById('dfPanel');
+    if(dfPanel) dfPanel.open = true;
+    // 2026-11-15修：拿掉這裡的「已付款」動作——使用者明確要求，掛帳一律合併到歸屬月份
+    // 一起處理，透過「夥伴匯款清單」的「全月付清」批次登記，不要讓掛帳可以在這裡單獨
+    // 標記付款（兩條路可以處理同一筆錢，容易搞混、也可能重複登記）。這裡純粹保留「誰有
+    // 掛帳在等、預計哪個月付、有沒有逾期」的清單跟「取消掛帳」，不再有「已付款」按鈕。
+    el.innerHTML = `<div class="panel no-print" ${mine.some(g=>deferredStatus(g.due)==='overdue')?'style="border-color:var(--danger); border-width:2px;"':''}>
+      <h3 style="margin-top:0;">待付款清單（${escapeHtml(driverName(driverId))}）</h3>
+      <p class="section-sub" style="margin-top:0;">這些掛帳會合併到各自的歸屬月份，透過「夥伴匯款清單」的「登記全部已付款」一起處理，這裡不能單獨標記已付款。</p>
+      <table><thead><tr><th>區間</th><th>趟報酬合計</th><th>歸屬月份</th><th>預計付款日</th><th>備註</th><th></th></tr></thead>
+        <tbody>${mine.map((g,i)=>`<tr><td>${g.start===g.end?g.start:g.start+'～'+g.end}（${g.ids.length} 趟）</td><td class="amount">$${money(g.total)}</td><td>${g.dueMonth||'—'}</td><td>${g.due} ${dfStatusBadge(deferredStatus(g.due))}</td><td>${escapeHtml(g.note||'—')}</td><td><button class="btn ghost" data-dfcancel="${i}">取消掛帳</button></td></tr>`).join('')}</tbody></table>
+    </div>`;
+    el.querySelectorAll('[data-dfcancel]').forEach(b=>{
+      b.onclick = async ()=>{
+        const g = mine[Number(b.dataset.dfcancel)];
+        if(!confirm(`取消 ${driverName(driverId)} ${g.start}${g.start===g.end?'':'～'+g.end} 的掛帳嗎？（任務回到一般狀態，不會刪除任何資料）`)) return;
+        try{ await cancelDeferredPayment(g.ids); renderDeferredPanel(); }catch(err){ alert(err.message); }
+      };
+    });
+  }
+  function wireDeferredForm(){
+    if(!document.getElementById('dfStart')) return;
+    const pv = document.getElementById('dfPreview');
+    let timer=null, seq=0;
+    // 歸屬月份預設＝區間結束日的下個月（最常見用法：9月做的事併入10月薪資）；
+    // 預計付款日預設＝歸屬月份次月15日（公司慣例），兩個都可以手動改。
+    const defaultsFromEnd = ()=>{
+      const end = document.getElementById('dfEnd').value;
+      if(!end) return;
+      const dm = shiftMonth(end.slice(0,7), 1);
+      const ms = document.getElementById('dfMonth');
+      if(![...ms.options].some(o=>o.value===dm)) ms.add(new Option(dm, dm));
+      ms.value = dm;
+      syncDueDefault();
+    };
+    const syncDueDefault = ()=>{
+      const dm = document.getElementById('dfMonth').value;
+      if(!dm) return;
+      document.getElementById('dfDue').value = shiftMonth(dm, 1)+'-15';
+    };
+    const update = ()=>{
+      clearTimeout(timer);
+      timer = setTimeout(async ()=>{
+        const start = document.getElementById('dfStart').value, end = document.getElementById('dfEnd').value, driverId = document.getElementById('pDriver').value;
+        const my = ++seq;
+        if(!driverId || !start || !end){ pv.textContent=''; return; }
+        try{ validatePaymentRange(start, end); }catch(err){ pv.textContent = err.message; return; }
+        try{
+          const trips = await fetchDriverTripsInRange(driverId, start, end);
+          if(my!==seq || !pv.isConnected) return;
+          const list = trips.filter(t=>t.status==='completed' && !(Number(t.paidAmount)>0));
+          const total = list.reduce((s,t)=>s+tripPay(t),0);
+          pv.innerHTML = `區間內已完成未付 <b>${list.length}</b> 趟，趟報酬合計 <b>$${money(total)}</b>。`;
+        }catch(err){ if(my===seq) pv.textContent = err.message; }
+      }, 300);
+    };
+    ['dfStart','dfEnd'].forEach(id=> document.getElementById(id).oninput = ()=>{ update(); if(id==='dfEnd') defaultsFromEnd(); });
+    document.getElementById('dfMonth').onchange = syncDueDefault;
+    document.getElementById('dfStart').value = ymd(addDays(todayStr(), -1));
+    document.getElementById('dfEnd').value = ymd(addDays(todayStr(), -1));
+    document.getElementById('dfMonth').innerHTML = monthOptionsHtml(todayStr().slice(0,7));
+    defaultsFromEnd();
+    update();
+  }
+  // 延後付款（掛帳）送出：原本是獨立的「掛帳」按鈕，現在跟其他調整類型共用上面的
+  // 「新增調整項」按鈕，選了「延後付款」這個類型才會呼叫到這支函式。
+  async function submitDeferPayment(){
+    const driverId = document.getElementById('pDriver').value;
+    const args = { driverId, start:document.getElementById('dfStart').value, end:document.getElementById('dfEnd').value, dueMonth:document.getElementById('dfMonth').value, dueDate:document.getElementById('dfDue').value, note:document.getElementById('dfNote').value };
+    if(!driverId){ alert('請先選擇夥伴'); return; }
+    if(!args.dueDate){ alert('請選擇預計付款日'); return; }
+    if(!confirm(`把 ${driverName(driverId)} ${args.start}～${args.end} 已完成的任務掛帳，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款嗎？`)) return;
+    try{
+      const r = await deferPayment(args);
+      alert(`已掛帳：${r.count} 趟，趟報酬合計 $${r.total}，歸屬 ${args.dueMonth} 薪資，預計 ${args.dueDate} 付款`);
+      document.getElementById('dfNote').value='';
+      renderDeferredPanel();
+      document.getElementById('dfStart').dispatchEvent(new Event('input'));
+    }catch(err){ alert(err.message); }
+  }
+  // 已開單（金額凍結）的勞報單，如果跟「現在的即時帳務」對不上（例如開單後才補代墊款日期、
+  // 加減項被改），在主控端提醒收回重開；夥伴看到的仍是凍結的數字，這裡只是給主控的警示。
+  function statementDriftNote(record, live){
+    if(!record) return '';
+    const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+    const diffs = [];
+    if(Math.abs(record.tripTotal - live.tripTotal) > 0.5) diffs.push(`任務報酬 凍結 $${money(record.tripTotal)}／現在 $${money(live.tripTotal)}`);
+    if(Math.abs(record.adjTotal - calc.adjTotal) > 0.5) diffs.push(`加減項 凍結 $${money(record.adjTotal)}／現在 $${money(calc.adjTotal)}`);
+    if(Math.abs(record.reimbursementAmount - live.reimbursement) > 0.5) diffs.push(`代墊款 凍結 $${money(record.reimbursementAmount)}／現在 $${money(live.reimbursement)}`);
+    if(!diffs.length) return '';
+    return `<div class="note" style="border-color:var(--danger); color:var(--danger);">⚠️ 這張勞報單開單後帳務有變動，凍結的數字跟現在對不上：${diffs.join('；')}。如果現在的帳才是對的，請「收回」後重新開單。</div>`;
+  }
+  // 開啟某份勞報單的詳情：月結的切到上面的月份明細，區間的切到區間勞報單區塊。
+  function openStatementView(x){
+    state._payDriverId = x.driverId;
+    if(x.periodStart){ state._periodSel = { driverId:x.driverId, start:x.periodStart, end:x.periodEnd, payDate:x.payDate||'' }; state._scrollTo = 'periodResult'; }
+    else { state._payrollMonth = x.month; state._scrollTo = 'payrollResult'; }
+    renderContent();
+  }
+  // 區間勞報單區塊：只有主控按「預覽區間勞報單」（或改期間／給付日／付款方式，或從「尚未月結」
+  // 清單點「開區間勞報單」直接帶期間過來）才會顯示內容，不然這裡保持空白——避免選了夥伴後
+  // 畫面自動跳出一段預設期間的試算，容易被誤會是已經確定的數字。已開過的區間勞報單清單不在
+  // 這裡重複列，統一看上面「勞報單記錄（全部月份）」那一份。
+  async function periodRefresh(){
+    const box = document.getElementById('periodResult');
+    if(!box) return;
+    const driverId = document.getElementById('pDriver').value;
+    if(!driverId){ box.innerHTML = ''; return; }
+    const start = document.getElementById('perStart').value;
+    const end = document.getElementById('perEnd').value;
+    const payDate = document.getElementById('perPay').value;
+    const payMethod = document.getElementById('perMethod').value;
+    state._periodSel = { driverId, start, end, payDate, payMethod };
+    const statusText = x=> x.status==='awaiting_signature' ? '<span class="badge progress">等待夥伴簽名</span>' : x.status==='signed' ? '<span class="badge signed">已回簽</span>' : '<span class="badge signed">已鎖定</span>';
+    if(!start || !end){ box.innerHTML = ''; return; }
+    if(end < start){ box.innerHTML = '<div class="panel"><div class="empty">結束日期不能早於開始日期</div></div>'; return; }
+    box.innerHTML = '<div class="empty">載入中...</div>';
+    let rangeAssignments;
+    try{
+      rangeAssignments = await fetchAssignmentsInRange(start, end);
+      await ensureAdjustmentsRange(start); await ensureFuelClaimsRange(start);
+    }
+    catch(err){ box.innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+    const cur = state._periodSel;
+    if(cur.driverId!==driverId || cur.start!==start || cur.end!==end) return; // 使用者可能已經改選
+    const driver = state.data.drivers.find(d=>d.id===driverId);
+    const live = driverRange(driverId, start, end, rangeAssignments);
+    const record = state.data.statements.find(x=>x.driverId===driverId && x.periodStart===start && x.periodEnd===end);
+    const overlap = record ? null : findOverlappingStatement(driverId, start, end);
+    let slipHtml, attHtml, r, ded;
+    if(record){
+      ({ slipHtml, attHtml } = buildSlipHtmls(driver, record, rangeAssignments));
+      r = { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount };
+      ded = { actualNet: record.actualNet, taxAmount: record.taxAmount, nhiAmount: record.nhiAmount };
+    } else {
+      const calc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+      r = { ...live, adjTotal:calc.adjTotal, net:calc.net };
+      ded = computePayrollDeductions(r.net, r.reimbursement);
+      const po = { period:{ start, end }, payDate: payDate || null };
+      slipHtml = payrollSlipHtml(driver, end.slice(0,7), r, ded, { ...po, v2:true, serviceName: driver && driver.serviceName, payMethod });
+      attHtml = payrollAttachmentHtml(driver, end.slice(0,7), r, po);
+    }
+    const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((sum,a)=>sum+Math.abs(Number(a.amount)||0), 0);
+    const paidTotal = r.paid||0;
+    // 承接前幾個月還沒扣完的超支餘額（預支/區間勞報單先付超過當月賺的部分），不會自動消失，
+    // 要繼續從這裡扣——見 computeCarryInMap() 旁的說明。
+    const carryIn = (await computeCarryInMap(end.slice(0,7), [driverId])).get(driverId) || 0;
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('perStart')?.value!==start || document.getElementById('perEnd')?.value!==end) return; // 使用者可能在這段等待期間又改選了別的夥伴/期間
+    const payable = ded.actualNet - advanceTotal - paidTotal + carryIn;
+    const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
+    box.innerHTML = `
+      <div class="panel no-print">
+        <h3 style="margin-top:0;">${escapeHtml(driverName(driverId))} — ${start}～${end} ${record ? statusText(record) : ''}</h3>
+        ${record ? statementDriftNote(record, live) : '<div class="note">尚未開單，下方為即時預覽（含系統自動判斷的扣稅／補充保費）。確認無誤後按「確認開單」凍結金額並開放夥伴簽名。</div>'}
+        ${overlap ? `<div class="note" style="color:var(--danger);">⚠️ 這段期間跟已存在的勞報單（${statementLabel(overlap)}）重疊，不能開單。</div>` : ''}
+        <h4 style="margin:14px 0 8px; font-size:13.5px;">配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</h4>
+        <table><thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
+          <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">這段期間無已完成任務</div></td></tr>'}</tbody></table>
+        <h4 style="margin:14px 0 8px; font-size:13.5px;">調整項（依調整項日期歸入）</h4>
+        <table><thead><tr><th>日期</th><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
+          <tbody>${r.adjustments.map(a=>`<tr><td>${adjustmentEffectiveDate(a)}${a.date?'':'（無日期）'}</td><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${escapeHtml(a.note||'—')}</td><td>${!record?`<button class="btn danger" data-perdeladj="${a.id}">刪除</button>`:''}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">無調整項</div></td></tr>'}</tbody></table>
+        <table style="margin-top:10px;">
+          <tr><td>報酬總額（任務＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
+          ${r.reimbursement ? `<tr><td>　其中代墊款（憑證開公司，非所得，不扣稅）</td><td class="amount">$${money(r.reimbursement)}</td></tr><tr><td>　所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-r.reimbursement)}</td></tr>` : ''}
+          ${ded.taxAmount||ded.nhiAmount ? `<tr><td>扣稅／補充保費</td><td class="amount">-$${money(ded.taxAmount+ded.nhiAmount)}</td></tr>` : ''}
+          ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
+          ${paidTotal ? `<tr><td>已付款（先付現金／轉帳）</td><td class="amount">-$${money(paidTotal)}</td></tr>` : ''}
+          ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
+          <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
+        </table>
+      </div>
+      <div id="payrollSlipArea">${slipHtml}${attHtml}</div>
+      <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn ghost" id="perPrint">產生勞報單（列印/另存PDF）</button>
+        ${!record && !overlap ? `<button class="btn amber" id="perConfirm">確認開單（開放夥伴簽名）</button>` : ''}
+        ${record && (record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="perReject">退回簽名</button>` : ''}
+        ${record ? `<button class="btn danger" id="perRevoke" title="帳務有問題時，整份收回、重新計算">收回這張勞報單</button>` : ''}
+      </div>`;
+    document.getElementById('perPrint').onclick = async ()=>{
+      const idCardHtml = shouldAttachIdCard(driverId, record ? record.id : null) ? await idCardAttachmentHtml(driver) : '';
+      exportPayrollPortraitPdf([slipHtml, attHtml, idCardHtml].filter(Boolean), `${driverName(driverId)}_${start}～${end}_勞報單`);
+    };
+    box.querySelectorAll('[data-perdeladj]').forEach(b=>{
+      b.onclick = async ()=>{
+        const adj = r.adjustments.find(x=>x.id===b.dataset.perdeladj);
+        if(!confirm(`確定要刪除這筆「${adj?adjTypeLabel(adj.type):''}」調整項嗎（$${money(adj?.amount||0)}，${adj?.note||'無備註'}）？刪除後無法復原。`)) return;
+        try{ await deleteAdjustment(b.dataset.perdeladj); periodRefresh(); }
+        catch(err){ alert(err.message); }
+      };
+    });
+    const pc = document.getElementById('perConfirm');
+    if(pc) pc.onclick = async ()=>{
+      if(!payDate){ alert('請先填寫「實際給付日期」'); return; }
+      if(!confirm(`確定為 ${driverName(driverId)} 開立 ${start}～${end} 的勞報單嗎？\n報酬總額 $${money(r.net)}，實領 $${money(ded.actualNet)}，給付日期 ${payDate}，付款方式${payMethod==='cash'?'現金':'銀行轉帳'}。\n凍結後金額不會再變動，並開放夥伴簽名。`)) return;
+      try{ await confirmPeriodStatement(driverId, start, end, payDate, live, payMethod); renderContent(); }
+      catch(err){ alert(err.message); }
+    };
+    const pr = document.getElementById('perReject');
+    if(pr) pr.onclick = async ()=>{
+      if(!confirm(`確定要退回 ${driverName(driverId)} ${start}～${end} 的簽名嗎？退回後夥伴需要重新簽名。`)) return;
+      try{ await rejectStatementSignature(record.id); periodRefresh(); }
+      catch(err){ alert(err.message); }
+    };
+    const prv = document.getElementById('perRevoke');
+    if(prv) prv.onclick = ()=> doRevoke([record]);
+  }
+  async function refresh(){
+    const driverId = document.getElementById('pDriver').value;
+    const monthStr = document.getElementById('pMonth').value;
+    state._payrollMonth = monthStr; state._payDriverId = driverId;
+    if(!driverId){ document.getElementById('payrollResult').innerHTML = '<div class="panel"><div class="empty">請先選擇夥伴，或從上方清單點「查看」，就會顯示這位夥伴的月結與區間勞報單。</div></div>'; return; }
+    // 不再提供「整月月結確認」開新單（沿用2026-10-30起的規則：新單一律走下方「區間勞報單」，
+    // 避免整月合併扣稅跟實際已開區間單對不起來）；已經月結過的舊勞報單仍可在這裡查看、退回簽名、收回。
+    // 這個畫面只讀不寫，直接跟資料庫要這個月的任務，不碰共用的
+    // state.data.assignments——查完這個函式結束就丟，不會累積佔用記憶體，
+    // 也不影響其他畫面的效能，查哪個月份都一樣快。
+    document.getElementById('payrollResult').innerHTML = '<div class="empty">載入中...</div>';
+    let monthAssignments;
+    try{
+      monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr));
+      await ensureAdjustmentsRange(monthStr+'-01'); await ensureFuelClaimsRange(monthStr+'-01');
+    }
+    catch(err){ document.getElementById('payrollResult').innerHTML = `<div class="empty">${err.message}</div>`; return; }
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能已經改選別的夥伴/月份
+    const live = driverMonthly(driverId, monthStr, monthAssignments);
+    const record = state.data.statements.find(s=>s.driverId===driverId && !s.periodStart && s.month===monthStr);
+    // 2026-11-15修：使用者明確要求，報酬總額／可領淨額一律用原始即時資料計算，不管
+    // 這個月開過幾張勞報單（月結或區間）——勞報單只是提交國稅局的報稅文件，不能拿來
+    // 判定「這筆錢付了沒」（而且一張橫跨月份的區間勞報單還會讓同一筆錢在不同月份被
+    // 重複算進可領淨額，見 computeDriverPayable() 旁 commit 351d79c 的教訓）。「付了沒」
+    // 只看明確的付款動作：預支、登記一次付款、延後付款（掛帳）、承接前期超支。
+    const statementCalc = statementNetFromAdjustments(live.tripTotal, live.adjustments);
+    const r = { ...live, adjTotal:statementCalc.adjTotal, net:statementCalc.net };
+    const ded = { incomeType: PAYROLL_INCOME_TYPE, withholdTax: false, taxRate: PAYROLL_TAX_RATE, taxAmount: 0, withholdNhi: false, nhiRate: PAYROLL_NHI_RATE, nhiAmount: 0, actualNet: r.net };
+    // 這個月期間內有沒有已經開過的勞報單——純粹給畫面顯示用（開過哪幾張、要不要再開新單），
+    // 跟上面可領淨額的計算完全無關。
+    const monthStart = monthStr+'-01', monthEnd = monthEndStr(monthStr);
+    const coveringStatements = state.data.statements.filter(s=>{
+      if(s.driverId!==driverId) return false;
+      const [a,b] = statementRange(s);
+      return a<=monthEnd && b>=monthStart;
+    });
+    const isCovered = date => coveringStatements.some(s=>{ const [a,b]=statementRange(s); return date>=a && date<=b; });
+    let fullyCovered = coveringStatements.length>0;
+    for(let d=new Date(monthStart+'T00:00:00'); fullyCovered && ymd(d)<=monthEnd; d.setDate(d.getDate()+1)){
+      if(!isCovered(ymd(d))) fullyCovered = false;
+    }
+    const driver = state.data.drivers.find(d=>d.id===driverId);
+    const statusBadge = !record ? '' : record.status==='confirmed' ? '<span class="badge signed">夥伴已確認簽名（已鎖定）</span>' : record.status==='signed' ? '<span class="badge signed">夥伴已回簽（未鎖定）</span>' : '<span class="badge progress">等待夥伴回簽</span>';
+    // 正式文件（勞報單PDF）仍然用開單當下凍結的金額，不受上面即時可領淨額計算影響——
+    // 這份是已經簽名、要留存報稅用的文件，數字不能因為之後系統資料變動而跟著漂移。
+    // 沒有月結記錄時（現在的常態——整月月結新開單已停用，新單一律走下方「區間勞報單」），
+    // 不組勞報單/附件預覽：這裡只是即時參考數字，下方區間勞報單區塊自己會算一次完整預覽，
+    // 兩邊都顯示同一份配送明細＋勞報單文件會變成整頁看起來重複兩次（2026-11-11使用者
+    // 實測發現）。只有已存在的舊月結記錄（record）才需要在這裡顯示/列印/管理正式文件。
+    const slipR = record ? { ...live, tripTotal:record.tripTotal, adjTotal:record.adjTotal, net:record.net, reimbursement:record.reimbursementAmount } : null;
+    const slipDed = record ? { incomeType:record.incomeType, withholdTax:record.withholdTax, taxRate:record.taxRate, taxAmount:record.taxAmount, withholdNhi:record.withholdNhi, nhiRate:record.nhiRate, nhiAmount:record.nhiAmount, actualNet:record.actualNet } : null;
+    const slipHtml = record ? payrollSlipHtml(driver, monthStr, slipR, slipDed, {
+      v2: slipUsesV2(record), serviceName: record.serviceName, payMethod: record.payMethod,
+      signatureDataUrl: (record.status==='signed'||record.status==='confirmed') ? record.signatureDataUrl : null
+    }) : '';
+    const attHtml = record ? payrollAttachmentHtml(driver, monthStr, slipR) : '';
+    const sortedTrips = [...r.trips].sort((a,b)=>a.date.localeCompare(b.date));
+    // 可領淨額＝報酬總額（原始金額）再扣掉預支與已付款（現金／轉帳先付的），即這個月還要實際匯給夥伴的現金。
+    const advanceTotal = r.adjustments.filter(a=>a.type==='advance').reduce((s,a)=>s+Math.abs(Number(a.amount)||0), 0);
+    const paidTotal = r.paid||0;
+    // 承接前幾個月還沒扣完的超支餘額（預支/已付款超過當月賺的部分），不會自動消失，
+    // 要繼續從這裡扣——見 computeCarryInMap() 旁的說明。
+    const carryIn = (await computeCarryInMap(monthStr, [driverId])).get(driverId) || 0;
+    // 掛帳（約好之後才付）：這個月做的事、約好晚點才付的不算進這個月；別個月做的事、約好這個月
+    // 付的才併進來——2026-11-15修：以前「可領淨額」沒有真的扣掉／加上這兩塊，只在下面多一行
+    // 「應付合計（含掛帳）」當參考，主控要自己心算；現在「可領淨額」本身就是真的這個月要匯出去
+    // 的錢，跟「夥伴匯款清單」的算法一致。
+    // 2026-11-15再補：改用 fetchDeferralHistory()（連已撥款的掛帳也一起抓）＋
+    // deferralAnnotations()，讓「已經撥款」的掛帳不會一付完就從畫面上消失，留下「已於X支付」
+    // 的永久註記，方便主控事後回頭查這筆錢原本是哪個月做的事、掛到哪個月、哪天撥款——財務
+    // 計算仍然只用 pendingTotal，已撥款的部分已經透過「已付款」那行扣過了，不能再扣一次。
+    let defHistory = [];
+    try{ defHistory = await fetchDeferralHistory(driverId); }catch(e){}
+    const ann = deferralAnnotations(defHistory, monthStr+'-01', monthEndStr(monthStr));
+    if(document.getElementById('pDriver')?.value!==driverId || document.getElementById('pMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又改選了別的夥伴/月份
+    // 2026-11-15三修：使用者明確要求——掛帳就是「合併到歸屬月份一起撥款」，之前月份掛帳
+    // 歸屬本月的金額一律直接併進本月總額，不管那幾趟本身有沒有登記過付款，不再另外判斷、
+    // 扣回去（不是兩筆分開的錢，是同一筆合併處理）。
+    // 2026-11-16修：上面那段「不管有沒有撥款都併進來」只對了一半——併進來的金額，一旦真的
+    // 撥款了，還是要從「可領淨額」扣掉，不然會變成這筆錢永遠卡在畫面上，即使詹予呈這種
+    // 10月、9月掛帳都已經全部付清的情況，也會一直顯示還欠$2,310（使用者實測發現）。做法：
+    // 把掛帳已撥款的部分（ann.other.paidTotal）併進「已付款」那一行一起扣掉，不再單獨處理；
+    // 這樣「+X月掛帳合併」還是會完整顯示（滿足「要看到這筆錢」的需求），但已經付清的部分
+    // 會透過「已付款」自然歸零，不會卡住。
+    const paidCombined = paidTotal + ann.other.paidTotal;
+    const payable = ded.actualNet - advanceTotal - paidCombined + carryIn - ann.inRange.pendingTotal + ann.other.total;
+    document.getElementById('payrollResult').innerHTML = `
+      <div class="panel no-print">
+        <div class="toolbar"><h3 style="margin:0;">${driverName(driverId)} — ${monthStr} ${statusBadge}</h3></div>
+        ${statementDriftNote(record, live)}
+        ${!record ? (fullyCovered
+          ? `<div class="note">這個月每一天都已經開過區間勞報單（${coveringStatements.map(statementLabel).join('、')}，報稅用），不用再開新單；下面「可領淨額」仍一律用原始即時報酬資料計算，跟開過幾張勞報單無關（勞報單只是報稅文件，不能當作付款判定）。</div>`
+          : coveringStatements.length
+            ? `<div class="note">這個月期間內已有 ${coveringStatements.length} 張區間勞報單（${coveringStatements.map(statementLabel).join('、')}，報稅用），其餘日期請在下方「區間勞報單」處理；下面「可領淨額」仍一律用原始即時報酬資料計算，不受勞報單影響。</div>`
+            : `<div class="note">以下為整月即時試算（原始金額）。要正式開單／讓夥伴簽名，請用下方「區間勞報單」。</div>`
+        ) : ''}
+        <h4 data-tripstoggle class="fold-head fold-row" style="margin:14px 0 8px; font-size:13.5px;">
+          <span>配送明細（${sortedTrips.length}趟，合計 <span class="amount">$${money(r.tripTotal)}</span>）</span>
+          <span class="fold-chev">${payrollTripsExpanded?'收合 ▾':'展開 ▸'}</span>
+        </h4>
+        <div style="${payrollTripsExpanded?'':'display:none;'}">
+          <table>
+            <thead><tr><th>日期</th><th>路線</th><th>車資</th></tr></thead>
+            <tbody>${sortedTrips.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td class="amount">$${money(tripPay(a))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">本月無已完成任務</div></td></tr>'}</tbody>
+          </table>
+        </div>
+        <h4 style="margin:14px 0 8px; font-size:13.5px;">調整項</h4>
+        <table>
+          <thead><tr><th>日期</th><th>調整項類型</th><th>金額</th><th>備註</th><th></th></tr></thead>
+          <tbody>${r.adjustments.map(a=>`<tr><td>${adjustmentEffectiveDate(a)}${a.date?'':'（無日期）'}</td><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td><td></td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">無調整項</div></td></tr>'}</tbody>
+        </table>
+        <table style="margin-top:10px;">
+          <tr><td>報酬總額（任務＋加項−減項）</td><td class="amount">$${money(r.net)}</td></tr>
+          ${r.reimbursement ? `<tr><td>　其中代墊款（憑證開公司，非所得，不扣稅）</td><td class="amount">$${money(r.reimbursement)}</td></tr><tr><td>　所得額（扣稅／補充保費基礎）</td><td class="amount">$${money(r.net-r.reimbursement)}</td></tr>` : ''}
+          ${ann.other.total ? `<tr><td>加：${monthsLabel(ann.other.sourceMonths)}掛帳合併至本月</td><td class="amount">+$${money(ann.other.total)}</td></tr>` : ''}
+          ${advanceTotal ? `<tr><td>已預支</td><td class="amount">-$${money(advanceTotal)}</td></tr>` : ''}
+          ${paidCombined ? `<tr><td>已付款（先付現金／轉帳${ann.other.paidTotal?`，含${monthsLabel(ann.other.sourceMonths)}掛帳已撥款部分`:''}）</td><td class="amount">-$${money(paidCombined)}</td></tr>` : ''}
+          ${carryIn ? `<tr><td style="color:var(--danger);">承接前期超支餘額</td><td class="amount" style="color:var(--danger);">-$${money(Math.abs(carryIn))}</td></tr>` : ''}
+          ${ann.inRange.pendingTotal ? `<tr><td>已掛帳，約定 ${ann.inRange.pendingDues.join('、')} 支付（不算進本月）</td><td class="amount">-$${money(ann.inRange.pendingTotal)}</td></tr>` : ''}
+          ${ann.inRange.paidTotal ? `<tr><td>　其中 $${money(ann.inRange.paidTotal)} 原本掛帳，已於 ${ann.inRange.paidDates.join('、')} 支付（已反映在上面「已付款」，這裡僅供對照）</td><td class="amount">—</td></tr>` : ''}
+          <tr><td><strong>可領淨額</strong></td><td class="amount"><strong>${payable<0?'-':''}$${money(Math.abs(payable))}</strong></td></tr>
+        </table>
+      </div>
+      ${record ? `<div id="payrollSlipArea">${slipHtml}${attHtml}</div>
+      <div class="no-print" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn ghost" id="printStatement">產生勞報單（列印/另存PDF）</button>
+        ${(record.status==='signed'||record.status==='confirmed') ? `<button class="btn danger" id="rejectSignBtn">退回簽名</button>` : ''}
+        <button class="btn danger" id="revokeBtn" title="帳務有問題時，整份收回、重新計算">收回月結（重新計算）</button>
+      </div>` : ''}`;
+    const printBtn = document.getElementById('printStatement');
+    if(printBtn) printBtn.onclick = async ()=>{
+      const idCardHtml = shouldAttachIdCard(driverId, record.id) ? await idCardAttachmentHtml(driver) : '';
+      exportPayrollPortraitPdf([slipHtml, attHtml, idCardHtml].filter(Boolean), `${driverName(driverId)}_${monthStr}_勞報單`);
+    };
+    const tripsToggle = document.querySelector('[data-tripstoggle]');
+    if(tripsToggle) tripsToggle.onclick = ()=>{ payrollTripsExpanded = !payrollTripsExpanded; refresh(); };
+    const rejectBtn = document.getElementById('rejectSignBtn');
+    if(rejectBtn) rejectBtn.onclick = async ()=>{
+      if(!confirm(`確定要退回 ${driverName(driverId)} ${monthStr} 的簽名嗎？退回後夥伴需要重新簽名。`)) return;
+      try{ await rejectStatementSignature(record.id); refresh(); }
+      catch(err){ alert(err.message); }
+    };
+    const revokeBtn = document.getElementById('revokeBtn');
+    if(revokeBtn) revokeBtn.onclick = ()=> doRevoke([record]);
+  }
+  // 夥伴／月份選擇存在 state，切換夥伴不用重選月份。
+  const pDriverEl = document.getElementById('pDriver');
+  if(state._payDriverId && [...pDriverEl.options].some(o=>o.value===state._payDriverId)) pDriverEl.value = state._payDriverId;
+  state._payDriverId = pDriverEl.value;
+  enhanceDriverSelect(pDriverEl);
+  const setPeriodDefaults = ()=>{
+    const last = state.data.statements.filter(x=>x.driverId===pDriverEl.value && x.periodStart).map(x=>x.periodEnd).sort().pop();
+    document.getElementById('perStart').value = last ? ymd(addDays(last, 1)) : '';
+    document.getElementById('perEnd').value = ymd(addDays(todayStr(), -1));
+    document.getElementById('perPay').value = todayStr();
+  };
+  // 月份選單只列近 6 個月，從清單點進較舊月份時要補上那個選項。
+  { const ms = document.getElementById('pMonth'); if(![...ms.options].some(o=>o.value===month)) ms.add(new Option(month, month)); ms.value = month; }
+  pDriverEl.onchange = ()=>{
+    state._payDriverId = pDriverEl.value;
+    state._periodSel = null; renderContent();   // 選了夥伴，整頁重畫（會不會出現編輯區塊取決於有沒有選夥伴）
+  };
+  document.getElementById('pMonth').onchange = refresh;
+  // 從「尚未月結」清單點「開區間勞報單」過來時，state._scrollTo會指定跳到periodResult，
+  // 這種情況代表主控已經明確選好要開哪一段期間，直接預覽；單純選夥伴／換月份則不自動預覽
+  // （要主控自己按「預覽區間勞報單」才會試算、顯示內容）。
+  const autoPreviewPeriod = state._scrollTo === 'periodResult';
+  if(scope){
+    // 區間區塊：換夥伴時，預設開始日＝這位夥伴上一張區間勞報單結束日的隔天，結束日＝昨天，給付日＝今天。
+    const sel = state._periodSel;
+    if(sel && sel.driverId===pDriverEl.value){
+      document.getElementById('perStart').value = sel.start || '';
+      document.getElementById('perEnd').value = sel.end || '';
+      document.getElementById('perPay').value = sel.payDate || todayStr();
+      document.getElementById('perMethod').value = sel.payMethod || 'transfer';
+    } else { setPeriodDefaults(); }
+    ['perStart','perEnd','perPay','perMethod'].forEach(id=>{ document.getElementById(id).onchange = periodRefresh; });
+    document.getElementById('perPreview').onclick = periodRefresh;
+    if(autoPreviewPeriod) periodRefresh();
+    wireDeferredForm(); renderDeferredPanel();
+  }
+  renderPendingSettlePanel();
+  if(state._scrollTo){
+    const sid = state._scrollTo; state._scrollTo = null;
+    setTimeout(()=>{ const el = document.getElementById(sid); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); }, 1200);
+  }
+  // 「延後付款」併進調整類型選單（2026-11-11，使用者要求不要另外一個獨立表單）：
+  // 選了這個類型，底下欄位換成掛帳用的那一組，「新增調整項」按鈕也改呼叫掛帳邏輯。
+  const addAdjBtn = document.getElementById('addAdj');
+  const aTypeEl = document.getElementById('aType');
+  if(aTypeEl && addAdjBtn){
+    const syncAFields = ()=>{
+      const isDefer = aTypeEl.value==='defer';
+      document.getElementById('aAmountField').hidden = isDefer;
+      document.getElementById('aNoteField').hidden = isDefer;
+      document.getElementById('aDateField').hidden = isDefer;
+      document.getElementById('aDeferFields').hidden = !isDefer;
+      addAdjBtn.textContent = isDefer ? '掛帳' : '新增調整項';
+      addAdjBtn.className = isDefer ? 'btn amber' : 'btn ghost';
+    };
+    aTypeEl.onchange = syncAFields;
+    syncAFields();
+  }
+  if(addAdjBtn) addAdjBtn.onclick = async ()=>{
+    if(aTypeEl && aTypeEl.value==='defer'){ await submitDeferPayment(); return; }
+    const driverId = document.getElementById('pDriver').value;
+    const monthStr = document.getElementById('pMonth').value;
+    const amount = document.getElementById('aAmount').value;
+    if(!driverId||!amount){ alert('請選擇夥伴並輸入金額'); return; }
+    try{
+      const aDate = document.getElementById('aDate').value || null;
+      await createAdjustment({ driverId, month: monthStr, date: aDate, type: document.getElementById('aType').value, amount, note: document.getElementById('aNote').value.trim() });
+      refresh();
+    }catch(err){ alert(err.message); }
+  };
+  refresh();
+}
+
+// ---------- 夥伴匯款清單（2026-11-01） ----------
+// 使用者要求：每個月要去銀行轉帳給大家之前，想要一次看完所有在職夥伴的匯款
+// 資訊＋應付金額，不用一個一個點開報酬結算頁查。純讀取、不寫任何資料；基礎金額
+// 算法呼叫computeDriverPayable()，跟報酬結算頁用同一套規則，確保兩邊金額
+// 一定一致。含銀行帳號、身分證字號這類敏感資料，只有主控看得到（這個分頁
+// 本來就只在ADMIN_TABS，夥伴端完全不會有這個分頁、也查不到別人的這些資料）。
+// 2026-11-01補：加上掛帳（延後付款）處理——computeDriverPayable()本身不管掛帳，
+// 這個月掛到以後才付的要先扣掉（不是這個月真的要匯的錢），以前月份掛到這個月付的
+// 要加回來，這樣這裡的金額才會是「這個月真的要轉出去的錢」。
+// 2026-11-15補：報酬結算頁的「可領淨額」現在也用同一套掛帳加減邏輯了（以前只在旁邊
+// 加註提醒、要人工判斷），兩邊數字應該完全一致，不會再有「這裡扣了、那裡沒扣」的落差。
+async function renderPaymentList(c){
+  const month = state._paymentListMonth || todayStr().slice(0,7);
+  c.innerHTML = `
+    <h2 class="section-title">夥伴匯款清單</h2>
+    <div class="section-sub">這個月所有在職夥伴的匯款資訊與應付金額，方便去銀行轉帳前核對。
+      <details><summary style="cursor:pointer;">說明</summary>
+        <div style="margin-top:4px;">已扣預支、已扣已付款、已處理掛帳、已扣承接前期（最多回溯6個月）還沒扣完的超支餘額。基礎算法跟「報酬結算」頁完全一致；差別是這裡會把「掛帳」處理掉——這個月有掛到下個月才付的部分不算進這個月的匯款金額，上個月掛到這個月付的部分會加進來，確保這裡的數字就是這個月真的要匯出去的錢。本月淨額$0（或以下）不用匯款的夥伴不會列在清單裡。純彙整檢視，不會寫入或異動任何資料。點姓名可以直接跳去那位夥伴的報酬結算明細。</div>
+      </details>
+    </div>
+    <div class="panel no-print">
+      <div class="grid2">
+        <div class="field" style="max-width:200px;"><label>月份</label><select id="plMonth">${monthOptionsHtml(month)}</select></div>
+        <div class="field" style="align-self:flex-end;"><button class="btn ghost" id="plPrint" style="width:100%;">列印/另存PDF</button></div>
+      </div>
+    </div>
+    <div id="plResult"><div class="empty">載入中…</div></div>`;
+  document.getElementById('plMonth').onchange = ()=>{ state._paymentListMonth = document.getElementById('plMonth').value; refresh(); };
+  document.getElementById('plPrint').onclick = ()=>{
+    const tbl = document.getElementById('plTable');
+    if(!tbl){ alert('請先等清單載入完成'); return; }
+    exportPrintable(`夥伴匯款清單_${document.getElementById('plMonth').value}`, tbl.outerHTML, `夥伴匯款清單・${document.getElementById('plMonth').value}`, { fixedWidth:1200 });
+  };
+  await refresh();
+  async function refresh(){
+    const monthStr = document.getElementById('plMonth').value;
+    state._paymentListMonth = monthStr;
+    const box = document.getElementById('plResult');
+    box.innerHTML = '<div class="empty">載入中…</div>';
+    let monthAssignments, allDeferred;
+    try{
+      monthAssignments = await fetchAssignmentsInRange(monthStr+'-01', monthEndStr(monthStr));
+      await ensureAdjustmentsRange(monthStr+'-01');
+      allDeferred = await fetchDeferralHistory();
+    }catch(err){ box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`; return; }
+    if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能已經切走這一頁或換了月份
+    // 同一家銀行的排在一起，方便去那家銀行網銀/APP時一次處理完；銀行內再依姓名排序；沒填銀行的排最後。
+    const drivers = [...state.data.drivers].filter(d=>d.status==='active').sort((a,b)=>{
+      const bankA = a.bank.bankName||'', bankB = b.bank.bankName||'';
+      if(!bankA && bankB) return 1;
+      if(bankA && !bankB) return -1;
+      return bankA.localeCompare(bankB,'zh-Hant') || a.name.localeCompare(b.name,'zh-Hant');
+    });
+    const monthStart = monthStr+'-01', monthEnd = monthEndStr(monthStr);
+    // 承接前幾個月還沒扣完的超支餘額，不會自動消失，要繼續從這個月的匯款金額扣——見
+    // computeCarryInMap() 旁的說明。這裡一次算全體夥伴，比在每位夥伴各自的調整項畫面
+    // 分別查快很多（每個回溯月份只需要查一次整批資料，不用每位夥伴各查一次）。
+    const carryMap = await computeCarryInMap(monthStr, drivers.map(d=>d.id));
+    if(state.tab!=='paymentList' || document.getElementById('plMonth')?.value!==monthStr) return; // 使用者可能在這段等待期間又切走或換月份
+    // 2026-11-15三修：使用者明確要求——掛帳就是「合併到歸屬月份一起撥款」，之前月份掛帳
+    // 歸屬本月的金額（ann.other.total）一律直接併進本月匯款金額，不管那幾趟本身有沒有
+    // 登記過付款，不再另外扣回去（這裡只是顯示；真的要登記付款時，recordMonthlyPayment()
+    // 自己會跳過已經登記過的部分，不會重複付）。
+    // 2026-11-16修：上面那段只對了一半——併進來的金額一旦真的撥款了，還是要扣掉，不然像
+    // 詹予呈這種10月、9月掛帳都已經全部付清的情況，這裡會一直顯示還要匯$2,310（使用者
+    // 實測發現）。已撥款的部分（ann.other.paidTotal）要跟其他「已付款」一樣扣掉。
+    const allRows = drivers.map(d=>{
+      const base = computeDriverPayable(d.id, monthStr, monthAssignments);
+      const carryIn = carryMap.get(d.id) || 0;
+      const ann = deferralAnnotations(allDeferred.filter(t=>t.driverId===d.id), monthStart, monthEnd);
+      // 這個月做的事有一部分約好晚點付（inRange，還沒撥款的部分），不算進這個月匯款；之前月份掛到這個月付的（other）要加進來，已經撥款的部分要扣掉。
+      const payable = base.payable + carryIn - ann.inRange.pendingTotal + ann.other.total - ann.other.paidTotal;
+      // 2026-11-16修：「已付款總額」面板原本只看 base.paidTotal（本月自己任務的部分），
+      // 沒算進掛帳合併進來、已經撥款的部分——詹予呈這種案例，面板會只顯示10月自己的
+      // $22,110，漏掉9月掛帳已撥款的$2,310，讓人誤以為那筆沒被算到（使用者實測發現）。
+      const paidTotal = base.paidTotal + ann.other.paidTotal;
+      return { driver:d, payable, ann, advanceTotal: base.advanceTotal, paidTotal, carryIn };
+    });
+    // 本月淨額為0（或負）的不用匯款，清單裡不列出，去銀行轉帳時不用看到一堆$0的人。
+    const rows = allRows.filter(x=>Math.round(x.payable)>0);
+    const skipped = allRows.length - rows.length;
+    const total = rows.reduce((s,x)=>s+x.payable, 0);
+    const missingBank = rows.filter(x=>!x.driver.bank.account || !x.driver.idNumber);
+    // 兩張單獨的「這個月我給了誰多少錢」清單，只看兩種主控自己登打/操作的紀錄，不牽涉
+    // 區間勞報單／勞報單這些正式文件：
+    // 1. 預支調整項：依調整項本身的日期算在哪個月（base.advanceTotal，driverMonthly()已經
+    //    是這樣算的，不用另外處理）。
+    // 2. 已付款（週期任務清單勾選）：依趟次本身的日期算在哪個月，不是標記付款那天的日期
+    //    （base.paidTotal，driverMonthly()用trips的date欄位篩選、不是paidDate，所以已經
+    //    是正確的切法，例如10/27~10/30的趟次11/2才標付款，一樣算10月）。
+    const advanceRows = allRows.filter(x=>x.advanceTotal>0).sort((a,b)=>b.advanceTotal-a.advanceTotal);
+    const advanceGrandTotal = advanceRows.reduce((s,x)=>s+x.advanceTotal, 0);
+    const paidRows = allRows.filter(x=>x.paidTotal>0).sort((a,b)=>b.paidTotal-a.paidTotal);
+    const paidGrandTotal = paidRows.reduce((s,x)=>s+x.paidTotal, 0);
+    box.innerHTML = `
+      ${advanceGrandTotal ? `<div class="panel">
+        <h3 style="margin-top:0;">📌 ${monthStr} 預支總額：<span class="amount">$${money(advanceGrandTotal)}</span>（共${advanceRows.length}位）</h3>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          ${advanceRows.map(x=>`<button class="btn ghost" data-plgopayroll="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} $${money(x.advanceTotal)}</button>`).join('')}
+        </div>
+      </div>` : ''}
+      ${paidGrandTotal ? `<div class="panel">
+        <h3 style="margin-top:0;">📌 ${monthStr} 已付款總額：<span class="amount">$${money(paidGrandTotal)}</span>（共${paidRows.length}位）</h3>
+        <div style="font-size:12.5px; color:var(--ink-soft); margin-bottom:6px;">週期任務清單上勾選「已付款」的趟次，依趟次本身的日期算在這個月（不是勾選那天的日期）。</div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          ${paidRows.map(x=>`<button class="btn ghost" data-plgopayroll="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} $${money(x.paidTotal)}</button>`).join('')}
+        </div>
+      </div>` : ''}
+      ${missingBank.length ? `<div class="panel" style="border-color:var(--danger); border-width:2px;"><h3 style="margin-top:0;">⚠️ ${missingBank.length}位銀行帳號或身分證字號未填寫</h3>${missingBank.map(x=>`<div style="padding:4px 0; font-size:13px;"><button class="btn ghost" data-plfixdriver="${x.driver.id}" style="padding:2px 10px; font-size:12.5px;">${escapeHtml(x.driver.name)} → 前往夥伴資料補齊</button></div>`).join('')}</div>` : ''}
+      ${rows.length ? `<div class="panel no-print" id="plBatchPanel">
+        <div class="toolbar"><h3 style="margin:0;">登記全部已付款</h3><span id="plBatchCount" style="font-size:12.5px; color:var(--ink-soft);"></span></div>
+        <p class="section-sub" style="margin-top:0;">把下面勾選的夥伴，這個月（含之前月份掛帳合併進來的部分）還沒登記過的錢，一次登記成已付款——已經登記過的部分會自動跳過，不會重複付。登記後無法整批復原，要取消要到各自的「週期任務清單」逐一取消。</p>
+        <div class="grid2">
+          <div class="field"><label>付款日期</label><input id="plBatchDate" type="date" value="${todayStr()}"></div>
+          <div class="field"><label>付款方式</label><select id="plBatchMethod"><option value="transfer">轉帳</option><option value="cash">現金</option></select></div>
+        </div>
+        <button class="btn amber" id="plBatchGo" style="width:100%;">登記已選取夥伴的已付款</button>
+      </div>` : ''}
+      <div class="panel">
+        ${skipped ? `<p class="note" style="margin-top:0;">另有 ${skipped} 位在職夥伴本月淨額為 $0（或以下），免匯款，未列在下面清單。</p>` : ''}
+        <table id="plTable">
+          <thead><tr><th class="no-print"><input type="checkbox" id="plSelAll" checked title="全選/取消全選"></th><th>姓名</th><th>戶名</th><th>銀行</th><th>分行</th><th>帳號</th><th>身分證字號</th><th>匯款金額</th></tr></thead>
+          <tbody>${rows.map(({driver:d, payable, ann, carryIn}, i)=>{
+            const newBank = i>0 && (d.bank.bankName||'')!==(rows[i-1].driver.bank.bankName||'');
+            const baseStyle = !d.bank.account||!d.idNumber ? 'background:rgba(214,69,69,.08);' : '';
+            return `<tr style="${baseStyle}${newBank?' border-top:2px solid var(--border);':''}">
+            <td class="no-print"><input type="checkbox" class="plSelRow" data-plid="${d.id}" data-plamt="${payable}" checked></td>
+            <td><button class="btn ghost" data-plgopayroll="${d.id}" style="padding:2px 8px; font-size:12.5px;" title="前往這位夥伴的報酬結算明細">${escapeHtml(d.name)}</button></td>
+            <td>${escapeHtml(d.bank.holder||'—')}</td>
+            <td>${escapeHtml(d.bank.bankName||'—')}</td>
+            <td>${escapeHtml(d.bank.branch||'—')}</td>
+            <td class="mono">${escapeHtml(d.bank.account||'—')}</td>
+            <td class="mono">${escapeHtml(d.idNumber||'—')}</td>
+            <td class="amount">${payable<0?'-':''}$${money(Math.abs(payable))}${ann.inRange.pendingTotal||ann.other.total||carryIn?`<div style="font-size:10.5px; color:var(--ink-soft); font-weight:400;">${ann.inRange.pendingTotal?`已扣掛帳待${ann.inRange.pendingDues.join('、')}付 $${money(ann.inRange.pendingTotal)}`:''}${ann.other.total?`${ann.inRange.pendingTotal?'；':''}含${monthsLabel(ann.other.sourceMonths)}掛帳合併 $${money(ann.other.total)}${ann.other.paidTotal?`（其中 $${money(ann.other.paidTotal)} 已撥款，不重複列入）`:''}`:''}${carryIn?`${ann.inRange.pendingTotal||ann.other.total?'；':''}<span style="color:var(--danger);">已扣承接前期超支 $${money(Math.abs(carryIn))}</span>`:''}</div>`:''}</td>
+          </tr>`;
+          }).join('') || `<tr><td colspan="8"><div class="empty">${allRows.length?'這個月所有在職夥伴淨額都是$0（或以下），沒有人需要匯款':'沒有在職夥伴'}</div></td></tr>`}</tbody>
+          <tfoot><tr><td colspan="7" style="text-align:right;"><strong>合計</strong></td><td class="amount"><strong>$${money(total)}</strong></td></tr></tfoot>
+        </table>
+      </div>`;
+    box.querySelectorAll('[data-plgopayroll]').forEach(btn=>{
+      btn.onclick = ()=>{ state._payDriverId = btn.dataset.plgopayroll; state._payrollMonth = monthStr; goTab('payroll'); };
+    });
+    box.querySelectorAll('[data-plfixdriver]').forEach(btn=>{
+      btn.onclick = ()=>{ const d = state.data.drivers.find(x=>x.id===btn.dataset.plfixdriver); if(d) driverListSearch = d.name; switchTab('drivers'); };
+    });
+    // 2026-11-15：全部登記已付款——使用者要求跟網銀批次轉帳一樣，不要一個個夥伴點，
+    // 一次選取、一次登記。每位夥伴各自獨立登記一筆（不是合併成一筆），之後要取消某一位
+    // 可以單獨取消，不會牽連其他人。
+    const updateBatchCount = ()=>{
+      const countEl = document.getElementById('plBatchCount');
+      if(!countEl) return;
+      const checked = [...box.querySelectorAll('.plSelRow:checked')];
+      const sum = checked.reduce((s,el)=>s+Number(el.dataset.plamt||0), 0);
+      countEl.textContent = `已選 ${checked.length} 位，合計 $${money(sum)}`;
+    };
+    box.querySelectorAll('.plSelRow').forEach(el=>{ el.onchange = updateBatchCount; });
+    const selAll = document.getElementById('plSelAll');
+    if(selAll) selAll.onchange = ()=>{ box.querySelectorAll('.plSelRow').forEach(el=>{ el.checked = selAll.checked; }); updateBatchCount(); };
+    updateBatchCount();
+    const batchGo = document.getElementById('plBatchGo');
+    if(batchGo) batchGo.onclick = async ()=>{
+      const payDate = document.getElementById('plBatchDate').value;
+      const method = document.getElementById('plBatchMethod').value;
+      if(!payDate){ alert('請選擇付款日期'); return; }
+      const checked = [...box.querySelectorAll('.plSelRow:checked')];
+      if(!checked.length){ alert('請至少勾選一位夥伴'); return; }
+      const names = checked.map(el=>driverName(el.dataset.plid));
+      const estTotal = checked.reduce((s,el)=>s+Number(el.dataset.plamt||0), 0);
+      if(!confirm(`確定要登記 ${checked.length} 位夥伴 ${monthStr} 的已付款嗎？\n${names.slice(0,8).join('、')}${names.length>8?` 等共${names.length}位`:''}\n畫面上合計約 $${money(estTotal)}（實際登記金額以當下查到的還沒登記過的部分為準，已經登記過的會自動跳過、不重複付）。\n付款日期：${payDate}，方式：${method==='cash'?'現金':'轉帳'}。\n登記後無法整批復原，需要的話要逐一到「週期任務清單」取消。`)) return;
+      batchGo.disabled = true; batchGo.textContent = '登記中…';
+      const results = [];
+      for(const el of checked){
+        const did = el.dataset.plid;
+        try{ const r = await recordMonthlyPayment({ driverId: did, monthStr, payDate, method }); results.push({ name: driverName(did), ok:true, total: r.total }); }
+        catch(err){ results.push({ name: driverName(did), ok:false, error: err.message }); }
+      }
+      const okRows = results.filter(r=>r.ok && r.total>0);
+      const zeroRows = results.filter(r=>r.ok && !r.total);
+      const failRows = results.filter(r=>!r.ok);
+      let msg = `登記完成：${okRows.length} 位成功，合計 $${money(okRows.reduce((s,r)=>s+r.total,0))}。`;
+      if(zeroRows.length) msg += `\n${zeroRows.length} 位沒有可登記的金額（可能已經處理過）：${zeroRows.map(r=>r.name).join('、')}`;
+      if(failRows.length) msg += `\n${failRows.length} 位登記失敗：${failRows.map(r=>`${r.name}（${r.error}）`).join('；')}`;
+      alert(msg);
+      refresh();
+    };
+  }
+}
+
+// ---------- 請款結算 ----------
+// 依「通路」（例如7-11、康達盛通）結算一整份請款單：先依路線版本異動日期自動切成
+// 好幾段小區間算出各通路自己的未稅/含稅總額；配送明細則是「已選通路」共用一份，
+// 只列出已選通路的店數/佔比/金額，未勾選的通路完全不會出現（見 mergedRunRows）。
+// ---------- 夥伴搜尋選單 ----------
+// 把原本的 <select>（夥伴太多時很難找）升級成「可輸入文字搜尋」的選單：原本的 select 仍保留在頁面上
+// （隱藏），選到的值照常讀 select.value、照常觸發 change，所以呼叫端程式完全不用改。
+// 排班／換夥伴這幾處可以傳 getOrigin，優先列出「最近 60 天實際跑過這個任務起點」的夥伴（自動判斷，免維護）。
+async function loadDriverOriginStats(){
+  const c = state._driverOriginStats;
+  if(c && Date.now() - c.at < 30*60*1000) return c.map;
+  const supabase = getSupabase();
+  const since = ymd(addDays(todayStr(), -60));
+  const PAGE = 1000, rows = [];
+  for(let from=0; ; from+=PAGE){
+    const { data, error } = await supabase.from('assignments').select('driver_id, route_id')
+      .eq('status','completed').gte('trip_date', since).order('id').range(from, from+PAGE-1);
+    if(error) throw new Error(error.message);
+    rows.push(...(data||[]));
+    if(!data || data.length < PAGE) break;
+  }
+  const routeOrigin = new Map(state.data.routes.map(r=>[r.id, r.originAddr]));
+  const map = new Map(); // originAddr -> Map(driverId -> 趟數)
+  rows.forEach(r=>{
+    const og = routeOrigin.get(r.route_id); if(!og) return;
+    if(!map.has(og)) map.set(og, new Map());
+    const m = map.get(og); m.set(r.driver_id, (m.get(r.driver_id)||0)+1);
+  });
+  state._driverOriginStats = { at: Date.now(), map };
+  return map;
+}
+function enhanceDriverSelect(sel, opts){
+  if(!sel || sel.dataset.enhanced) return;
+  opts = opts || {};
+  sel.dataset.enhanced = '1';
+  sel.style.display = 'none';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative; width:100%;';
+  const input = document.createElement('input');
+  input.type = 'text'; input.autocomplete = 'off'; input.readOnly = true;
+  input.style.cssText = 'width:100%;';
+  const list = document.createElement('div');
+  list.style.cssText = 'display:none; position:absolute; left:0; right:0; top:100%; z-index:60; max-height:280px; overflow:auto; background:var(--panel,#fff); border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 18px rgba(27,33,41,.18); margin-top:2px;';
+  wrap.appendChild(input); wrap.appendChild(list);
+  sel.after(wrap);
+  // 「選擇夥伴」這種空白提示選項不列進清單（只有「全部夥伴」這種有意義的空值保留）。
+  const options = ()=> [...sel.options].filter(o=>o.value || o.textContent.includes('全部')).map(o=>({ value:o.value, text:o.textContent }));
+  const currentText = ()=>{ const o = sel.options[sel.selectedIndex]; return o && o.value ? o.textContent : (o && o.textContent.includes('全部') ? o.textContent : ''); };
+  const syncText = ()=>{ input.value = currentText(); input.placeholder = (sel.options[0] && !sel.options[0].value && !sel.options[0].textContent.includes('全部')) ? sel.options[0].textContent+'（點選瀏覽，點兩下打字搜尋）' : '點選瀏覽，點兩下打字搜尋…'; };
+  sel.syncPicker = syncText;
+  let freq = null; // Map(driverId -> 趟數)，這個任務起點最近60天常跑的
+  const loadFreq = ()=>{
+    if(!opts.getOrigin) return;
+    const og = opts.getOrigin();
+    if(!og){ freq = null; return; }
+    loadDriverOriginStats().then(map=>{ const m = new Map([...(map.get(og)||new Map())].filter(([,n])=>n>=2)); freq = m; if(list.style.display!=='none') render(); }).catch(()=>{ freq = null; });
+  };
+  function render(){
+    const q = input.value.trim().toLowerCase();
+    const filtering = q && q !== currentText().toLowerCase();
+    const items = options().filter(o=> !filtering || o.text.toLowerCase().includes(q));
+    const rowHtml = o=>`<div class="dpick-item" data-v="${escapeHtml(o.value)}" style="padding:7px 12px; cursor:pointer; font-size:13.5px; ${o.value===sel.value?'background:var(--bg-hover);':''}">${escapeHtml(o.text)}${freq && freq.get(o.value) ? `<span style="color:var(--ink-soft); font-size:11.5px; margin-left:6px;">近60天 ${freq.get(o.value)} 趟</span>` : ''}</div>`;
+    let html;
+    if(freq && freq.size){
+      const common = items.filter(o=>o.value && freq.has(o.value)).sort((a,b)=>freq.get(b.value)-freq.get(a.value));
+      const other = items.filter(o=>!(o.value && freq.has(o.value)));
+      const og = opts.getOrigin && opts.getOrigin();
+      html = (common.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--teal); background:var(--bg-hover);">${escapeHtml(originLabel(og))} 常跑的夥伴</div>${common.map(rowHtml).join('')}` : '')
+        + (other.length ? `<div style="padding:4px 12px; font-size:11.5px; color:var(--ink-soft); background:var(--bg-hover);">${common.length?'其他夥伴':'夥伴'}</div>${other.map(rowHtml).join('')}` : '');
+    } else html = items.map(rowHtml).join('');
+    list.innerHTML = html || '<div style="padding:8px 12px; font-size:12.5px; color:var(--ink-soft);">找不到符合的夥伴</div>';
+    list.querySelectorAll('.dpick-item').forEach(el=>{
+      el.onmousedown = e=>{ e.preventDefault(); choose(el.dataset.v); };
+    });
+  }
+  function choose(v){
+    sel.value = v;
+    syncText();
+    list.style.display = 'none';
+    input.readOnly = true;
+    sel.dispatchEvent(new Event('change'));
+  }
+  // 第一下點擊／focus：唯讀狀態，只開清單瀏覽，手機不會跳鍵盤；再點一下（這時已經focus著）
+  // 才解除唯讀讓輸入框可以打字搜尋——用mousedown時機判斷「點之前是不是已經focus在這格」，
+  // 不能直接用click判斷（click觸發時focus一定已經發生過，沒辦法分辨是第一下還第二下）。
+  let wasFocused = false;
+  input.onmousedown = ()=>{ wasFocused = (document.activeElement===input); };
+  input.onfocus = ()=>{ loadFreq(); render(); list.style.display = 'block'; };
+  input.onclick = ()=>{
+    if(wasFocused && input.readOnly){
+      input.readOnly = false;
+      input.blur(); input.focus(); input.select(); // 先blur再focus：iOS只有在這個使用者手勢裡重新focus，才會跳出鍵盤
+      render();
+    }
+  };
+  input.oninput = ()=>{ render(); list.style.display = 'block'; };
+  // 解除唯讀那步會先blur()再focus()觸發iOS鍵盤，也會讓這個onblur被叫到；
+  // 120ms後真的還是blur狀態（不是中途被重新focus）才收尾，不然打字打一半清單突然關掉、字被洗掉。
+  input.onblur = ()=>{ setTimeout(()=>{ if(document.activeElement!==input){ list.style.display = 'none'; syncText(); input.readOnly = true; } }, 120); };
+  input.onkeydown = e=>{
+    if(e.key==='Escape'){ list.style.display='none'; input.blur(); }
+    if(e.key==='Enter'){ e.preventDefault(); const first = list.querySelector('.dpick-item'); if(first) choose(first.dataset.v); }
+  };
+  syncText();
+  loadFreq();
+}
+function originLabel(addr){
+  const og = state.data.origins.find(o=>o.address===addr);
+  return og ? (og.label||og.address) : (addr || '（未知任務起點）');
+}
+// 算出一個通路在某區間的請款總覽資料（未稅/含稅/各任務起點總額，純資料不含畫面），
+// 畫面渲染跟Excel匯出共用同一份資料，確保兩邊數字保證一致。
+function computeChannelBillingReport(channelId, start, end, assignmentsList = state.data.assignments){
+  const channel = state.data.channels.find(ch=>ch.id===channelId);
+  if(!channel) return null;
+  const segments = splitPeriodByVersionChanges(channelId, start, end);
+  // 先把每段小區間的金額四捨五入到整數再往下加總，確保畫面/Excel上顯示的每一列
+  // 跟「未稅/含稅合計」對得起來（不會因為先加總浮點數再四捨五入而差1元）。
+  const segRows = segments.map(seg=> ({ ...seg, amount: Math.round(channelBillingTotal(channelId, seg.start, seg.end, assignmentsList).total) }));
+  const tripTotal = segRows.reduce((s,x)=>s+x.amount, 0);
+  const originRows = channelOriginBreakdown(channelId, start, end, assignmentsList);
+  const adjustments = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===start && x.periodEnd===end);
+  const adjTotal = adjustments.reduce((s,x)=>s+x.amount, 0);
+  const combined = tripTotal + adjTotal;
+  const taxMode = channel.taxMode || 'inclusive';
+  const grand = untaxWithTax(combined, taxMode);
+  const originWithTax = originRows.map(o=> ({ ...o, ...untaxWithTax(o.amount, taxMode) }));
+  // 各區費用總覽只列「任務」的金額，請款例外調整另外補一列，這樣各列加起來才會等於上方的合計
+  const adjRow = adjTotal ? untaxWithTax(adjTotal, taxMode) : null;
+  return { channel, start, end, segRows, tripTotal, adjustments, adjTotal, grand, originWithTax, adjRow };
+}
+// 多通路合併配送明細：只計入「已選通路」的店數/金額，未勾選的通路即使共用同一
+// 任務也完全不會出現（避免把其他通路的請款資訊洩漏到對帳用的明細表裡）。
+// 同一條路線如果連續好幾天店點組成、金額都完全相同（代表路線沒有異動），
+// 會自動合併成一列「生效區間＋天數」；只有真的異動過的路線才會拆成好幾列，
+// 不需要像人工作業一樣，一有異動就整個任務起點的車都重新複製一份。
+function mergedRunRows(channelIds, start, end, assignmentsList = state.data.assignments){
+  const rows = assignmentsList.filter(a=> a.status==='completed' && a.date>=start && a.date<=end);
+  const byOriginRoute = {};
+  rows.forEach(a=>{
+    const route = state.data.routes.find(r=>r.id===a.routeId);
+    if(!route) return;
+    const fullByChannel = effectiveByChannelForAssignment(a);
+
+    // 有星期一報價版本的路線家族：金額（fullByChannel，上面 effectiveByChannelForAssignment
+    // 已經處理）跟「配送路線」內容（店點清單／店數／公里）在請款單上一律顯示星期一版本
+    // 當天生效的內容，不用當天任務實際跑的店點——平日實際停靠站難免天天略有出入，
+    // 沒有這步的話，同一個車次會因為內容細節不同被拆成好幾筆看起來不一樣的請款明細，
+    // 即使金額其實已經是同一個數字。
+    const mondayRoute = findMondayQuoteRoute(route);
+    const displayRoute = (mondayRoute && mondayRoute.id !== route.id) ? mondayRoute : route;
+    let displayDropPoints = a.dropPoints, displayKm = a.distanceKm;
+    if(displayRoute.id !== route.id){
+      const mv = getActiveVersion(displayRoute, a.date) || [...(displayRoute.versions||[])].sort((x,y)=>x.start.localeCompare(y.start)).pop();
+      if(mv){
+        displayDropPoints = (mv.dropPointIds||[]).map(id=> state.data.dropPoints.find(dp=>dp.id===id)).filter(Boolean);
+        displayKm = mv.distanceKm;
+      }
+    }
+
+    const byChannel = {}; const storeCounts = {}; let dailyTotal = 0; let relevant = false;
+    channelIds.forEach(cid=>{
+      // 配送明細一律顯示「這天實際跑的真實內容」，不管這個通路自己的請款週期有沒有涵蓋
+      // 這一天——2026-10-27曾經在這裡把不在自己週期內的日子強制算0，是為了怕跟上面
+      // 「請款總覽」的官方總額對不起來；但官方總額（請款總覽／computeChannelBillingReport）
+      // 本來就是各通路分開、各自依自己週期獨立算的，不會被這裡影響。這裡硬是把同一條沒
+      // 變過的路線，顯示成「某個通路前幾天店數忽然變0」，反而造成同一條路線被拆成好幾段、
+      // 看起來像路線被改過——2026-11-26依使用者回報改回「永遠顯示真實內容」。
+      const amt = Math.round(fullByChannel[cid]||0);
+      const cnt = (displayDropPoints||[]).filter(dp=>dp.channelId===cid).length;
+      byChannel[cid] = amt; storeCounts[cid] = cnt; dailyTotal += amt;
+      if(amt>0 || cnt>0) relevant = true;
+    });
+    if(!relevant) return; // 這趟車跟已選通路完全無關，略過
+    const addr = displayRoute.originAddr || '';
+    if(!byOriginRoute[addr]) byOriginRoute[addr] = {};
+    if(!byOriginRoute[addr][displayRoute.id]) byOriginRoute[addr][displayRoute.id] = { route: displayRoute, items: [] };
+    const dropLabel = (displayDropPoints||[]).filter(dp=>channelIds.includes(dp.channelId)).map(dpLabel).join('➔')||'—';
+    byOriginRoute[addr][displayRoute.id].items.push({ date:a.date, dropLabel, km:displayKm, storeCounts, byChannel, dailyTotal, warn: assignmentVersionMismatch(a) });
+  });
+  const byOrigin = {};
+  Object.keys(byOriginRoute).forEach(addr=>{
+    const routeGroups = Object.values(byOriginRoute[addr]);
+    routeGroups.sort((x,y)=> (x.route.shift||'').localeCompare(y.route.shift||'') || seqSortKey(x.route.seq)-seqSortKey(y.route.seq));
+    const collapsedRows = [];
+    routeGroups.forEach(({route, items})=>{
+      items.sort((x,y)=> x.date.localeCompare(y.date));
+      let run = null;
+      const flush = ()=>{ if(run) collapsedRows.push(run); run = null; };
+      items.forEach(item=>{
+        const sig = JSON.stringify([item.dropLabel, item.km, channelIds.map(cid=>[item.storeCounts[cid]||0, item.byChannel[cid]||0]), !!item.warn]);
+        if(run && run.sig===sig){ run.dateEnd = item.date; run.dayCount += 1; }
+        else { flush(); run = { route, sig, dateStart:item.date, dateEnd:item.date, dayCount:1, dropLabel:item.dropLabel, km:item.km, storeCounts:item.storeCounts, byChannel:item.byChannel, dailyTotal:item.dailyTotal, warn:item.warn }; }
+      });
+      flush();
+    });
+    if(collapsedRows.length) byOrigin[addr] = collapsedRows;
+  });
+  return byOrigin;
+}
+function mergedRunDetailTableHtml(channelIds, mergedByOrigin){
+  const originAddrs = Object.keys(mergedByOrigin);
+  if(!originAddrs.length) return '<div class="empty">此區間無相關任務</div>';
+  return originAddrs.map(addr=>{
+    const list = mergedByOrigin[addr];
+    const bodyRows = list.map(r=>{
+      const totalStores = channelIds.reduce((s,cid)=> s+(r.storeCounts[cid]||0), 0);
+      const storeCells = channelIds.map(cid=>`<td>${r.storeCounts[cid]||0}</td>`).join('');
+      const pctCells = channelIds.map(cid=>`<td>${r.dailyTotal? ((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1):'0.0'}%</td>`).join('');
+      const periodAmtCells = channelIds.map(cid=>`<td class="amount">$${money(Math.round((r.byChannel[cid]||0)*r.dayCount))}</td>`).join('');
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}~${r.dateEnd}`;
+      return `<tr>
+        <td>${r.warn?`<span class="no-print" title="${escapeHtml(r.warn)}" style="cursor:help;">⚠️ </span>`:''}${period}</td><td>${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td>
+        <td>${r.dropLabel}</td>
+        ${storeCells}<td>${totalStores}</td><td>${r.km??'—'}</td><td class="amount">$${money(Math.round(r.dailyTotal))}</td>
+        ${pctCells}<td class="amount">$${money(Math.round(r.dailyTotal*r.dayCount))}</td>${periodAmtCells}
+      </tr>`;
+    }).join('');
+    // 手機版卡片：同一份資料，電腦版隱藏；.no-print 讓匯出／列印只留表格
+    const multiCh = channelIds.length > 1;
+    const cards = list.map(r=>{
+      const totalStores = channelIds.reduce((sum,cid)=> sum+(r.storeCounts[cid]||0), 0);
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}～${r.dateEnd}`;
+      const stops = (r.dropLabel && r.dropLabel!=='—') ? r.dropLabel.split('➔') : [];
+      const chRows = channelIds.map(cid=>{
+        const pct = r.dailyTotal ? ((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1) : '0.0';
+        return `<div class="bc-ch"><span>${escapeHtml(channelName(cid))}請款${multiCh?`（店數 ${r.storeCounts[cid]||0}・佔 ${pct}%）`:''}</span><b>$${money(Math.round((r.byChannel[cid]||0)*r.dayCount))}</b></div>`;
+      }).join('');
+      return `<div class="bill-card">
+        <div class="bc-top"><b>${seqToR(stripWeekdayLabel(r.route.seq))} ${r.route.shift==='AM'?'上午':'下午'}</b><span class="bc-days">${r.dayCount} 天</span></div>
+        <div class="bc-period">${period}</div>
+        ${r.warn ? `<div class="bc-warn">⚠️ ${escapeHtml(r.warn)}。請款依版本金額算，請確認版本生效日期是否設早或設晚。</div>` : ''}
+        <div class="bc-grid"><div><small>店數</small><b>${totalStores}</b></div><div><small>公里</small><b>${r.km??'—'}</b></div><div><small>單日金額</small><b>$${money(Math.round(r.dailyTotal))}</b></div></div>
+        <div class="bc-sum"><span>期間合計</span><b>$${money(Math.round(r.dailyTotal*r.dayCount))}</b></div>
+        ${multiCh ? chRows : ''}
+        ${stops.length ? `<details><summary>配送路線（${stops.length} 站）▸</summary><ol>${stops.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ol></details>` : ''}
+      </div>`;
+    }).join('');
+    const anyWarn = list.some(r=>r.warn);
+    return `<h4 style="margin:14px 0 6px;">${originLabel(addr)}｜配送明細</h4>
+      ${anyWarn ? `<div class="note no-print" style="border-color:var(--danger); color:var(--danger);">⚠️ 標有警示的那幾筆，任務實際存的店數／公里，跟當天生效的路線版本不一樣。請款是依「版本」的金額算，請確認新版本的生效日期有沒有設早或設晚（滑鼠移到 ⚠️ 看細節）。</div>` : ''}
+      <div class="bill-cards no-print">${cards}</div>
+      <div class="bill-tbl" style="overflow-x:auto;">
+      <table>
+        <thead><tr><th>生效區間</th><th>天數</th><th>時段</th><th>車次</th><th>配送路線</th>${channelIds.map(cid=>`<th>${channelName(cid)}店數</th>`).join('')}<th>總店數</th><th>公里</th><th>單日總金額</th>${channelIds.map(cid=>`<th>${channelName(cid)}佔比</th>`).join('')}<th>期間合計</th>${channelIds.map(cid=>`<th>${channelName(cid)}請款</th>`).join('')}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+      </div>`;
+  }).join('');
+}
+// 請款單（PDF）專用版面：字放大、欄位精簡、金額醒目、摘要與明細分頁、依任務起點分頁、跨頁表頭重複。
+// 螢幕上的表格（電腦版／手機卡片）不受影響。
+// 請款單 PDF 的收款帳戶（只印在 PDF 上，主控畫面不顯示）。
+const BILLING_REMIT = { bank:'永豐銀行（807）', branch:'台北分行', holder:'信興行銷有限公司', account:'021-018-0008161-2' };
+function billingPrintHtml(reports, merged, channelIds, start, end){
+  const multi = channelIds.length > 1;
+  const chNames = reports.map(r=>escapeHtml(r.channel.name)).join('、');
+  const css = `<style>
+    .bp{ font-size:14px; color:#1B2129; }
+    .bp h1{ font-size:28px; text-align:center; margin:0 0 4px; letter-spacing:.06em; }
+    .bp .sub{ text-align:center; color:#444; font-size:14px; margin-bottom:6px; }
+    .bp h2{ font-size:18px; margin:22px 0 8px; border-left:6px solid #E0902E; padding-left:10px; }
+    .bp table{ width:100%; border-collapse:collapse; font-size:14px; margin-top:6px; table-layout:auto; }
+    .bp th{ background:#EDEFF2; text-align:left; padding:8px 10px; border:1px solid #888; font-size:13px; }
+    .bp td{ padding:8px 10px; border:1px solid #bbb; vertical-align:top; }
+    .bp tbody tr:nth-child(even) td{ background:#F7F8FA; }
+    .bp .num{ text-align:right; font-family:monospace; font-weight:700; white-space:nowrap; }
+    .bp th.num{ font-family:inherit; }
+    .bp .tot td{ font-size:16px; font-weight:700; background:#FFF3DC !important; }
+    .bp .grand td{ font-size:20px; background:#FFE2A6 !important; }
+    .bp .route{ font-size:13px; line-height:1.55; }
+    .bp .pct{ font-family:inherit; font-weight:400; font-size:12px; color:#666; }
+    /* 全站樣式有 tr:last-child td{border-bottom:none}，會把每張表最後一列的底線吃掉（表格看起來沒收尾），這裡蓋回來 */
+    .bp table tr:last-child > td, .bp table tr:last-child > th{ border-bottom:1.5px solid #666 !important; }
+    .bp .remit tr:last-child td{ border-bottom:none !important; }
+    .bp .remit{ break-inside:avoid; margin-top:22px; border:2px solid #E0902E; border-radius:6px; padding:12px 16px; background:#FFFBF1; }
+    .bp .remit h3{ margin:0 0 8px; font-size:16px; }
+    .bp .remit table{ margin:0; font-size:15px; } .bp .remit td{ border:none; padding:3px 8px 3px 0; background:transparent !important; }
+    .bp .remit td:first-child{ width:90px; color:#555; white-space:nowrap; }
+    .bp .remit .acct{ font-family:monospace; font-size:20px; font-weight:700; letter-spacing:.04em; }
+    .bp td:nth-child(3), .bp td:nth-child(4), .bp th:nth-child(3), .bp th:nth-child(4){ white-space:nowrap; }
+  </style>`;
+  const fmt = n=> '$' + money(Math.round(n));
+  const summary = reports.map(rp=>{
+    const segs = rp.segRows.filter(x=>Math.round(x.amount)!==0);
+    const segRows = (segs.length ? segs : rp.segRows).map(x=>`<tr><td>${x.start} ~ ${x.end}</td><td class="num">${fmt(x.amount)}</td></tr>`).join('');
+    const adj = rp.adjustments.map(x=>`<tr><td>${escapeHtml(x.note)}</td><td class="num">${x.amount>=0?'+':'−'}${fmt(Math.abs(x.amount))}</td></tr>`).join('');
+    const orig = rp.originWithTax.map(o=>`<tr><td>${escapeHtml(originLabel(o.originAddr))}</td><td class="num">${o.tripCount}</td><td class="num">${o.storeCount}</td><td class="num">${fmt(o.untaxed)}</td><td class="num">${fmt(o.tax)}</td><td class="num">${fmt(o.withTax)}</td></tr>`).join('') + (rp.adjRow ? `<tr><td>請款例外調整</td><td class="num"></td><td class="num"></td><td class="num">${fmt(rp.adjRow.untaxed)}</td><td class="num">${fmt(rp.adjRow.tax)}</td><td class="num">${fmt(rp.adjRow.withTax)}</td></tr>` : '');
+    return `<h2>${escapeHtml(rp.channel.name)}｜物流費用請款總覽（${rp.start} ~ ${rp.end}）</h2>
+      <table><thead><tr><th>請款期間</th><th class="num">物流費</th></tr></thead><tbody>${segRows}${adj}</tbody>
+        <tfoot><tr class="tot"><td>未稅合計</td><td class="num">${fmt(rp.grand.untaxed)}</td></tr><tr class="tot"><td>稅額</td><td class="num">${fmt(rp.grand.tax)}</td></tr><tr class="tot grand"><td>含稅合計</td><td class="num">${fmt(rp.grand.withTax)}</td></tr></tfoot></table>
+      <h2>各區費用總覽（依供應商／任務起點）</h2>
+      <table><thead><tr><th>供應商</th><th class="num">任務數</th><th class="num">配送店次</th><th class="num">未稅</th><th class="num">稅額</th><th class="num">含稅</th></tr></thead><tbody>${orig || '<tr><td colspan="6">此區間無相關任務</td></tr>'}</tbody></table>`;
+  }).join('');
+  const details = Object.keys(merged).map(addr=>{
+    const list = merged[addr];
+    const head = `<tr><th>生效區間</th><th class="num">天數</th><th>時段</th><th>車次</th><th>配送路線</th>${multi ? channelIds.map(cid=>`<th class="num">${escapeHtml(channelName(cid))}店數</th>`).join('') : '<th class="num">店數</th>'}<th class="num">公里</th><th class="num">單日金額</th><th class="num">期間合計</th>${multi ? channelIds.map(cid=>`<th class="num">${escapeHtml(channelName(cid))}請款</th>`).join('') : ''}</tr>`;
+    const body = list.map(r=>{
+      const period = r.dateStart===r.dateEnd ? r.dateStart : `${r.dateStart}<br>${r.dateEnd}`; // 起訖日上下兩行，省下寬度給配送路線
+      const stops = (r.dropLabel||'—').split('➔').map(escapeHtml).join(' → ');
+      const total = channelIds.reduce((sum,cid)=> sum+(r.storeCounts[cid]||0), 0);
+      return `<tr><td style="white-space:nowrap;">${period}</td><td class="num">${r.dayCount}</td><td>${r.route.shift==='AM'?'上午':'下午'}</td><td>${seqToR(stripWeekdayLabel(r.route.seq))}</td><td class="route">${stops}</td>
+        ${multi ? channelIds.map(cid=>`<td class="num">${r.storeCounts[cid]||0}<br><span class="pct">${r.dailyTotal ? ((r.byChannel[cid]||0)/r.dailyTotal*100).toFixed(1) : '0.0'}%</span></td>`).join('') : `<td class="num">${total}</td>`}
+        <td class="num">${r.km??'—'}</td><td class="num">${fmt(r.dailyTotal)}</td><td class="num">${fmt(r.dailyTotal*r.dayCount)}</td>
+        ${multi ? channelIds.map(cid=>`<td class="num">${fmt((r.byChannel[cid]||0)*r.dayCount)}</td>`).join('') : ''}</tr>`;
+    }).join('');
+    return `<div><h2>${escapeHtml(originLabel(addr))}｜配送明細（已選通路：${chNames}）</h2>
+      <table><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }).join('') || '<div><h2>配送明細</h2><p>此區間無相關任務</p></div>';
+  return `${css}<div class="bp">
+    <h1>信興行銷有限公司</h1>
+    <div class="sub">物流費用請款單　｜　通路：${chNames}　｜　請款區間：${start} ~ ${end}　｜　製表日期：${todayStr()}</div>
+    ${summary}
+    ${details}
+    <div class="remit">
+      <h3>匯款資訊</h3>
+      <table><tbody>
+        <tr><td>銀　　行</td><td>${escapeHtml(BILLING_REMIT.bank)}　${escapeHtml(BILLING_REMIT.branch)}</td></tr>
+        <tr><td>戶　　名</td><td>${escapeHtml(BILLING_REMIT.holder)}</td></tr>
+        <tr><td>帳　　號</td><td class="acct">${escapeHtml(BILLING_REMIT.account)}</td></tr>
+      </tbody></table>
+    </div>
+  </div>`;
+}
+function channelSummaryPanelHtml(report){
+  const { channel, start, end, segRows, adjustments, grand, originWithTax, adjRow } = report;
+  return `
+    <div class="panel">
+      <h3 style="margin-top:0;">${channel.name}｜物流費用請款總覽（${start} ~ ${end}）</h3>
+      <table>
+        <thead><tr><th>請款期間</th><th>物流費</th></tr></thead>
+        <tbody>${segRows.map(s=>`<tr><td>${s.start} ~ ${s.end}</td><td class="amount">$${money(Math.round(s.amount))}</td></tr>`).join('') || '<tr><td colspan="2"><div class="empty">此區間無相關任務</div></td></tr>'}
+        ${adjustments.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td></tr>`).join('')}
+        </tbody>
+        <tfoot><tr><td><strong>未稅合計</strong></td><td class="amount"><strong>$${money(grand.untaxed)}</strong></td></tr>
+        <tr><td><strong>稅額</strong></td><td class="amount"><strong>$${money(grand.tax)}</strong></td></tr>
+        <tr><td><strong>含稅合計</strong></td><td class="amount"><strong>$${money(grand.withTax)}</strong></td></tr></tfoot>
+      </table>
+      <h4 style="margin:14px 0 6px;">各區費用總覽（依供應商／任務起點）</h4>
+      <table>
+        <thead><tr><th>供應商</th><th>任務數</th><th>配送店次</th><th>未稅</th><th>稅額</th><th>含稅</th></tr></thead>
+        <tbody>${originWithTax.map(o=>`<tr><td>${originLabel(o.originAddr)}</td><td>${o.tripCount}</td><td>${o.storeCount}</td><td class="amount">$${money(o.untaxed)}</td><td class="amount">$${money(o.tax)}</td><td class="amount">$${money(o.withTax)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">此區間無相關任務</div></td></tr>'}${adjRow ? `<tr><td>請款例外調整</td><td></td><td></td><td class="amount">$${money(adjRow.untaxed)}</td><td class="amount">$${money(adjRow.tax)}</td><td class="amount">$${money(adjRow.withTax)}</td></tr>` : ''}</tbody>
+      </table>
+    </div>`;
+}
+// ---- 請款單 Excel（跟 PDF 同樣的版型）----
+// SheetJS 社群版不支援儲存格樣式（底色、框線、字型），做不出跟 PDF 一樣的外觀，所以請款單 Excel 改用 ExcelJS（按下載時才載入）。
+// 內容與 PDF 完全共用同一份資料與同一個「要顯示的出發點」選擇；金額都是數字（有 $ 格式），可以直接在 Excel 手動調整。
+let _excelJsP = null;
+function loadExcelJS(){
+  if(window.ExcelJS) return Promise.resolve();
+  if(_excelJsP) return _excelJsP;
+  _excelJsP = new Promise((res, rej)=>{
+    const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js'; sc.integrity = LIB_SRI[sc.src]; sc.crossOrigin = 'anonymous';
+    sc.onload = ()=>res(); sc.onerror = ()=>{ _excelJsP = null; rej(new Error('Excel 元件載入失敗，請檢查網路後再試')); };
+    document.head.appendChild(sc);
+  });
+  return _excelJsP;
+}
+async function buildBillingWorkbook(reports, merged, channelIds, start, end){
+  await loadExcelJS();
+  const wb = new ExcelJS.Workbook();
+  wb.creator = '信興行銷有限公司'; wb.created = new Date();
+  const FONT = '微軟正黑體';
+  const multi = channelIds.length > 1;
+  const chNames = reports.map(r=>r.channel.name).join('、');
+  const ORANGE = 'FFE0902E', GRAY_H = 'FFEDEFF2', GRAY_L = 'FFBBBBBB', GRAY_D = 'FF888888', STRIPE = 'FFF7F8FA', TOT = 'FFFFF3DC', GRAND = 'FFFFE2A6', REMIT = 'FFFFFBF1';
+  const thin = c=>({ style:'thin', color:{ argb:c } });
+  const NUM = '"$"#,##0', NUMS = '+"$"#,##0;-"$"#,##0';
+  const colL = n=>{ let s=''; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; };
+  const fill = argb=>({ type:'pattern', pattern:'solid', fgColor:{ argb } });
+  const ws0 = (name)=>{ // 工作表名稱不可重複、不可超過 31 字、不可含 \ / ? * [ ] :
+    let base = name.replace(/[\\/?*\[\]:]/g,'_').slice(0,28), n = base, i = 1;
+    while(wb.worksheets.some(w=>w.name===n)) n = base + '_' + (++i);
+    return wb.addWorksheet(n, { pageSetup:{ paperSize:9, orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, margins:{ left:.4, right:.4, top:.5, bottom:.5, header:.3, footer:.3 } },
+      headerFooter:{ oddFooter:'&C第 &P 頁，共 &N 頁' }, views:[{ showGridLines:false }] });
+  };
+  // 把一段範圍（可已合併）的每個儲存格都套上框線／底色（合併儲存格只套在左上角框線會缺邊）
+  const paint = (ws, r1, c1, r2, c2, st)=>{
+    for(let r=r1; r<=r2; r++) for(let c=c1; c<=c2; c++){
+      const cell = ws.getCell(r, c);
+      if(st.border) cell.border = Object.assign({}, cell.border||{}, st.border(r,c,r1,c1,r2,c2));
+      if(st.fill) cell.fill = st.fill;
+    }
+  };
+  const boxBorder = (color, style='thin')=>(r,c,r1,c1,r2,c2)=>({ top: thin(color), bottom: thin(color), left: thin(color), right: thin(color) });
+  const heading = (ws, row, c2, text)=>{
+    ws.mergeCells(row, 1, row, c2);
+    const cell = ws.getCell(row, 1);
+    cell.value = text; cell.font = { name:FONT, size:14, bold:true, color:{ argb:'FF1B2129' } };
+    cell.alignment = { vertical:'middle', indent:1 };
+    cell.border = { left:{ style:'thick', color:{ argb:ORANGE } } };
+    ws.getRow(row).height = 26;
+  };
+  const textLen = str=>[...String(str||'')].reduce((n,ch)=> n + (/[⺀-鿿＀-￯]/.test(ch) ? 2 : 1), 0);
+
+  // ===== 工作表 1：請款單（標題、各通路請款總覽、各區總覽、匯款資訊）=====
+  const ws = ws0('請款單');
+  ws.columns = [{ width:28 }, { width:16 }, { width:16 }, { width:18 }, { width:18 }, { width:18 }];
+  const LASTC = 6;
+  let r = 1;
+  ws.mergeCells(r, 1, r, LASTC);
+  Object.assign(ws.getCell(r,1), { value:'信興行銷有限公司', font:{ name:FONT, size:24, bold:true }, alignment:{ horizontal:'center', vertical:'middle' } });
+  ws.getRow(r).height = 40; r++;
+  ws.mergeCells(r, 1, r, LASTC);
+  Object.assign(ws.getCell(r,1), { value:`物流費用請款單　｜　通路：${chNames}　｜　請款區間：${start} ~ ${end}　｜　製表日期：${todayStr()}`, font:{ name:FONT, size:11, color:{ argb:'FF444444' } }, alignment:{ horizontal:'center', vertical:'middle', wrapText:true } });
+  ws.getRow(r).height = 24; r += 2;
+  const lastRowBorder = (row, c1, c2)=>{ for(let c=c1; c<=c2; c++){ const cell = ws.getCell(row, c); cell.border = Object.assign({}, cell.border||{}, { bottom:{ style:'medium', color:{ argb:'FF666666' } } }); } };
+  reports.forEach(rp=>{
+    heading(ws, r, LASTC, `${rp.channel.name}｜物流費用請款總覽（${rp.start} ~ ${rp.end}）`); r++;
+    // 請款期間／物流費（兩欄式：左 A:C、右 D:F）
+    const hdr = (row, labels, spans)=>{ // spans: [[c1,c2],...]
+      labels.forEach((t,i)=>{ const [a,b] = spans[i]; if(b>a) ws.mergeCells(row, a, row, b); const cell = ws.getCell(row, a); cell.value = t; cell.font = { name:FONT, size:12, bold:true }; cell.alignment = { vertical:'middle', horizontal: (i>0 ? 'right' : 'left'), indent:1 }; paint(ws, row, a, row, b, { fill:fill(GRAY_H), border:boxBorder(GRAY_D) }); });
+      ws.getRow(row).height = 24;
+    };
+    hdr(r, ['請款期間','物流費'], [[1,3],[4,6]]); r++;
+    const segs = rp.segRows.filter(x=>Math.round(x.amount)!==0);
+    const lines = (segs.length ? segs : rp.segRows).map(x=>({ label:`${x.start} ~ ${x.end}`, amt:Math.round(x.amount), signed:false }))
+      .concat(rp.adjustments.map(x=>({ label:x.note, amt:Math.round(x.amount), signed:true })));
+    lines.forEach((ln,i)=>{
+      ws.mergeCells(r,1,r,3); ws.mergeCells(r,4,r,6);
+      Object.assign(ws.getCell(r,1), { value:ln.label, font:{ name:FONT, size:12 }, alignment:{ vertical:'middle', indent:1 } });
+      Object.assign(ws.getCell(r,4), { value:ln.amt, numFmt: ln.signed ? NUMS : NUM, font:{ name:'Consolas', size:13, bold:true }, alignment:{ horizontal:'right', vertical:'middle', indent:1 } });
+      paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L), fill: i%2 ? fill(STRIPE) : undefined });
+      ws.getRow(r).height = 22; r++;
+    });
+    [['未稅合計', rp.grand.untaxed, TOT, 14], ['稅額', rp.grand.tax, TOT, 14], ['含稅合計', rp.grand.withTax, GRAND, 17]].forEach(([label, v, bg, size], i, arr)=>{
+      ws.mergeCells(r,1,r,3); ws.mergeCells(r,4,r,6);
+      Object.assign(ws.getCell(r,1), { value:label, font:{ name:FONT, size, bold:true }, alignment:{ vertical:'middle', indent:1 } });
+      Object.assign(ws.getCell(r,4), { value:Math.round(v), numFmt:NUM, font:{ name:'Consolas', size, bold:true }, alignment:{ horizontal:'right', vertical:'middle', indent:1 } });
+      paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L), fill:fill(bg) });
+      ws.getRow(r).height = size > 15 ? 30 : 26;
+      if(i === arr.length-1) lastRowBorder(r, 1, LASTC);
+      r++;
+    });
+    r++;
+    heading(ws, r, LASTC, '各區費用總覽（依供應商／任務起點）'); r++;
+    hdr(r, ['供應商','任務數','配送店次','未稅','稅額','含稅'], [[1,1],[2,2],[3,3],[4,4],[5,5],[6,6]]); r++;
+    if(rp.originWithTax.length){
+      rp.originWithTax.forEach((o,i)=>{
+        const vals = [originLabel(o.originAddr), o.tripCount, o.storeCount, Math.round(o.untaxed), Math.round(o.tax), Math.round(o.withTax)];
+        vals.forEach((v,ci)=>{ const cell = ws.getCell(r, ci+1); cell.value = v; if(ci>=3) cell.numFmt = NUM; cell.font = ci===0 ? { name:FONT, size:12 } : { name:'Consolas', size:13, bold:true }; cell.alignment = { vertical:'middle', horizontal: ci===0 ? 'left' : 'right', indent:1 }; });
+        paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L), fill: i%2 ? fill(STRIPE) : undefined });
+        ws.getRow(r).height = 22; r++;
+      });
+    } else {
+      ws.mergeCells(r,1,r,LASTC); Object.assign(ws.getCell(r,1), { value:'此區間無相關任務', font:{ name:FONT, size:12 }, alignment:{ indent:1 } }); paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L) }); r++;
+    }
+    if(rp.adjRow){
+      const vals = ['請款例外調整', '', '', Math.round(rp.adjRow.untaxed), Math.round(rp.adjRow.tax), Math.round(rp.adjRow.withTax)];
+      vals.forEach((v,ci)=>{ const cell = ws.getCell(r, ci+1); cell.value = v; if(ci>=3) cell.numFmt = NUM; cell.font = ci===0 ? { name:FONT, size:12 } : { name:'Consolas', size:13, bold:true }; cell.alignment = { vertical:'middle', horizontal: ci===0 ? 'left' : 'right', indent:1 }; });
+      paint(ws, r, 1, r, LASTC, { border:boxBorder(GRAY_L) });
+      ws.getRow(r).height = 22; r++;
+    }
+    lastRowBorder(r-1, 1, LASTC);
+    r += 2;
+  });
+  // 匯款資訊（橘色框）
+  const r0 = r;
+  ws.mergeCells(r,1,r,LASTC); Object.assign(ws.getCell(r,1), { value:'匯款資訊', font:{ name:FONT, size:14, bold:true }, alignment:{ vertical:'middle', indent:1 } }); ws.getRow(r).height = 26; r++;
+  [['銀　　行', `${BILLING_REMIT.bank}　${BILLING_REMIT.branch}`, false], ['戶　　名', BILLING_REMIT.holder, false], ['帳　　號', BILLING_REMIT.account, true]].forEach(([k,v,big])=>{
+    ws.mergeCells(r,2,r,LASTC);
+    Object.assign(ws.getCell(r,1), { value:k, font:{ name:FONT, size:12, color:{ argb:'FF555555' } }, alignment:{ vertical:'middle', indent:1 } });
+    Object.assign(ws.getCell(r,2), { value:v, font: big ? { name:'Consolas', size:18, bold:true } : { name:FONT, size:13 }, alignment:{ vertical:'middle' } });
+    ws.getRow(r).height = big ? 30 : 24; r++;
+  });
+  const r1 = r-1;
+  paint(ws, r0, 1, r1, LASTC, { fill:fill(REMIT) });
+  for(let rr=r0; rr<=r1; rr++) for(let c=1; c<=LASTC; c++){
+    const cell = ws.getCell(rr, c), b = {};
+    if(rr===r0) b.top = { style:'medium', color:{ argb:ORANGE } };
+    if(rr===r1) b.bottom = { style:'medium', color:{ argb:ORANGE } };
+    if(c===1) b.left = { style:'medium', color:{ argb:ORANGE } };
+    if(c===LASTC) b.right = { style:'medium', color:{ argb:ORANGE } };
+    cell.border = Object.assign({}, cell.border||{}, b);
+  }
+
+  // ===== 之後每個出發點一張工作表：配送明細 =====
+  Object.keys(merged).forEach(addr=>{
+    const list = merged[addr];
+    const w = ws0(`${originLabel(addr)}配送明細`);
+    const heads = ['生效區間','天數','時段','車次','配送路線'];
+    const widths = [14, 7, 8, 8, 58];
+    if(multi) channelIds.forEach(cid=>{ heads.push(`${channelName(cid)}店數`); widths.push(11); }); else { heads.push('店數'); widths.push(8); }
+    heads.push('公里','單日金額','期間合計'); widths.push(8, 14, 15);
+    if(multi) channelIds.forEach(cid=>{ heads.push(`${channelName(cid)}期間合計`); widths.push(16); });
+    w.columns = widths.map(x=>({ width:x }));
+    const N = heads.length;
+    let rr = 1;
+    heading(w, rr, N, `${originLabel(addr)}｜配送明細（已選通路：${chNames}）`); rr++;
+    heads.forEach((t,ci)=>{
+      const cell = w.getCell(rr, ci+1); cell.value = t; cell.font = { name:FONT, size:12, bold:true };
+      const numCol = ci>=5;
+      cell.alignment = { vertical:'middle', horizontal: (ci===1 || numCol) ? 'right' : 'left', indent:1, wrapText:true };
+    });
+    paint(w, rr, 1, rr, N, { fill:fill(GRAY_H), border:boxBorder(GRAY_D) });
+    w.getRow(rr).height = 30; const headRow = rr; rr++;
+    list.forEach((x,i)=>{
+      const period = x.dateStart===x.dateEnd ? x.dateStart : `${x.dateStart}\n${x.dateEnd}`;
+      const stops = (x.dropLabel||'—').split('➔').join(' → ');
+      const vals = [period, x.dayCount, x.route.shift==='AM'?'上午':'下午', seqToR(stripWeekdayLabel(x.route.seq)), stops];
+      if(multi) channelIds.forEach(cid=> vals.push(`${x.storeCounts[cid]||0}\n${x.dailyTotal ? ((x.byChannel[cid]||0)/x.dailyTotal*100).toFixed(1) : '0.0'}%`));
+      else vals.push(channelIds.reduce((sum,cid)=> sum+(x.storeCounts[cid]||0), 0));
+      vals.push(x.km ?? '—', Math.round(x.dailyTotal), Math.round(x.dailyTotal*x.dayCount));
+      if(multi) channelIds.forEach(cid=> vals.push(Math.round((x.byChannel[cid]||0)*x.dayCount)));
+      vals.forEach((v,ci)=>{
+        const cell = w.getCell(rr, ci+1); cell.value = v;
+        const numLike = ci===1 || ci>=5;
+        cell.alignment = { vertical:'top', horizontal: numLike ? 'right' : 'left', indent:1, wrapText:true };
+        cell.font = ci===4 ? { name:FONT, size:11 } : numLike ? { name:'Consolas', size:12, bold:true } : { name:FONT, size:11 };
+        if(typeof v === 'number' && ci >= (multi ? 5 + channelIds.length : 6) + 1) cell.numFmt = NUM;
+      });
+      paint(w, rr, 1, rr, N, { border:boxBorder(GRAY_L), fill: i%2 ? fill(STRIPE) : undefined });
+      // 列高：配送路線文字會自動換行，Excel 不會替合併外的換行自動算列高，這裡估算
+      const lines = Math.max(x.dateStart===x.dateEnd ? 1 : 2, Math.ceil(textLen(stops) / (widths[4]-2)), multi ? 2 : 1);
+      w.getRow(rr).height = Math.max(24, lines * 17 + 8);
+      rr++;
+    });
+    for(let c=1; c<=N; c++){ const cell = w.getCell(rr-1, c); cell.border = Object.assign({}, cell.border||{}, { bottom:{ style:'medium', color:{ argb:'FF666666' } } }); }
+    w.views = [{ showGridLines:false, state:'frozen', ySplit:headRow }];
+    w.pageSetup.printTitlesRow = `${headRow}:${headRow}`;
+  });
+  return wb;
+}
+// 請款單檔名：「通路名稱＋月份＋月請款單」（例如牧穀10月請款單）；通路跨月份週期
+// （例如7-11每月27日至次月26日）一律以區間「結束日」所在月份為準，比照一般慣例
+// 用結算收尾的月份命名；多通路一起結算時，通路名稱用「、」接在一起。
+function billingFileName(reports, end){
+  const names = reports.map(r=>r.channel.name).join('、');
+  const mon = Number(end.slice(5,7));
+  return `${names}${mon}月請款單`;
+}
+async function downloadBillingExcel(reports, merged, channelIds, start, end){
+  const wb = await buildBillingWorkbook(reports, merged, channelIds, start, end);
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${billingFileName(reports, end).replace(/[\\/:*?"<>|]/g,'_')}.xlsx`;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+function renderBilling(c){
+  // 這個畫面查出來的任務資料只存在這個變數（畫面本身的區域狀態），不寫回
+  // state.data.assignments，離開畫面後自然被丟棄，不需要額外清理。
+  let billingAssignments = [];
+  const chChecks = state.data.channels.map(ch=>`<label style="display:flex; align-items:center; gap:5px; font-size:12.5px;"><input type="checkbox" class="bChCheck" value="${ch.id}" ${(state._billingChannelIds||[]).includes(ch.id)?'checked':''} style="width:auto;">${ch.name}${ch.status==='inactive'?'<span style="color:var(--ink-soft); font-size:11px;">（已停用）</span>':''}</label>`).join('');
+  const month = state._billingMonth || todayStr().slice(0,7);
+  c.innerHTML = `
+    <h2 class="section-title">請款結算</h2>
+    <details class="fold-d" ${state._billingHelpOpen?'open':''} ontoggle="state._billingHelpOpen=this.open" style="margin-bottom:12px;"><summary style="font-weight:600;"><span>計算規則說明<span style="font-weight:400; font-size:12px; color:var(--ink-soft);">　（需要時點開查看）</span></span></summary><p class="section-sub" style="margin:10px 4px 4px;">勾選要一起結算的通路（可複選）。每個通路自己的請款總覽（未稅／含稅合計），永遠依「通路管理」設定的自己週期計算（例如康達盛通是自然月、7-11是每月27日至次月26日），不會因為同時勾了好幾個通路而互相污染；下方的「抓取範圍」只用來決定合併配送明細要撈多寬的資料，只勾一個通路時可直接當作那個通路自己的週期手動調整。系統會依「路線版本異動的日期」自動把各通路自己的請款總額切成好幾段小區間分開計算；每趟車的金額跟著路線管理裡設定的版本走，有星期一報價版本的路線，一律套用星期一版本的拆賬金額。配送明細只會列出「已勾選通路」的店數與金額，即使共用同一任務，未勾選的通路也完全不會出現；同一條路線連續好幾天都沒異動時，會自動合併成一列「生效區間」，只有真的改過的路線才會拆成好幾列。路線名稱如果有標註星期，請款單上會自動省略不顯示。</p></details>
+    <div class="panel">
+      <div class="field">
+        <label>通路（可複選；各通路各自產生一份請款總覽，配送明細則合併成一份，只顯示已選通路）</label>
+        <div id="bChannelChecks" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:4px;">${chChecks}</div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>對應月份（各通路的請款總覽會自動套用自己的週期）</label><select id="bMonth">${(()=>{ const ms = recentMonthOptions(24); if(month && !ms.includes(month)) ms.push(month); ms.sort().reverse(); const thisMonth = todayStr().slice(0,7); return ms.map(m=>`<option value="${m}" ${m===month?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join(''); })()}</select></div>
+        <div class="field"><label>抓取範圍起（可調整；只勾一個通路時＝該通路自己的週期）</label><input id="bStart" type="date"></div>
+        <div class="field"><label>抓取範圍迄（可調整；只勾一個通路時＝該通路自己的週期）</label><input id="bEnd" type="date"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">例外調整（人工加註的備註與金額，會併入該通路請款單總額）</h3>
+      <div class="grid3">
+        <div class="field"><label>調整項通路</label><select id="baChannel">${state.data.channels.map(ch=>`<option value="${ch.id}">${ch.name}</option>`).join('')}</select></div>
+        <div class="field"><label>發生日期</label><input id="baDate" type="date"></div>
+        <div class="field"><label>金額（可為負數）</label><input id="baAmount" type="number"></div>
+      </div>
+      <div class="field"><label>備註</label><input id="baNote" placeholder="例如：久陽一車未出車"></div>
+      <div id="baDatePeriodHint" class="section-sub" style="margin:2px 0 8px;"></div>
+      <button class="btn ghost" id="addBillingAdj">新增調整項</button>
+      <div id="billingAdjList" style="margin-top:8px;"></div>
+    </div>
+    <div id="billingResult"></div>`;
+  function checkedChannelIds(){ return Array.from(document.querySelectorAll('.bChCheck:checked')).map(cb=>cb.value); }
+  // 2026-11-02修正：例外調整以前是用畫面上「對應月份」選單當下停在哪個月去算週期，
+  // 跟使用者實際填的「發生日期」完全無關——10/30新增、畫面剛好還停在10月的調整項，
+  // 會被誤歸進9/27~10/26那期，但10/30早就超過10/26，照週期本來就該落在10/27~11/26
+  // 那期。改成用「發生日期」實際落在哪個週期去自動歸期（channelPeriodForDate()），
+  // 不管畫面上的「對應月份」選單停在哪裡都一樣準。「對應月份」選單只留給下面瀏覽
+  // 清單用，不再用來決定新增的這筆要歸進哪一期。
+  function adjDatePeriod(){
+    const channelId = document.getElementById('baChannel').value;
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    const dateVal = document.getElementById('baDate').value;
+    return (channel && dateVal) ? channelPeriodForDate(channel, dateVal) : null;
+  }
+  function adjBrowsePeriod(){
+    const channelId = document.getElementById('baChannel').value;
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    const monthStr = document.getElementById('bMonth').value;
+    return channel ? defaultPeriod(channel, monthStr) : null;
+  }
+  function updateDateHint(){
+    const period = adjDatePeriod();
+    const hintEl = document.getElementById('baDatePeriodHint');
+    if(!hintEl) return;
+    hintEl.textContent = period ? `這筆會歸進：${period.start}～${period.end} 這期` : '請先選通路並填發生日期';
+  }
+  function refreshAdjList(){
+    const channelId = document.getElementById('baChannel').value;
+    const period = adjBrowsePeriod();
+    if(!period){ document.getElementById('billingAdjList').innerHTML = '<div class="empty">請先選擇對應月份</div>'; return; }
+    const list = state.data.billingAdjustments.filter(x=>x.channelId===channelId && x.periodStart===period.start && x.periodEnd===period.end);
+    document.getElementById('billingAdjList').innerHTML = `<div class="section-sub" style="margin-bottom:4px;">目前瀏覽週期：${period.start}～${period.end}</div>` +
+      (list.length ? `<table><thead><tr><th>備註</th><th>金額</th><th></th></tr></thead><tbody>${list.map(x=>`<tr><td>${x.note}</td><td class="amount">${x.amount>=0?'+':''}$${money(x.amount)}</td><td class="no-print"><button class="btn danger" data-deladj="${x.id}">刪除</button></td></tr>`).join('')}</tbody></table>` : `<div class="empty">${period.start}～${period.end} 這期目前尚無例外調整</div>`);
+    document.getElementById('billingAdjList').querySelectorAll('[data-deladj]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const adj = list.find(x=>x.id===btn.dataset.deladj);
+        if(!confirm(`確定要刪除這筆請款例外調整嗎（${adj?.note||'無備註'}，${adj&&adj.amount>=0?'+':''}$${money(adj?.amount||0)}）？刪除後會影響這個通路這期的請款總額，無法復原。`)) return;
+        try{ await deleteBillingAdjustment(btn.dataset.deladj); refreshAdjList(); refresh(); }catch(err){ alert(err.message); }
+      };
+    });
+  }
+  document.getElementById('addBillingAdj').onclick = async ()=>{
+    const channelId = document.getElementById('baChannel').value;
+    const period = adjDatePeriod();
+    const dateVal = document.getElementById('baDate').value;
+    const noteVal = document.getElementById('baNote').value.trim();
+    const amount = Number(document.getElementById('baAmount').value);
+    if(!dateVal){ alert('請填寫發生日期'); return; }
+    if(!period){ alert('這個通路查不到涵蓋這天的請款週期，請確認通路設定。'); return; }
+    if(!noteVal || !amount){ alert('請填寫備註與金額'); return; }
+    const d = new Date(dateVal+'T00:00:00');
+    const note = `${d.getMonth()+1}/${d.getDate()} ${noteVal}`;
+    try{
+      await createBillingAdjustment({ channelId, periodStart:period.start, periodEnd:period.end, note, amount });
+      document.getElementById('baDate').value=''; document.getElementById('baNote').value=''; document.getElementById('baAmount').value='';
+      updateDateHint();
+      toast(`已新增，歸進 ${period.start}～${period.end} 這期`);
+      refreshAdjList(); refresh();
+    }catch(err){ alert(err.message); }
+  };
+  document.getElementById('baChannel').onchange = ()=>{ refreshAdjList(); updateDateHint(); };
+  document.getElementById('baDate').oninput = updateDateHint;
+  updateDateHint();
+  // 通路自己的請款總覽（未稅/含稅合計）永遠套用「通路管理」裡設定的自己週期
+  // 去算，只有勾選單一通路時，才會直接沿用共用的「區間起訖」欄位（維持原本
+  // 可手動調整單一通路週期的彈性）。多選通路時，共用的「區間起訖」欄位改成
+  // 只決定「抓取範圍」──要夠寬才能同時涵蓋每個已選通路各自的區間，讓合併
+  // 配送明細表看得到全部相關任務；預設值會自動抓所有已選通路週期的聯集
+  // （最早的起始日～最晚的結束日）。
+  function ownPeriodFor(channelId, monthStr, channelIds, sharedStart, sharedEnd){
+    const channel = state.data.channels.find(ch=>ch.id===channelId);
+    if(!channel) return null;
+    if(channelIds.length===1) return { start:sharedStart, end:sharedEnd };
+    return defaultPeriod(channel, monthStr);
+  }
+  async function refresh(){
+    const channelIds = checkedChannelIds();
+    state._billingChannelIds = channelIds;
+    const monthStr = document.getElementById('bMonth').value;
+    state._billingMonth = monthStr;
+    const startInput = document.getElementById('bStart'), endInput = document.getElementById('bEnd');
+    if(!startInput.value || !endInput.value){
+      const relevantChannels = (channelIds.length ? channelIds.map(cid=>state.data.channels.find(ch=>ch.id===cid)) : [state.data.channels[0]]).filter(Boolean);
+      const periods = relevantChannels.map(ch=> defaultPeriod(ch, monthStr));
+      if(periods.length){
+        const unionStart = periods.reduce((s,p)=> (s===null||p.start<s)?p.start:s, null);
+        const unionEnd = periods.reduce((s,p)=> (s===null||p.end>s)?p.end:s, null);
+        if(!startInput.value) startInput.value = unionStart;
+        if(!endInput.value) endInput.value = unionEnd;
+      }
+    }
+    const start = startInput.value, end = endInput.value; // 抓取範圍（合併配送明細用）
+    // 這個畫面只讀不寫，直接跟資料庫要這段區間的任務，不碰共用的
+    // state.data.assignments——查完這個函式結束就丟，不管查的區間多大、
+    // 查幾次，都不會累積佔用記憶體、拖慢其他畫面。
+    if(start && end){
+      document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
+      try{ billingAssignments = await fetchAssignmentsInRange(start, end); }
+      catch(err){ document.getElementById('billingResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+      if(startInput.value!==start || endInput.value!==end) return; // 使用者可能已經改了區間
+    }
+    refreshAdjList();
+    if(!channelIds.length){
+      document.getElementById('billingResult').innerHTML = '<div class="panel"><div class="empty">請至少勾選一個通路</div></div>';
+      return;
+    }
+    const channelPeriods = {};
+    channelIds.forEach(cid=>{ channelPeriods[cid] = ownPeriodFor(cid, monthStr, channelIds, start, end); });
+    const reports = channelIds.map(cid=>{
+      const own = channelPeriods[cid];
+      return own ? computeChannelBillingReport(cid, own.start, own.end, billingAssignments) : null;
+    }).filter(Boolean);
+    const merged = mergedRunRows(channelIds, start, end, billingAssignments);
+    document.getElementById('billingResult').innerHTML = `
+      <div id="billingPrintArea">
+        <h2 style="text-align:center; margin:0 0 14px;">信興行銷有限公司</h2>
+        ${reports.map(channelSummaryPanelHtml).join('')}
+        <div class="panel">
+          <h3 style="margin-top:0;">配送明細（已選通路：${reports.map(r=>r.channel.name).join('、')}）</h3>
+          ${mergedRunDetailTableHtml(channelIds, merged)}
+        </div>
+      </div>
+      ${(()=>{
+        // 請款單 PDF／Excel 要顯示哪些出發點：金額合計是 $0 的預設不顯示（勾選框可以自己改），只影響 PDF 與下載的 Excel，不影響畫面。
+        const addrs = Object.keys(merged);
+        if(!addrs.length) return '';
+        const ov = state._billingOriginOverride || {};
+        return `<div class="panel no-print" style="margin-top:10px;"><div style="font-size:13px; font-weight:600; margin-bottom:6px;">請款單 PDF／Excel 要顯示的出發點</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px 16px;">${addrs.map(addr=>{
+            const total = merged[addr].reduce((sum,r)=> sum + r.dailyTotal*r.dayCount, 0);
+            const on = addr in ov ? ov[addr] : Math.round(total) > 0;
+            return `<label style="display:flex; align-items:center; gap:6px; font-size:13px; margin:0; color:var(--ink);"><input type="checkbox" class="pdfOrigin" value="${escapeHtml(addr)}" data-total="${Math.round(total)}" ${on?'checked':''} style="width:auto;"> ${escapeHtml(originLabel(addr))}（$${money(Math.round(total))}）${Math.round(total)===0?'<span style="color:var(--ink-soft); font-size:11.5px;">金額 $0，預設不顯示</span>':''}</label>`;
+          }).join('')}</div></div>`;
+      })()}
+      <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
+        <button class="btn amber" id="printBilling">產生請款單（列印/另存PDF）</button>
+        <button class="btn ghost" id="exportBillingXlsx">下載Excel（跟 PDF 同版型，金額可手動調整）</button>
+      </div>`;
+    document.querySelectorAll('.pdfOrigin').forEach(cb=>{
+      cb.onchange = ()=>{ state._billingOriginOverride = state._billingOriginOverride || {}; state._billingOriginOverride[cb.value] = cb.checked; };
+    });
+    // PDF 與 Excel 共用「要顯示的出發點」選擇：兩邊內容完全一樣
+    const pickOrigins = what=>{
+      const boxes = [...document.querySelectorAll('.pdfOrigin')];
+      const picked = new Set(boxes.filter(b=>b.checked).map(b=>b.value));
+      const hiddenWithMoney = boxes.filter(b=>!b.checked && Number(b.dataset.total)>0).map(b=>originLabel(b.value));
+      if(boxes.length && !picked.size){ alert('請至少勾選一個要顯示的出發點'); return null; }
+      if(hiddenWithMoney.length && !confirm(`「${hiddenWithMoney.join('、')}」有請款金額，不顯示的話，${what}上的明細加總會跟請款總額對不起來。\n\n確定要隱藏嗎？`)) return null;
+      const mergedPick = {}; Object.keys(merged).forEach(a=>{ if(!boxes.length || picked.has(a)) mergedPick[a] = merged[a]; });
+      const reportsPick = reports.map(rp=> ({ ...rp, originWithTax: rp.originWithTax.filter(o=> !boxes.length || picked.has(o.originAddr)) }));
+      return { mergedPick, reportsPick };
+    };
+    document.getElementById('printBilling').onclick = ()=>{
+      const p = pickOrigins('PDF'); if(!p) return;
+      exportPrintable(billingFileName(p.reportsPick, end), billingPrintHtml(p.reportsPick, p.mergedPick, channelIds, start, end), '', { fixedWidth:1100, repeatHeader:true, pageNumbers:true });
+    };
+    document.getElementById('exportBillingXlsx').onclick = async ev=>{
+      const p = pickOrigins('Excel'); if(!p) return;
+      const btn = ev.target; btn.disabled = true;
+      try{ await downloadBillingExcel(p.reportsPick, p.mergedPick, channelIds, start, end); }
+      catch(e){ console.error(e); toast(e.message || 'Excel 產生失敗', { type:'error' }); }
+      btn.disabled = false;
+    };
+  }
+  document.querySelectorAll('.bChCheck').forEach(cb=> cb.onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); });
+  document.getElementById('bMonth').onchange = ()=>{ document.getElementById('bStart').value=''; document.getElementById('bEnd').value=''; refresh(); };
+  document.getElementById('bStart').onchange = refresh;
+  document.getElementById('bEnd').onchange = refresh;
+  refresh();
+}
+
+// ---------- 資料匯出與封存 ----------
+// ---------- 系統設定 ----------
+function usageBarHtml(label, usedBytes, limitBytes, note){
+  if(usedBytes==null){
+    return `<div style="margin-bottom:12px;"><div style="display:flex; justify-content:space-between; font-size:12.5px;"><strong>${label}</strong><span style="color:var(--ink-soft);">無法取得</span></div></div>`;
+  }
+  const pct = Math.min(100, usedBytes/limitBytes*100);
+  const barColor = pct>=90 ? 'var(--danger)' : pct>=70 ? 'var(--amber)' : 'var(--teal)';
+  return `<div style="margin-bottom:12px;">
+    <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+      <strong>${label}</strong>
+      <span>${formatBytes(usedBytes)} / ${formatBytes(limitBytes)}（${pct.toFixed(1)}%）</span>
+    </div>
+    <div style="background:var(--border); border-radius:4px; height:8px; margin-top:4px; overflow:hidden;">
+      <div style="background:${barColor}; height:100%; width:${pct}%;"></div>
+    </div>
+    ${note?`<p style="font-size:11px; color:var(--ink-soft); margin:4px 0 0;">${note}</p>`:''}
+  </div>`;
+}
+function formatBytes(bytes){
+  if(bytes==null) return '無法取得';
+  const mb = bytes/1024/1024;
+  return mb<1024 ? `${mb.toFixed(1)} MB` : `${(mb/1024).toFixed(2)} GB`;
+}
+// ---- 備份檔加密／解密：AES-256-GCM，金鑰由密碼經 PBKDF2-SHA256（300,000 次）推導，全程在瀏覽器完成，密碼不會送出去 ----
+// 檔案格式：'TJBK1' + 鹽(16) + IV(12) + 密文（含驗證標籤）
+async function backupKeyFromPass(pass, salt){
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name:'PBKDF2', salt, iterations:300000, hash:'SHA-256' }, base, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+}
+async function encryptBackupBlob(blob, pass){
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await backupKeyFromPass(pass, salt);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, await blob.arrayBuffer()));
+  return new Blob([new TextEncoder().encode('TJBK1'), salt, iv, ct], { type:'application/octet-stream' });
+}
+async function decryptBackupBlob(file, pass){
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if(buf.length < 33 || new TextDecoder().decode(buf.slice(0,5)) !== 'TJBK1') throw new Error('這不是系統產生的加密備份檔');
+  const key = await backupKeyFromPass(pass, buf.slice(5,21));
+  try{ return new Blob([await crypto.subtle.decrypt({ name:'AES-GCM', iv: buf.slice(21,33) }, key, buf.slice(33))]); }
+  catch(e){ throw new Error('密碼錯誤，或檔案已損毀'); }
+}
+
+// ---- 主控登入安全面板（更改密碼、兩步驟驗證）----
+async function adminSecApi(op, body){
+  const auth = getStoredAuth();
+  const r = await fetch('/api/admin-security?op=' + op, { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer ' + (auth ? auth.token : '') }, body: JSON.stringify(body || {}) });
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(j.error || ('操作失敗（' + r.status + '）'));
+  return j;
+}
+async function renderAdminSecurityBox(box){
+  if(!box) return;
+  let st;
+  try{ st = await adminSecApi('status'); }catch(e){ box.innerHTML = '<h3 style="margin-top:0;">主控登入安全</h3><p class="section-sub">載入失敗：' + escapeHtml(e.message) + '</p>'; return; }
+  const row = (ok, text)=> `<div style="margin:4px 0;">${ok?'✅':'⚠️'} ${text}</div>`;
+  box.innerHTML = `
+    <h3 style="margin-top:0;">主控登入安全</h3>
+    ${row(st.pinHashed, st.pinHashed ? '密碼已用加密雜湊保存' + (st.pinChangedAt ? '（' + new Date(st.pinChangedAt).toLocaleDateString('zh-TW') + ' 更改）' : '') : '目前還是舊式保存，下次登入會自動轉成加密雜湊；建議現在就更改一次密碼')}
+    ${row(st.totpEnabled, st.totpEnabled ? '兩步驟驗證已開啟（剩餘備用復原碼 ' + st.recoveryLeft + ' 組）' : '兩步驟驗證尚未開啟（強烈建議開啟）')}
+    ${st.totpEnabled ? '<p class="section-sub" style="margin:4px 0 0;">已信任裝置（30 天內登入免輸驗證碼）：' + st.trustedDevices + ' 台。信任期間到了、換裝置、或清過瀏覽器資料都會自動恢復成要輸驗證碼。</p>' : ''}
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+      <button class="btn amber" id="secChgPin">更改密碼</button>
+      ${st.totpEnabled ? '<button class="btn ghost" id="secTotpOff">關閉兩步驟驗證</button>' : '<button class="btn amber" id="secTotpOn">開啟兩步驟驗證</button>'}
+      <button class="btn ghost" id="secClrDev">清除裝置紀錄（已知 ${st.knownDevices}／已信任 ${st.trustedDevices}）</button>
+    </div>
+    <div id="secForm" style="margin-top:12px;"></div>`;
+  const form = box.querySelector('#secForm'), again = ()=> renderAdminSecurityBox(box);
+  const input = (id, label, type)=> `<div class="field" style="max-width:340px;"><label>${label}</label><input id="${id}" type="${type||'password'}" autocomplete="off"></div>`;
+  const val = id=> (document.getElementById(id)||{}).value || '';
+  box.querySelector('#secChgPin').onclick = ()=>{
+    form.innerHTML = input('secCur','目前密碼') + input('secNew','新密碼（至少 8 個字元，建議用一句好記的長句子）') + input('secNew2','再輸入一次新密碼') + '<button class="btn amber" id="secSave">儲存新密碼</button>';
+    document.getElementById('secSave').onclick = async ()=>{
+      if(val('secNew') !== val('secNew2')){ alert('兩次輸入的新密碼不一致'); return; }
+      try{ await adminSecApi('set-pin', { current: val('secCur'), next: val('secNew') }); toast('主控密碼已更新，下次登入請用新密碼。', { type:'ok' }); again(); }
+      catch(e){ alert(e.message); }
+    };
+  };
+  const on = box.querySelector('#secTotpOn');
+  if(on) on.onclick = async ()=>{
+    try{
+      const r = await adminSecApi('totp-begin');
+      form.innerHTML = `<p class="section-sub">在驗證器 App（Google Authenticator、1Password、Mac／iPhone 的「密碼」App 都可以）新增一個項目，選「輸入設定金鑰」，貼上下面這串金鑰（類型選「依時間」）：</p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="secKey" readonly value="${r.secret}" style="max-width:380px;"><button class="btn ghost" id="secCopy">複製</button></div>
+        <p class="section-sub" style="margin-top:10px;">加好之後，輸入驗證器顯示的 6 位數字確認：</p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input id="secCode" inputmode="numeric" maxlength="6" style="max-width:140px;" autocomplete="off"><button class="btn amber" id="secConfirm">確認並開啟</button></div>`;
+      document.getElementById('secCopy').onclick = async ()=>{ try{ await navigator.clipboard.writeText(r.secret); toast('已複製金鑰'); }catch(e){ document.getElementById('secKey').select(); } };
+      document.getElementById('secConfirm').onclick = async ()=>{
+        try{
+          const j = await adminSecApi('totp-confirm', { code: val('secCode') });
+          form.innerHTML = `<p style="font-weight:600; color:var(--danger);">請現在就把下面 8 組備用復原碼存到安全的地方（例如密碼管理器）。手機遺失時，用其中一組（每組只能用一次）才登得進來；離開這個畫面就不會再顯示。</p>
+            <pre class="mono" style="background:var(--bg-soft,#f6f3ee); padding:10px; border-radius:6px; line-height:1.9;">${j.recoveryCodes.join('\n')}</pre>
+            <button class="btn ghost" id="secRcCopy">複製</button> <button class="btn amber" id="secRcDone">我已存好</button>`;
+          document.getElementById('secRcCopy').onclick = async ()=>{ try{ await navigator.clipboard.writeText(j.recoveryCodes.join('\n')); toast('已複製'); }catch(e){} };
+          document.getElementById('secRcDone').onclick = again;
+        }catch(e){ alert(e.message); }
+      };
+    }catch(e){ alert(e.message); }
+  };
+  const off = box.querySelector('#secTotpOff');
+  if(off) off.onclick = ()=>{
+    form.innerHTML = input('secCur','目前密碼') + input('secCode','驗證器的 6 位數字（或一組備用復原碼）','text') + '<button class="btn danger" id="secOff2">關閉兩步驟驗證</button>';
+    document.getElementById('secOff2').onclick = async ()=>{
+      if(!confirm('關閉後，只靠密碼就能登入主控。確定嗎？')) return;
+      try{ await adminSecApi('totp-disable', { current: val('secCur'), code: val('secCode') }); if(typeof clearAdminTrustToken==='function') clearAdminTrustToken(); toast('已關閉兩步驟驗證'); again(); }catch(e){ alert(e.message); }
+    };
+  };
+  box.querySelector('#secClrDev').onclick = ()=>{
+    form.innerHTML = input('secCur','目前密碼') + '<button class="btn amber" id="secClr2">清除（之後每台裝置第一次登入都會通知你；已信任的裝置也要重新輸驗證碼，包含這一台）</button>';
+    document.getElementById('secClr2').onclick = async ()=>{
+      try{ await adminSecApi('clear-devices', { current: val('secCur') }); if(typeof clearAdminTrustToken==='function') clearAdminTrustToken(); toast('已清除'); again(); }
+      catch(e){ alert(e.message); }
+    };
+  };
+}
+function renderSettings(c){
+  c.innerHTML = `
+    <h2 class="section-title">系統設定</h2>
+    <p class="section-sub">主控登入安全：密碼以加密雜湊保存（連你自己也看不到原文），可再開啟兩步驟驗證。新裝置登入或連續登入失敗，你的手機會收到推播通知。</p>
+    <div class="panel" id="adminSecBox"><h3 style="margin-top:0;">主控登入安全</h3><p class="section-sub" style="margin:0;">載入中…</p></div>
+    <div class="panel"><h3 style="margin-top:0;">這支手機的通知</h3><div id="pushBox"><p class="section-sub" style="margin:0;">載入中…</p></div></div>
+    <div class="panel">
+      <h3 style="margin-top:0;">戰情室外部連結（大螢幕用）</h3>
+      <p class="section-sub">產生一條不用登入的唯讀網址，貼到辦公室電視的瀏覽器就能看今天的進度。外部畫面有路線、站數進度、夥伴姓名、每一站的店點名稱與通路、夥伴回報的未完成原因；不顯示夥伴電話、金額、照片，也沒有任何操作按鈕。知道這條網址的人都看得到今天各路線的進度，請不要公開張貼；外洩時按「重新產生」，舊連結立刻失效。</p>
+      ${state.data.settings.warroomToken ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><input class="mono" id="wrExtUrl" readonly value="${location.origin}/wr/${state.data.settings.warroomToken}" style="flex:1; min-width:260px; font-size:12px;" onclick="this.select()"><button class="btn ghost" id="wrExtCopy">複製</button><button class="btn ghost" id="wrExtRegen">重新產生（舊連結失效）</button><button class="btn ghost" id="wrExtOff">停用連結</button></div>` : `<button class="btn amber" id="wrExtGen">產生連結</button>`}
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">戰情室門檻</h3>
+      <p class="section-sub">夥伴到了這個時間還沒有完成第一站，戰情室卡片先變黃色；超過紅色時間再升級成紅色快閃。停滯是「最近一次完成店點到現在」過了幾分鐘沒有新進度。</p>
+      <div class="grid2" style="max-width:560px;">
+        <div class="field"><label>上午班：變黃色</label><input type="time" id="wrAmY" value="${wrCfg().amYellow}"></div>
+        <div class="field"><label>上午班：變紅色</label><input type="time" id="wrAmR" value="${wrCfg().amRed}"></div>
+        <div class="field"><label>下午班：變黃色</label><input type="time" id="wrPmY" value="${wrCfg().pmYellow}"></div>
+        <div class="field"><label>下午班：變紅色</label><input type="time" id="wrPmR" value="${wrCfg().pmRed}"></div>
+        <div class="field"><label>停滯：變黃色（分鐘）</label><input type="number" id="wrStY" min="10" step="5" value="${wrCfg().stallYellow}"></div>
+        <div class="field"><label>停滯：變紅色（分鐘）</label><input type="number" id="wrStR" min="10" step="5" value="${wrCfg().stallRed}"></div>
+        <div class="field"><label>同時最多閃爍幾張</label><input type="number" id="wrMax" min="1" max="12" value="${wrCfg().maxBlink}"></div>
+      </div>
+      <button class="btn amber" id="saveWr">儲存門檻</button> <button class="btn ghost" id="resetWr">恢復預設值</button>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Supabase 免費方案用量</h3>
+      <p class="section-sub">免費方案上限：資料庫 500MB・檔案儲存 1GB・每月流量 5GB。免費方案沒有自動備份機制，接近上限時請用下方「資料匯出與封存」處理，或考慮升級付費方案。</p>
+      <div id="usageStatsBody"><div class="empty">載入中...</div></div>
+      <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+        <h4 style="margin:0 0 4px;">流量（Egress）監測</h4>
+        <p class="section-sub" style="margin-bottom:8px;">流量（夥伴/客戶讀取照片、資料庫查詢等所有對外傳輸的資料量）無法從系統內查詢即時數字，Supabase 官方沒有開放這項資料的查詢介面，只能到後台實際查看目前用量、是否超過每月5GB免費額度。</p>
+        <a class="btn ghost" href="https://supabase.com/dashboard/project/rcdvclfvqnrvffxkseqh/settings/billing/usage" target="_blank" rel="noopener" style="text-decoration:none; display:inline-block;">前往 Supabase 後台查看流量用量</a>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">資料備份</h3>
+      <p class="section-sub">Supabase 免費方案沒有自動備份，請<b>每週</b>下載一次完整備份，存在你自己的電腦或雲端硬碟。備份包含資料庫所有資料表的完整內容（含所有歷史趟次、勞報單、請款調整），不含照片與夥伴證件檔案。<b>檔案裡有身分證字號、銀行帳號等個資，請妥善保管，不要傳給別人。</b></p>
+      <p class="section-sub" id="backupLast" style="margin-top:0;">${state.data.settings.lastBackupAt ? '上次備份：'+new Date(state.data.settings.lastBackupAt).toLocaleString('zh-TW') : '還沒有備份紀錄'}</p>
+      <div class="field" style="max-width:360px;"><label>備份加密密碼（選填，強烈建議）</label><input id="backupPass" type="password" autocomplete="new-password" placeholder="填了就會把備份檔加密；忘記密碼就無法還原"></div>
+      <button class="btn amber" id="fullBackup">下載完整備份</button> <span id="fullBackupMsg" class="section-sub"></span>
+      <details style="margin-top:12px;"><summary style="cursor:pointer;">解密備份檔</summary>
+        <p class="section-sub">選一個加密過的備份檔（.enc），輸入當初設定的密碼，會在這台電腦上解開並下載原本的備份檔（不會上傳到任何地方）。</p>
+        <input type="file" id="decFile" accept=".enc" style="max-width:360px;"> <input type="password" id="decPass" placeholder="備份加密密碼" style="max-width:240px;" autocomplete="off"> <button class="btn ghost" id="decGo">解密並下載</button>
+      </details>
+    </div>
+  `;
+  fetchUsageStats().then(({dbSizeBytes, storageBuckets, storageTotalBytes})=>{
+    const body = document.getElementById('usageStatsBody');
+    if(!body) return; // 使用者可能已經切走這一頁
+    const bucketLines = storageBuckets ? storageBuckets.map(b=>`<span style="font-size:11px; color:var(--ink-soft);">${b.bucket_id}：${formatBytes(Number(b.total_bytes))}（${b.file_count}個檔案）</span>`).join('　') : '';
+    body.innerHTML = `
+      ${usageBarHtml('資料庫大小', dbSizeBytes, 500*1024*1024)}
+      ${usageBarHtml('檔案儲存空間', storageTotalBytes, 1024*1024*1024, bucketLines)}
+    `;
+  }).catch(err=>{
+    const body = document.getElementById('usageStatsBody');
+    if(body) body.innerHTML = `<div class="empty">用量資料載入失敗：${err.message}</div>`;
+  });
+  const wrRead = ()=>({
+    amYellow: document.getElementById('wrAmY').value, amRed: document.getElementById('wrAmR').value,
+    pmYellow: document.getElementById('wrPmY').value, pmRed: document.getElementById('wrPmR').value,
+    stallYellow: parseInt(document.getElementById('wrStY').value,10), stallRed: parseInt(document.getElementById('wrStR').value,10),
+    maxBlink: parseInt(document.getElementById('wrMax').value,10)
+  });
+  pushRenderBox(document.getElementById('pushBox'));
+  const wrTokSave = async (tok, msg)=>{ try{ await saveWarroomToken(tok); renderSettings(c); if(msg) toast(msg); }catch(err){ alert(err.message); } };
+  const wrNew = ()=>{ const b = new Uint8Array(24); crypto.getRandomValues(b); return btoa(String.fromCharCode.apply(null, b)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
+  { const g = document.getElementById('wrExtGen'); if(g) g.onclick = ()=> wrTokSave(wrNew(), '已產生戰情室外部連結'); }
+  { const g = document.getElementById('wrExtRegen'); if(g) g.onclick = ()=>{ if(confirm('重新產生後，舊的連結立刻失效，電視上要換成新連結。確定嗎？')) wrTokSave(wrNew(), '已重新產生，舊連結已失效'); }; }
+  { const g = document.getElementById('wrExtOff'); if(g) g.onclick = ()=>{ if(confirm('停用後，目前所有用這條連結的螢幕都會看到「連結無效」。確定嗎？')) wrTokSave(null, '已停用外部連結'); }; }
+  { const g = document.getElementById('wrExtCopy'); if(g) g.onclick = async ()=>{ const el = document.getElementById('wrExtUrl'); try{ await navigator.clipboard.writeText(el.value); toast('已複製連結'); }catch(e){ el.select(); toast('請手動複製（已選取）'); } }; }
+  document.getElementById('saveWr').onclick = async ()=>{
+    const v = wrRead();
+    if(!v.amYellow || !v.amRed || !v.pmYellow || !v.pmRed){ alert('請填好四個時間'); return; }
+    if(wrMin(v.amRed) < wrMin(v.amYellow) || wrMin(v.pmRed) < wrMin(v.pmYellow)){ alert('紅色時間不能早於黃色時間'); return; }
+    if(!(v.stallYellow>=10) || !(v.stallRed>=v.stallYellow)){ alert('停滯分鐘請填 10 以上，且紅色不能小於黃色'); return; }
+    if(!(v.maxBlink>=1 && v.maxBlink<=12)){ alert('同時閃爍張數請填 1～12'); return; }
+    try{ await saveWarroomConfig(v); alert('已儲存戰情室門檻。'); }catch(err){ alert(err.message); }
+  };
+  document.getElementById('resetWr').onclick = async ()=>{
+    if(!confirm('把戰情室門檻恢復成預設值？')) return;
+    try{ await saveWarroomConfig(null); renderSettings(c); alert('已恢復預設值。'); }catch(err){ alert(err.message); }
+  };
+  renderAdminSecurityBox(document.getElementById('adminSecBox'));
+  document.getElementById('decGo').onclick = async ()=>{
+    const f = document.getElementById('decFile').files[0], pass = document.getElementById('decPass').value;
+    if(!f || !pass){ alert('請選擇備份檔並輸入密碼'); return; }
+    try{
+      const out = await decryptBackupBlob(f, pass);
+      const url = URL.createObjectURL(out), a = document.createElement('a');
+      a.href = url; a.download = f.name.replace(/\.enc$/, '') || '備份.json.gz'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=> URL.revokeObjectURL(url), 5000);
+      toast('已解密並下載', { type:'ok' });
+    }catch(e){ alert(e.message); }
+  };
+  document.getElementById('fullBackup').onclick = async ()=>{
+    const btn = document.getElementById('fullBackup'), msg = document.getElementById('fullBackupMsg');
+    btn.disabled = true; msg.textContent = '準備中…';
+    try{
+      const { json, counts, errors } = await buildFullBackup((n, total, t)=>{ msg.textContent = `讀取資料表 ${n+1}/${total}（${t}）…`; });
+      if(errors.length){
+        if(!confirm('有幾張資料表讀取失敗，這份備份不完整：\n' + errors.join('\n') + '\n\n仍要下載嗎？（不完整的備份不會記錄為「已備份」）')){ msg.textContent = ''; btn.disabled = false; return; }
+      }
+      let blob, name = `碳金Hub完整備份_${todayStr()}`;
+      if(typeof CompressionStream === 'function'){
+        blob = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+        name += '.json.gz';
+      } else { blob = new Blob([json], { type:'application/json' }); name += '.json'; }
+      const pass = (document.getElementById('backupPass').value || '');
+      if(pass){
+        if(pass.length < 8){ alert('備份加密密碼至少 8 個字元'); msg.textContent = ''; btn.disabled = false; return; }
+        blob = await encryptBackupBlob(blob, pass); name += '.enc';
+      }
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=> URL.revokeObjectURL(url), 5000);
+      if(!errors.length){ await recordBackupDone(); const l = document.getElementById('backupLast'); if(l) l.textContent = '上次備份：'+new Date(state.data.settings.lastBackupAt).toLocaleString('zh-TW'); }
+      const total = Object.values(counts).reduce((x,y)=>x+y,0);
+      msg.textContent = `已下載${pass?'（已加密）':'（未加密，請妥善保管）'}：${total.toLocaleString()} 筆資料，${(blob.size/1024/1024).toFixed(1)} MB`;
+    }catch(err){ msg.textContent = ''; alert('備份失敗：' + err.message); }
+    btn.disabled = false;
+  };
+}
+
+// ---------- 財務稽核（2026-10-30，雙大腦計劃「後台」第一塊：掃過所有通路、
+// 所有在職夥伴，找出請款/報酬可能有問題的地方，列出來給主控人工複核。這個
+// 畫面只負責找問題、列出來，不會自動改動任何金額或資料——要處理請到「請款
+// 結算」「報酬結算」畫面操作，跟「AI只能提案、人要點頭才算數」
+// 同一個原則。
+//
+// 範圍刻意只挑「不需要猜測、對錯清楚」的規則，避免製造一堆似是而非的誤報：
+// A/B 已完成任務卻沒有報酬/沒有跟任何通路請款——純粹的資料缺口，不會誤判。
+// C 用computePayrollDeductions()（勞報單正式鎖定時用的同一套函式，不是
+//   另外猜的邏輯）反推已鎖定勞報單的起扣門檻判斷對不對。
+// D 勞報單過了期間還沒簽名超過2週。
+// 「全通路請款總額 vs 全夥伴報酬總額」這種總覽比較，因為不同通路的請款週期
+// 彼此不對齊（例如7-11是27日~次月26日，其他可能是自然月），要正確合併需要
+// 分別抓每個通路自己的區間再加總，這次先不做，避免倉促做出看起來權威、其實
+// 對不齊日期的誤導數字——這塊之後驗證過基本規則有用、信任建立起來再加。
+// 小碳的任務收件箱：老闆跟小金說「叫小碳...」轉過來的任務，跟後台財務稽核
+// 畫面按「請小碳整理重點」不一樣——那個是當場看當場用，不會存檔；這裡存的是
+// 「小碳想完了，但老闆還沒看過／還沒點頭」的東西，所以需要一個專門畫面讓老闆
+// 事後進來確認或駁回。小碳不會自己改任何資料，老闆按確認也只是「我看過了、
+// 知道了」，不會觸發任何自動動作——真的要改班表/金額，還是要去對應畫面手動做。
+// 2026-10-30使用者要求：小碳做的所有事情都該在這個畫面看到，不要分散在各個
+// 分頁——財務稽核是小碳的例行查驗工作，併進來（直接掛載renderReconciliation，
+// 核心邏輯不變，只是換位置）；交辦任務維持原本的清單。原則：查驗類的任務
+// （稽核、純問答/建議）直接在這個畫面顯示結果；會「改內容」的任務（目前只有
+// 公告），小碳準備好的是已下架的草稿，這裡只給「前往查看」的捷徑，真正的
+// 編輯/發布在該筆資料原本所屬的管理畫面（例如公告管理）操作，不在這裡重做
+// 一套編輯介面。
+async function renderCarbonInbox(c){
+  c.innerHTML = `
+    <h2 class="section-title">小碳任務</h2>
+    <p class="section-sub">小碳的例行查驗工作，跟你透過小金交辦給他的所有任務，都在這個畫面。</p>
+    <div id="cbxBriefing"></div>
+    <div id="cbxRecon"></div>
+    <h3 style="margin-top:18px;">📋 交辦任務紀錄</h3>
+    <p class="section-sub">你跟小金說「叫小碳幫我...」的時候，小金會把這句話轉給小碳，小碳想完的回覆（或準備好的草稿）會先進這裡。</p>
+    <div class="panel"><button class="btn ghost" id="cbxRefresh">🔄 重新整理</button></div>
+    <div id="cbxList"><div class="empty">載入中…</div></div>`;
+  renderReconciliation(document.getElementById('cbxRecon'));
+  renderBriefingPanel();
+  document.getElementById('cbxRefresh').onclick = refresh;
+  await refresh();
+  async function renderBriefingPanel(){
+    const box = document.getElementById('cbxBriefing');
+    if(!box) return;
+    let briefing;
+    try{ briefing = await fetchTodayBriefing(); }catch(e){ return; } // 晨報只是錦上添花，查詢失敗悄悄跳過，不擋整個畫面
+    if(state.tab!=='carbon_inbox' || !document.getElementById('cbxBriefing')) return;
+    if(!briefing) return; // 還沒排程產生（伺服器還沒跑到、金鑰沒設定），不顯示任何東西
+    box.innerHTML = `<div class="panel" style="border-color:var(--accent); border-width:2px; margin-bottom:12px;">
+      <h3 style="margin-top:0;">🌅 今日晨報</h3>
+      <p style="white-space:pre-wrap; font-size:13.5px; margin:0;">${escapeHtml(briefing.text)}</p>
+    </div>`;
+  }
+  async function refresh(){
+    const list = document.getElementById('cbxList');
+    if(!list) return;
+    list.innerHTML = '<div class="empty">載入中…</div>';
+    let allTasks;
+    try{ allTasks = await fetchCarbonTasks(50); }
+    catch(err){ list.innerHTML = `<div class="empty">載入失敗：${escapeHtml(err.message)}</div>`; return; }
+    if(state.tab!=='carbon_inbox' || !document.getElementById('cbxList')) return;
+    // 使用者要求：任務一旦按過確認/駁回/關閉就不要再一直留在畫面上——只顯示
+    // 還沒處理過的（adminStatus still unreviewed），處理過的紀錄還在資料庫裡，
+    // 只是這個清單不再顯示，避免越積越多。
+    const tasks = allTasks.filter(t=>t.adminStatus==='unreviewed');
+    if(!allTasks.length){ list.innerHTML = '<div class="empty">目前還沒有交辦過任何任務給小碳。你可以跟小金說「叫小碳幫我查一下...」試試看。</div>'; return; }
+    if(!tasks.length){ list.innerHTML = '<div class="empty">目前沒有待處理的任務，之前交辦的都已經處理過了。</div>'; return; }
+    list.innerHTML = tasks.map(renderTaskCard).join('');
+    tasks.forEach(t=>{
+      const okBtn = document.getElementById('cbxOk_'+t.id);
+      const noBtn = document.getElementById('cbxNo_'+t.id);
+      const goBtn = document.getElementById('cbxGo_'+t.id);
+      if(okBtn) okBtn.onclick = ()=>review(t.id, 'approved');
+      if(noBtn) noBtn.onclick = ()=>review(t.id, 'dismissed');
+      if(goBtn) goBtn.onclick = ()=>{ review(t.id, 'approved'); switchTab('announcements'); };
+    });
+  }
+  async function review(id, adminStatus){
+    try{ await reviewCarbonTask(id, adminStatus); if(state.tab==='carbon_inbox') await refresh(); }
+    catch(err){ alert(err.message); }
+  }
+  const ACTION_TAB = { announcement: { tab:'announcements', label:'公告管理' } };
+  function renderTaskCard(t){
+    const when = (t.createdAt||'').replace('T',' ').slice(0,16);
+    const srcLabel = t.source==='voice' ? '🎙️ 語音交辦' : '🖥️ 後台交辦';
+    let body, borderColor = 'var(--border)', actions = '';
+    if(t.status==='pending'){ body = `<div class="empty">小碳還在處理中…（如果一直停在這裡，可能是處理時中斷了，請重新交辦一次）</div>`; borderColor = 'var(--border)'; actions = `<button class="btn ghost" id="cbxNo_${t.id}">關閉，不等了</button>`; }
+    else if(t.status==='failed'){ body = `<p style="color:var(--danger); font-size:13.5px;">⚠️ 小碳處理失敗：${escapeHtml(t.errorText||'未知錯誤')}</p>`; borderColor = 'var(--danger)'; actions = t.adminStatus==='unreviewed' ? `<button class="btn ghost" id="cbxNo_${t.id}">知道了，關閉</button>` : `<span class="badge">已關閉</span>`; }
+    else if(t.actionType && ACTION_TAB[t.actionType]){
+      const p = t.actionPayload || {};
+      const dest = ACTION_TAB[t.actionType];
+      body = `${t.resultText?`<p style="font-size:13px; color:var(--ink-soft); margin:0 0 8px 0;">${escapeHtml(t.resultText)}</p>`:''}
+        <div class="panel" style="margin:0;"><p style="font-weight:600; margin:0 0 4px 0;">${escapeHtml(p.title||'')}</p><p style="white-space:pre-wrap; font-size:13.5px; margin:0;">${escapeHtml(p.content||'')}</p></div>
+        <p style="font-size:12px; color:var(--ink-soft); margin:6px 0 0 0;">小碳已經把這份草稿存進「${dest.label}」（目前是下架狀態，夥伴看不到），到那邊編輯、按「重新上架」才算真的發布。</p>`;
+      borderColor = t.adminStatus==='unreviewed' ? 'var(--accent)' : 'var(--border)';
+      actions = `<button class="btn" id="cbxGo_${t.id}">📋 前往${dest.label}查看</button>` +
+        (t.adminStatus==='unreviewed' ? ` <button class="btn ghost" id="cbxNo_${t.id}">不需要，關閉</button>` : ` <span class="badge pending">已處理過</span>`);
+    }
+    else {
+      body = `<p style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(t.resultText)}</p>`;
+      borderColor = t.adminStatus==='unreviewed' ? 'var(--accent)' : 'var(--border)';
+      actions = t.adminStatus==='unreviewed'
+        ? `<button class="btn" id="cbxOk_${t.id}">✅ 確認，我看過了</button> <button class="btn ghost" id="cbxNo_${t.id}">駁回</button>`
+        : `<span class="badge ${t.adminStatus==='approved'?'completed':'pending'}">${t.adminStatus==='approved'?'已確認':'已駁回'}</span>`;
+    }
+    return `<div class="panel" style="border-color:${borderColor}; border-width:2px; margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--muted); margin-bottom:6px;"><span>${srcLabel}</span><span>${when}</span></div>
+      <p style="font-weight:600; font-size:13.5px; margin:0 0 8px 0;">💬 ${escapeHtml(t.requestText)}</p>
+      ${body}
+      <div style="margin-top:8px;">${actions}</div>
+    </div>`;
+  }
+}
+
+// 2026-10-30使用者要求併入「小碳任務」（由renderCarbonInbox掛載到子容器裡），
+// 財務稽核本來就是小碳的例行工作，不該另外開一個獨立分頁。這個函式本身不用改
+// 核心邏輯，只是標題降級成子段落、state.tab的判斷改認carbon_inbox。
+function renderReconciliation(c){
+  const month = state._reconMonth || todayStr().slice(0,7);
+  c.innerHTML = `
+    <h3 style="margin-top:0;">🔍 財務稽核（小碳的例行查驗）</h3>
+    <p class="section-sub">掃過這個月所有通路、所有在職夥伴，找出請款/報酬可能需要留意的地方。這裡只負責找問題、列出來，不會自動改動任何金額或資料；確認要怎麼處理，請到「請款結算」「報酬結算」畫面操作。</p>
+    <div class="panel">
+      <div class="field" style="max-width:200px;"><label>稽核月份</label><select id="reconMonth">${(()=>{ const ms = recentMonthOptions(24); if(month && !ms.includes(month)) ms.push(month); ms.sort().reverse(); const thisMonth = todayStr().slice(0,7); return ms.map(m=>`<option value="${m}" ${m===month?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join(''); })()}</select></div>
+      <button class="btn amber" id="reconRun">重新掃描</button>
+    </div>
+    <div id="reconResult"><div class="empty">選好月份後按「重新掃描」</div></div>`;
+  document.getElementById('reconMonth').onchange = e => { state._reconMonth = e.target.value; };
+  document.getElementById('reconRun').onclick = refresh;
+  async function refresh(){
+    const m = document.getElementById('reconMonth').value;
+    state._reconMonth = m;
+    const resultEl = document.getElementById('reconResult');
+    resultEl.innerHTML = '<div class="empty">掃描中…</div>';
+    let assignments;
+    try{ assignments = await fetchAssignmentsInRange(m+'-01', monthEndStr(m)); }
+    catch(err){ resultEl.innerHTML = `<div class="empty">掃描失敗：${escapeHtml(err.message)}</div>`; return; }
+    if(state.tab!=='carbon_inbox' || !document.getElementById('reconResult')) return; // 使用者可能已經切走這一頁
+
+    const statements = (state.data.statements||[]).filter(s=>s.month===m);
+    const issues = computeReconciliationIssues(assignments, statements);
+    state._reconIssues = issues; // 小碳按鈕要用，跟畫面上看到的是同一份資料
+
+    if(!issues.length){ resultEl.innerHTML = '<div class="empty">這個月掃描下來沒有發現需要留意的地方 🎉</div>'; return; }
+    const groups = new Map();
+    issues.forEach(it => { if(!groups.has(it.kind)) groups.set(it.kind, []); groups.get(it.kind).push(it); });
+    resultEl.innerHTML = `<div class="panel"><button class="btn" id="reconAskCarbon">🧠 請小碳幫我整理重點</button><div id="reconCarbonResult"></div></div>` +
+      Array.from(groups.entries()).map(([kind, list]) => `
+      <div class="panel" style="border-color:var(--danger); border-width:2px;">
+        <h3 style="margin-top:0;">⚠️ ${escapeHtml(kind)}（${list.length}筆）</h3>
+        ${list.map(it=>`<div style="padding:5px 0; border-top:1px solid var(--border); font-size:13px;">${escapeHtml(it.text)}</div>`).join('')}
+      </div>`).join('');
+    document.getElementById('reconAskCarbon').onclick = askCarbonForSummary;
+  }
+  async function askCarbonForSummary(){
+    const btn = document.getElementById('reconAskCarbon');
+    const box = document.getElementById('reconCarbonResult');
+    if(!btn || !box) return;
+    btn.disabled = true; btn.textContent = '小碳正在整理…';
+    box.innerHTML = '';
+    try{
+      const auth = getStoredAuth();
+      const r = await fetch('/api/carbon-task', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+auth.token }, body: JSON.stringify({ items: state._reconIssues||[] }) });
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||'小碳處理失敗');
+      box.innerHTML = `<div class="panel" style="border-color:var(--accent); border-width:2px; margin-top:8px;"><h3 style="margin-top:0;">🧠 小碳的整理</h3><p style="white-space:pre-wrap; font-size:13.5px;">${escapeHtml(j.summary)}</p></div>`;
+    }catch(err){
+      box.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    }finally{
+      btn.disabled = false; btn.textContent = '🧠 請小碳幫我整理重點';
+    }
+  }
+}
+
+function renderExport(c){
+  c.innerHTML = `
+    <h2 class="section-title">資料匯出與封存</h2>
+    <p class="section-sub">設定區間，先預覽並可列印/另存PDF，確認備份後再執行刪除，釋放系統資料量。</p>
+    <div class="panel">
+      <div class="grid3">
+        <div class="field"><label>資料類型</label>
+          <select id="exType"><option value="assignments">任務／班表紀錄</option><option value="adjustments">薪資調整項</option><option value="routeVersions">路線管理（歷史版本）</option></select>
+        </div>
+        <div class="field" id="exStartField"><label>起始日期</label><input id="exStart" type="date"></div>
+        <div class="field" id="exEndField"><label>結束日期</label><input id="exEnd" type="date"></div>
+      </div>
+      <p class="section-sub" id="exTypeHint" style="display:none;"></p>
+      <button class="btn ghost" id="exPreview">預覽區間資料</button>
+    </div>
+    <div id="exResult"></div>
+  `;
+  document.getElementById('exType').onchange = ()=>{
+    const isRouteVersions = document.getElementById('exType').value==='routeVersions';
+    document.getElementById('exTypeHint').style.display = isRouteVersions ? '' : 'none';
+    document.getElementById('exTypeHint').textContent = isRouteVersions ? '只列出「已經被新版本取代」的舊版本（依版本結束日判斷是否落在區間內），目前生效中的版本不會出現在這裡、也不會被刪除。' : '';
+  };
+  // 每一條路線的歷史版本（route_versions裡end不是null的，代表已被新版本
+  // 取代），攤平成一筆一筆方便依「版本結束日」篩選區間、預覽、匯出、
+  // 確認備份後刪除釋放資料量——跟任務/薪資調整項同一套流程，只是資料
+  // 來源是route裡的versions陣列，不是獨立的table直接查。
+  function allClosedRouteVersions(){
+    const rows = [];
+    state.data.routes.forEach(route=>{
+      route.versions.forEach(v=>{
+        if(v.end) rows.push({ ...v, routeId: route.id, routeName: routeDisplayName(route.name) });
+      });
+    });
+    return rows;
+  }
+  function getMatched(assignmentsList){
+    const type = document.getElementById('exType').value;
+    const start = document.getElementById('exStart').value;
+    const end = document.getElementById('exEnd').value;
+    if(!start || !end) return {type, start, end, rows:[]};
+    if(type==='assignments'){
+      return {type, start, end, rows: (assignmentsList||[]).filter(a=>a.date>=start && a.date<=end)};
+    } else if(type==='routeVersions'){
+      return {type, start, end, rows: allClosedRouteVersions().filter(v=>v.end>=start && v.end<=end)};
+    } else {
+      return {type, start, end, rows: state.data.adjustments.filter(a=>a.month >= start.slice(0,7) && a.month <= end.slice(0,7))};
+    }
+  }
+  document.getElementById('exPreview').onclick = async ()=>{
+    const preType = document.getElementById('exType').value;
+    const preStart = document.getElementById('exStart').value;
+    const preEnd = document.getElementById('exEnd').value;
+    if(!preStart || !preEnd){ alert('請選擇起訖日期'); return; }
+    // 匯出封存的目的就是處理舊資料，區間可能比預設窗口（assignments 14天／
+    // adjustments 1年）更早，這裡要確保選到的區間已經補抓進來，不然會預覽出
+    // 不完整的資料、照著刪就把沒匯出到的資料弄丟了。routeVersions 不走窗口
+    // （直接從 state.data.routes 攤平），不用在這裡處理。
+    let exAssignments;
+    if(preType==='assignments'){
+      document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
+      try{ exAssignments = await fetchAssignmentsInRange(preStart, preEnd); }
+      catch(err){ document.getElementById('exResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+      if(document.getElementById('exStart')?.value!==preStart || document.getElementById('exEnd')?.value!==preEnd) return; // 使用者可能已經改了區間
+    } else if(preType==='adjustments'){
+      document.getElementById('exResult').innerHTML = '<div class="panel"><div class="empty">載入中...</div></div>';
+      try{ await ensureAdjustmentsRange(preStart); }
+      catch(err){ document.getElementById('exResult').innerHTML = `<div class="panel"><div class="empty">${err.message}</div></div>`; return; }
+      if(document.getElementById('exStart')?.value!==preStart || document.getElementById('exEnd')?.value!==preEnd) return; // 使用者可能已經改了區間
+    }
+    const {type, start, end, rows} = getMatched(exAssignments);
+    document.getElementById('exResult').innerHTML = `
+      <div class="panel">
+        <h3 style="margin-top:0;">預覽：${start} ~ ${end}（共 ${rows.length} 筆）</h3>
+        <table>
+          ${type==='assignments' ? `
+            <thead><tr><th>日期</th><th>路線</th><th>夥伴</th><th>本趟報酬</th><th>狀態</th></tr></thead>
+            <tbody>${rows.map(a=>`<tr><td>${a.date}</td><td>${routeName(a.routeId)}</td><td>${driverName(a.driverId)}</td><td class="amount">$${money(tripPay(a))}</td><td>${a.status==='completed'?'已完成':'排定中'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+          ` : type==='routeVersions' ? `
+            <thead><tr><th>路線</th><th>生效區間</th><th>里程</th><th>夥伴費用</th><th>請款總額</th><th>店點（當時）</th></tr></thead>
+            <tbody>${rows.map(v=>{
+              const pts = (v.dropPointIds||[]).map(id=>{ const dp = state.data.dropPoints.find(x=>x.id===id); return dp ? dpLabel(dp) : '（已刪除的店點）'; }).join('、') || '—';
+              return `<tr><td>${escapeHtml(v.routeName)}</td><td>${v.start} ~ ${v.end}</td><td>${v.distanceKm??'—'}km</td><td class="amount">$${money(v.driverFare||0)}</td><td class="amount">$${money(v.billingTotal||0)}</td><td style="font-size:12px;">${pts}</td></tr>`;
+            }).join('') || '<tr><td colspan="6"><div class="empty">此區間無資料</div></td></tr>'}
+          ` : `
+            <thead><tr><th>月份</th><th>夥伴</th><th>類型</th><th>金額</th><th>備註</th></tr></thead>
+            <tbody>${rows.map(a=>`<tr><td>${a.month}</td><td>${driverName(a.driverId)}</td><td>${adjTypeLabel(a.type)}</td><td class="amount">$${money(a.amount)}</td><td>${a.note||'—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">此區間無資料</div></td></tr>'}
+          `}
+        </table>
+        <div class="no-print" style="margin-top:10px; display:flex; gap:8px;">
+          <button class="btn ghost" id="exPrint">列印/另存PDF</button>
+          <button class="btn danger" id="exDelete" ${rows.length?'':'disabled'}>確認已匯出，刪除此區間資料</button>
+        </div>
+      </div>`;
+    document.getElementById('exPrint').onclick = ()=> exportPanelPrint(document.getElementById('exPrint').closest('.panel'), `資料匯出_${start}_${end}`);
+    const delBtn = document.getElementById('exDelete');
+    if(delBtn) delBtn.onclick = async ()=>{
+      if(!confirm('確定已完成PDF匯出／備份？此動作將永久刪除此區間資料，無法復原。')) return;
+      try{
+        const ids = rows.map(r=>r.id);
+        if(type==='assignments') await bulkDeleteAssignments(ids);
+        else if(type==='routeVersions') await bulkDeleteRouteVersions(ids);
+        else await bulkDeleteAdjustments(ids);
+        document.getElementById('exResult').innerHTML = '<div class="note">已刪除該區間資料。</div>';
+      }catch(err){ alert(err.message); }
+    };
+  };
+}
+
+
+// ---------- 夥伴端：歷史任務 ----------
+// 送達照片（主照片＋附加照片）共用的點擊看圖彈窗，跟客戶查詢頁面同一個
+// 精神：預設完全不載入照片，點了才跳出視窗、才真的去下載那幾張，避免
+// 像之前那樣「同一頁裡有的門店有照片縮圖、有的沒有」看起來時有時無
+// （其實是每張縮圖都直接下載，只是簽名連結偶爾失敗才會看起來不一致），
+// 同時也減少Supabase流量。
+// opts.onDelete（選填，只有夥伴端「今天」畫面在任務還沒封存時會傳）：傳了才會在每張
+// 照片右上角多一顆「刪除」，夥伴傳錯照片時可以自己刪掉重拍，不用整趟任務都卡住。
+// 其他呼叫端（歷史任務、身分證/工會證明照片）沒傳 opts，畫面跟原本一模一樣。
+function openPhotoLightbox(urls, opts){
+  if(!urls || !urls.length) return;
+  opts = opts || {};
+  let host = document.getElementById('photoLightboxHost');
+  if(!host){ host = document.createElement('div'); host.id = 'photoLightboxHost'; document.body.appendChild(host); }
+  host.innerHTML = `<div class="modal-backdrop" id="photoLightboxBackdrop">
+    <div class="modal-box" style="max-width:480px;">
+      <div class="toolbar"><strong>送達照片</strong><button class="btn ghost" id="photoLightboxClose">關閉</button></div>
+      ${urls.map((u,i)=>`<div style="position:relative; margin-bottom:8px;">
+        <img src="${u}" style="width:100%; border-radius:4px; display:block;" loading="lazy">
+        ${opts.onDelete ? `<button type="button" data-lbdel="${i}" style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:6px; padding:6px 10px; font-size:12px;">🗑 刪除</button>` : ''}
+      </div>`).join('')}
+    </div>
+  </div>`;
+  document.getElementById('photoLightboxBackdrop').onclick = (e)=>{ if(e.target.id==='photoLightboxBackdrop') host.innerHTML=''; };
+  document.getElementById('photoLightboxClose').onclick = ()=> host.innerHTML='';
+  if(opts.onDelete){
+    host.querySelectorAll('[data-lbdel]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        if(!confirm('確定要刪除這張照片嗎？刪除後要重新拍照上傳。')) return;
+        btn.disabled = true; btn.textContent = '刪除中…';
+        try{ await opts.onDelete(Number(btn.dataset.lbdel)); host.innerHTML=''; }
+        catch(err){ alert(err.message); btn.disabled = false; btn.textContent = '🗑 刪除'; }
+      };
+    });
+  }
+}
+// 近6個月（含本月）供月份下拉選單共用，由新到舊排序。月結算這類表單原本
+// 用 <input type="month">，手機瀏覽器原生的月份選擇器不好點、也容易選到
+// 範圍外的月份；改成固定列出近6個月讓使用者直接選，體驗一致也不會選錯。
+function recentMonthOptions(n){
+  const [y0,m0] = todayStr().slice(0,7).split('-').map(Number);
+  const months = [];
+  for(let i=0;i<n;i++){
+    let y=y0, m=m0-i;
+    while(m<=0){ m+=12; y--; }
+    months.push(`${y}-${pad(m)}`);
+  }
+  return months;
+}
+function monthOptionsHtml(selected, n=6){
+  const thisMonth = todayStr().slice(0,7);
+  return recentMonthOptions(n).map(m=>`<option value="${m}" ${m===selected?'selected':''}>${m}${m===thisMonth?'（本月）':''}</option>`).join('');
+}
+// 夥伴端「加油代墊申報」：只能填日期／金額／發票號碼，送出後是「待確認」，
+// 主控核對憑證確認後才會轉成代墊款；確認前夥伴可以修改或刪除，確認後鎖定。
+
+// ---------- 登入與身份識別 ----------
+// 原本的 loadSession/saveSession/clearSession（只記「我剛剛通過代碼檢查」，
+// 沒有真正的驗證）與 renderLoginGate（直接比對 state.data 裡的明文PIN/代碼）
+// 已經整個由 js/auth.js 取代：改成呼叫 Vercel Serverless Function 驗證、拿到簽過名的
+// JWT 存進 localStorage，見 auth.js 的 getStoredAuth()/clearAuth()/renderLoginGate()。
+// 夥伴視角原本只顯示「碳金 Hub」，把「信興」拿掉——沒有留下原因，
+// 使用者反映夥伴登入後「信興」不見了要修正，改成不管主控／夥伴視角都
+// 顯示完整的「信興｜碳金 Hub」。
+function updateTitle(){
+  document.getElementById('appTitle').innerHTML = '<span class="title-xin">信興</span><span class="title-sep">｜</span><span class="title-tan">碳金 Hub</span>';
+}
+// 登出／憑證過期要回登入畫面時呼叫：renderLoginGate() 只會把 #appLayout 藏起來，
+// 不會動到 header 裡的 whoAmI／logoutBtn（這兩個本來就在 #appLayout 外面，是故意
+// 常駐的），也不會動到語音小幫手的浮動頭像（voiceFab，是掛在 document.body 底下的
+// 獨立元素）。沒有這段的話，登出後畫面會卡著上一個人的「夥伴：OOO」字樣、登出按鈕、
+// 跟他的語音助理頭像，雖然點了也不會真的做什麼（都要重新登入才能用），但看起來
+// 像是還留著上一個人的身份，使用者會誤以為系統沒有真的登出。
+function resetAppChrome(){
+  const who = document.getElementById('whoAmI');
+  if(who) who.textContent = '';
+  const btn = document.getElementById('logoutBtn');
+  if(btn) btn.style.display = 'none';
+  if(typeof voiceFabEnsure==='function') voiceFabEnsure(false);
+}
+function updateHeaderBar(){
+  const who = document.getElementById('whoAmI');
+  const btn = document.getElementById('logoutBtn');
+  btn.style.display = 'inline-block';
+  if(state.adminViewDriver){
+    who.textContent = `主控檢視中：${driverName(state.adminViewDriver)}`;
+    btn.textContent = '返回主控';
+  } else if(state.role==='admin'){
+    who.textContent = '主控帳號';
+    btn.textContent = '登出／切換身份';
+  } else {
+    who.textContent = `夥伴：${driverName(state.activeDriverId)}`;
+    btn.textContent = '登出';
+  }
+}
+function viewAsDriver(driverId){
+  state.adminViewDriver = driverId;
+  state.activeDriverId = driverId;
+  state.tab = 'home';
+  updateHeaderBar(); renderNav(); renderContent();
+}
+function showApp(){
+  // 推播通知點開會帶 ?go=分頁：直接跳到那一頁（任務、公告、報酬…），跳完把網址清乾淨
+  try{
+    const go = new URLSearchParams(location.search).get('go');
+    if(go){ const tabs = state.role==='driver' ? DRIVER_TABS : ADMIN_TABS; if(tabs.find(t=>t.id===go)) state.tab = go; history.replaceState(null, '', location.pathname); }
+  }catch(e){}
+  document.getElementById('loginGate').style.display = 'none';
+  document.getElementById('appLayout').style.display = 'flex';
+  updateHeaderBar();
+  updateTitle(); renderNav(); renderContent();
+  // 首頁即時更新改成主要靠 Realtime（任務/店點一有異動就推播），不用再
+  // 每25秒去問一次資料庫；訂閱失敗（例如網路問題）會自動退回純輪詢，見
+  // refreshHomeDataIfIdle 旁邊 setInterval 那行的間隔說明。
+  startRealtimeSync(handleLiveEvent);
+  if(state.role==='driver') setupOfflineUploadFlush();
+  if(state.role==='driver' && !state.adminViewDriver) maybeShowNhiReminder();
+  if(state.role==='driver' && !state.adminViewDriver) maybeShowIdCardReminder();
+  if(typeof pushAutoSync==='function') pushAutoSync();
+  if(state.role==='admin') (window.requestIdleCallback || (f=>setTimeout(f, 2500)))(()=>{ loadPdfLibs().catch(()=>{}); });
+}
+// renderLoginGate() 的正式版實作在 js/auth.js（呼叫 /api/auth-driver、/api/auth-admin，
+// 不再直接比對 state.data 裡的明文PIN/代碼；此時 state.data 根本還沒載入）。
+document.getElementById('logoutBtn').onclick = ()=>{
+  if(state.adminViewDriver){
+    state.adminViewDriver = null; state.activeDriverId = null; state.tab = 'home';
+    updateHeaderBar(); updateTitle(); renderNav(); renderContent();
+    return;
+  }
+  stopRealtimeSync();
+  clearAuth(); state.role=null; state.activeDriverId=null; state.tab=null;
+  resetAppChrome();
+  renderLoginGate();
+};
+
+// cleanupOldPhotos()（每次開系統時把超過30天的照片從記憶體裡清掉）已經沒有對應實作。
+// 正式版的照片存在 Supabase Storage，「清除30天前照片」需要一支獨立的排程工作
+// （例如 Supabase pg_cron + Edge Function，定期找出 assignment_drop_points 裡
+// completed_at 超過30天且 photo_cleared=false 的資料列，刪除 Storage 物件後
+// 把 photo_url 設回 null、photo_cleared 設成 true）。這個排程job還沒有建立，
+// 是目前已知、故意先擱置的缺口，上線前請評估是否要先做這個，或先接受
+// 舊照片會持續留在 Storage 裡（多花一點儲存空間，但不影響功能正確性）。
+
+// 「加入主畫面」的網頁App在不少手機上會被系統背景凍結、放很久都沒有
+// 真正重新載入過（不是瀏覽器分頁那種無痕快取問題，是整個JS執行環境
+// 一直沒有重啟），導致上線的新功能、跟即時性的資料（今日尚未完成
+// 等）長時間卡住不動、看起來「無法同步」。這裡用兩個機制補救：
+// 1. 切回前景/每隔幾分鐘，比對目前執行中的頁面內容跟伺服器上最新的
+//    是否不同，不同就跳出一條提示，讓使用者自己決定要不要點擊重新
+//    整理（不強制自動reload，避免打斷正在填寫的表單）。
+// 2. 切回前景時，如果人在「首頁」（這個分頁沒有任何表單欄位，不會有
+//    填到一半被清掉的風險），就悄悄重新抓一次資料並重繪，讓「今日
+//    尚未配送完成」這類即時面板自動跟上最新狀態；其他分頁刻意不自動
+//    重繪，使用者切換分頁時自然就會拿到最新資料。
+let __bootPageSignature = null;
+// 判斷「現在這份頁面」跟「伺服器上最新的」是不是同一份：改用 HEAD 請求比對 ETag，
+// 不用像以前那樣每次都把整份 index.html（600KB+）抓下來才能算雜湊——每 5 分鐘、
+// 每次切回分頁都要做這個檢查，開著不關的手機／戰情室螢幕累積起來流量很可觀，
+// 改成 HEAD 之後這個檢查幾乎不耗流量。極少數環境可能拿不到 ETag（例如被中間的代理
+// 伺服器濾掉），退回舊的整頁比對方式，不影響「有新版時提醒重新整理」這個功能本身。
+async function computePageSignature(){
+  try{
+    const res = await fetch(location.pathname || '/', { method:'HEAD', cache:'no-store' });
+    if(!res.ok) return null;
+    const etag = res.headers.get('etag');
+    if(etag) return etag;
+    const res2 = await fetch(location.pathname || '/', { cache: 'no-store' });
+    if(!res2.ok) return null;
+    const text = await res2.text();
+    let hash = 0;
+    for(let i=0;i<text.length;i++){ hash = (hash*31 + text.charCodeAt(i)) | 0; }
+    return hash;
+  }catch(e){ return null; }
+}
+function showUpdateBanner(){
+  if(document.getElementById('updateBanner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBanner';
+  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; background:var(--amber); color:#fff; padding:10px 14px; text-align:center; font-size:13px; z-index:99999; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.2);';
+  bar.textContent = '📢 系統已推出新版本，點此重新整理套用最新功能 ↻';
+  bar.onclick = ()=> location.reload();
+  document.body.appendChild(bar);
+}
+async function checkForUpdate(){
+  const sig = await computePageSignature();
+  if(sig===null) return;
+  if(__bootPageSignature===null){ __bootPageSignature = sig; return; }
+  if(sig !== __bootPageSignature) showUpdateBanner();
+}
+// 首頁即時更新主要靠 Realtime 推播（見 startRealtimeSync，任務/店點一有
+// 異動，debounce一下就會呼叫這支函式刷新），不用再每25秒硬去問一次資料庫。
+// 這裡的定時輪詢改成保險用的備援（例如WebSocket連線中途斷掉、或Realtime
+// 訂閱失敗退回純輪詢的情況），間隔放寬到3分鐘即可，平常都是Realtime先
+// 觸發。分頁切到背景時暫停，不做沒人看的無意義請求；另外記錄「上次更新
+// 時間」讓畫面上看得到資料新鮮度，面板也保留手動「重新整理」按鈕。
+let lastHomeRefreshAt = null;
+// ---------- 即時同步 ----------
+// 資料庫一有異動（任務、店點、勞報單簽名、調整項、代墊申報），Realtime 就推播過來：
+// 只抓「有變的那幾筆」合併進記憶體，然後讓「目前這一頁」立刻跟著更新（不再只有首頁會更新）。
+// 使用者正在輸入、或開著明細／簽名視窗時，不硬重畫（以免打到一半的字被洗掉），改成稍後安全時再更新。
+const LIVE_TABS = {
+  assignments: ['home','schedule','today','history','my-earnings','warroom'],
+  statements: ['home','payroll','my-statement'],
+  adjustments: ['home','payroll','my-earnings'],
+  fuel_claims: ['home','payroll','my-earnings']
+};
+let liveQ = { assignments:new Set(), assignmentsDel:new Set(), statements:new Set(), statementsDel:new Set(), adjustments:new Set(), adjustmentsDel:new Set(), fuel_claims:new Set(), fuel_claimsDel:new Set() };
+let liveTimer = null, livePendingTabs = null;
+function handleLiveEvent(ev){
+  if(ev.table==='war_room_marks'){ wrApplyMarkEvent(ev); return; }
+  const id = ev.new.id || ev.old.id;
+  const del = ev.eventType==='DELETE';
+  if(ev.table==='assignment_drop_points'){
+    const aid = ev.new.assignment_id;
+    if(aid) liveQ.assignments.add(aid);
+  } else if(liveQ[ev.table]){
+    if(del && id) liveQ[ev.table+'Del'].add(id); else if(id) liveQ[ev.table].add(id);
+  }
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(flushLive, 350);
+}
+async function flushLive(){
+  const q = liveQ;
+  liveQ = { assignments:new Set(), assignmentsDel:new Set(), statements:new Set(), statementsDel:new Set(), adjustments:new Set(), adjustmentsDel:new Set(), fuel_claims:new Set(), fuel_claimsDel:new Set() };
+  if(!state.data) return;
+  const touched = new Set();
+  const upsert = (arr, item)=>{ const i = arr.findIndex(x=>x.id===item.id); if(i>=0) arr[i]=item; else arr.push(item); };
+  try{
+    const supabase = getSupabase();
+    // 任務（含店點明細與照片連結）：一筆一筆抓，抓不到（刪除、或已不在權限範圍，例如被取消發佈）就從記憶體移除。
+    await Promise.all([...q.assignments].map(async id=>{
+      try{ const a = await fetchAssignment(id); upsert(state.data.assignments, a); }
+      catch(e){ if(/0 rows|no rows/i.test(e.message)) state.data.assignments = state.data.assignments.filter(x=>x.id!==id); else throw e; }
+    }));
+    if(q.assignments.size) state.data.assignments.sort((a,b)=>a.date.localeCompare(b.date));
+    if(q.assignmentsDel.size){ state.data.assignments = state.data.assignments.filter(x=>!q.assignmentsDel.has(x.id)); }
+    if(state.role==='driver' && !state.adminViewDriver && q.assignments.size) await syncSupportStops();
+    if(q.assignments.size || q.assignmentsDel.size) touched.add('assignments');
+    if(q.statements.size){
+      const { data } = await supabase.from('statements').select('*').in('id', [...q.statements]);
+      const rows = (data||[]).map(mapStatement);
+      await resolveSignatureUrls(rows);
+      rows.forEach(r=> upsert(state.data.statements, r));
+      touched.add('statements');
+    }
+    if(q.statementsDel.size){ state.data.statements = state.data.statements.filter(x=>!q.statementsDel.has(x.id)); touched.add('statements'); }
+    if(q.adjustments.size){
+      const { data } = await supabase.from('adjustments').select('*').in('id', [...q.adjustments]);
+      (data||[]).map(mapAdjustment).forEach(r=> upsert(state.data.adjustments, r));
+      touched.add('adjustments');
+    }
+    if(q.adjustmentsDel.size){ state.data.adjustments = state.data.adjustments.filter(x=>!q.adjustmentsDel.has(x.id)); touched.add('adjustments'); }
+    if(q.fuel_claims.size){
+      const { data } = await supabase.from('fuel_claims').select('*').in('id', [...q.fuel_claims]);
+      state.data.fuelClaims = state.data.fuelClaims || [];
+      (data||[]).map(mapFuelClaim).forEach(r=> upsert(state.data.fuelClaims, r));
+      touched.add('fuel_claims');
+    }
+    if(q.fuel_claimsDel.size){ state.data.fuelClaims = (state.data.fuelClaims||[]).filter(x=>!q.fuel_claimsDel.has(x.id)); touched.add('fuel_claims'); }
+  }catch(e){ console.error('即時同步失敗，改用備援刷新', e); refreshHomeDataIfIdle(); return; }
+  if(!touched.size) return;
+  lastHomeRefreshAt = new Date();
+  const need = [...touched].some(t=> (LIVE_TABS[t]||[]).includes(state.tab));
+  if(!need) return;
+  tryLiveRender();
+}
+// 使用者正在輸入、或開著會被重畫洗掉的視窗／明細時，不重畫，稍後再試。
+function liveRenderBlocked(){
+  if(document.hidden) return true;
+  const ae = document.activeElement;
+  if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+  if(document.querySelector('.modal-backdrop, .sig-full')) return true;
+  if(document.querySelector('.assign-detail-row')) return true;
+  if(state._bulk && state._bulk.on && state._bulk.sel.size) return true; // 批量選取到一半不要被即時更新洗掉
+  const sheet = document.getElementById('assignDetail'); if(sheet && sheet.innerHTML.trim()) return true;
+  const weekModal = document.getElementById('weekTripModal'); if(weekModal && weekModal.innerHTML.trim()) return true;
+  return false;
+}
+function tryLiveRender(){
+  if(state._wrExternal) return; // 外部連結不連資料庫，資料靠自己定時輪詢
+  if(liveRenderBlocked()){ livePendingTabs = true; return; }
+  livePendingTabs = null;
+  try{ renderNav(); renderContent(); }catch(e){ console.error('即時更新畫面失敗', e); }
+}
+setInterval(()=>{ if(livePendingTabs && !liveRenderBlocked()) tryLiveRender(); }, 2500);
+// 過了午夜 12 點：畫面開著沒關的話，自動換成新的一天（完成畫面、今日任務、今日總覽都重新算）。
+(function scheduleMidnightRefresh(){
+  const now = new Date(), next = new Date(now); next.setHours(24, 0, 5, 0);
+  setTimeout(()=>{ try{ if(state.data) tryLiveRender(); }catch(e){} scheduleMidnightRefresh(); }, next - now);
+  // 手機把網頁放背景、計時器被暫停的情況：回到前景時如果日期已經變了，也立刻換成新的一天
+  let day = todayStr();
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && todayStr()!==day){ day = todayStr(); try{ if(state.data) tryLiveRender(); }catch(e){} } });
+})();
+
+async function refreshHomeDataIfIdle(){
+  if(state._wrExternal) return;
+  if(state.data && state.tab==='warroom' && !document.hidden){ wrBackupRefresh(); return; }
+  if(!state.data || state.tab!=='home' || document.hidden) return;
+  try{
+    // 只重抓首頁真的需要跟上即時狀態的任務資料，不呼叫整支 loadAllData()——
+    // 夥伴/通路/路線這些目錄資料幾乎不會變動，100人同時在線時每25秒讓每個人
+    // 都重抓一次是不必要的資料庫負擔（見 refreshAssignmentsRange 說明）。
+    // 主控要看到「本月至今」的即時利潤，夥伴首頁只需要「今天」的行程數字。
+    const today = todayStr();
+    if(state.role==='admin'){ await refreshAssignmentsRange(today.slice(0,7)+'-01', today); await refreshFuelClaims(); }
+    else { await refreshAssignmentsRange(today, today); await syncSupportStops(); }
+    // 夥伴首頁的「同任務起點今日出發狀況」是另外呼叫loadDepotOverview()
+    // 查的（夥伴身份是走RPC，不在loadAllData()裡），有自己的一層快取
+    // （depotOverviewCache），這裡一起清掉，讓renderContent()重新渲染時
+    // 順便重新抓一次，不然這個面板不會跟著這裡的25秒一起變新。
+    depotOverviewCache = { key:null, rows:null };
+    lastHomeRefreshAt = new Date();
+    renderNav();
+    renderContent();
+  }catch(e){ console.error('背景重新整理資料失敗', e); }
+}
+// iOS Safari 要有 touchstart 監聽，:active（按下去的視覺回饋）才會在手機上即時生效。
+document.addEventListener('touchstart', ()=>{}, { passive:true });
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden){ checkForUpdate(); refreshHomeDataIfIdle(); }
+});
+window.addEventListener('focus', ()=>{ checkForUpdate(); refreshHomeDataIfIdle(); });
+// 手機把分頁丟到背景一陣子後，WebSocket 可能已經休眠、錯過中間的推播：回到前景時（離開超過 30 秒）
+// 主動補抓一次目前會看到的任務範圍，補完再更新畫面。
+let hiddenAtTs = null;
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden){ hiddenAtTs = Date.now(); return; }
+  if(hiddenAtTs && Date.now()-hiddenAtTs > 30000){ hiddenAtTs = null; catchUpAfterResume(); }
+});
+async function catchUpAfterResume(){
+  if(!state.data || !state.role || state._wrExternal) return;
+  try{
+    const today = todayStr();
+    if(state.role==='admin'){ await refreshAssignmentsRange(getWeekDates(0)[0], getWeekDates(1)[6]); await refreshFuelClaims(); }
+    else { await refreshAssignmentsRange(today, ymd(addDays(today, 14))); await syncSupportStops(); }
+    tryLiveRender();
+  }catch(e){ console.error('回到前景補抓資料失敗', e); }
+}
+setInterval(checkForUpdate, 5*60*1000);
+setInterval(refreshHomeDataIfIdle, 180*1000);
+
+async function bootApp(){
+  const auth = getStoredAuth();
+  if(!auth){ renderLoginGate(); return; }
+  state.role = auth.role;
+  if(auth.role==='driver') state.activeDriverId = auth.driver.id;
+  try{
+    state.data = await loadAllData();
+  }catch(e){
+    // 登入憑證過期（主控24小時、夥伴14天）是正常的工作流程，不是系統壞掉，
+    // 跳出一堆技術性錯誤訊息（JWT expired之類）只會讓人誤以為系統出問題。
+    // 只有這個情況顯示單純的「請重新登入」；其他真的意料之外的錯誤（網路、
+    // 伺服器異常等）還是把完整錯誤訊息顯示出來，方便回報問題時能看出到底
+    // 是哪裡壞了。
+    const isExpired = /jwt expired/i.test(e.message || '');
+    alert(isExpired ? '登入已過期，請重新登入。' : ('讀取資料失敗，請重新登入：' + e.message));
+    clearAuth(); resetAppChrome(); renderLoginGate();
+    return;
+  }
+  if(auth.role==='driver'){
+    const me = state.data.drivers.find(d=>d.id===auth.driver.id);
+    if(!me || me.status!=='active'){ clearAuth(); resetAppChrome(); renderLoginGate('此帳號已停用，請聯絡主控。'); return; }
+    if(me.forceCodeReset){ renderForceCodeResetGate(me.id, me.name); return; }
+    await syncSupportStops();   // 臨時交給我支援的店點（沒有就是空的）
+  }
+  showApp();
+}
+
+function hideBootSplash(){ const el = document.getElementById('bootSplash'); if(el) el.remove(); }
+// defer 的 4 支外部 script（supabase SDK／supabase-client.js／data-layer.js／auth.js／push.js）
+// 保證會在 DOMContentLoaded 之前就全部執行完畢；這支 inline script 本身不是 defer（defer 對
+// 沒有 src 的 inline script 沒有效果），所以用這個事件確保真正呼叫 bootApp() 之前，auth.js 的
+// getStoredAuth 這些函式都已經就緒，不會出現「用到還沒載入的函式」的錯誤。
+function whenDomReady(fn){
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', fn, { once:true });
+  else fn();
+}
+whenDomReady(async function init(){
+  try{
+    const wrPath = location.pathname.match(/^\/wr\/([A-Za-z0-9_-]{16,128})\/?$/);
+    const wrTok = (wrPath && wrPath[1]) || new URLSearchParams(location.search).get('wr');
+    if(wrTok){ await bootWarRoomExternal(wrTok); return; }
+    computePageSignature().then(sig=>{ if(__bootPageSignature===null) __bootPageSignature = sig; });
+    await bootApp();
+  } finally { hideBootSplash(); } // 不管成功、失敗（例如 bootApp 內部真的意料之外出錯），開機畫面一定要拿掉，不能卡住變成另一種「看起來像當機」
+});
