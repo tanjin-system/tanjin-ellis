@@ -50,10 +50,11 @@ module.exports = async (req, res) => {
   const weak = code.trim().length < 6;
   if (weak) await supabase.from('drivers').update({ force_code_reset: true }).eq('id', driver.id);
 
+  // 夥伴端改成不會自動登出：JWT 不帶 exp，除非夥伴自己按「登出」清掉 localStorage，
+  // 或主控在系統設定停用該帳號／重設代碼，否則永遠有效。
   const token = jwt.sign(
     { role: 'app_driver', driver_id: driver.id },
-    process.env.SUPABASE_JWT_SECRET,
-    { expiresIn: '14d' }
+    process.env.SUPABASE_JWT_SECRET
   );
 
   res.setHeader('Cache-Control', 'no-store');
